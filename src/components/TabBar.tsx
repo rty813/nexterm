@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bell, BellRing, ChevronDown, CircleAlert, CircleCheck, CircleX, Columns2, LoaderCircle, Lock, Plus, Rows2, X } from "lucide-react";
+import { Bell, BellRing, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, CircleCheck, CircleX, Columns2, LoaderCircle, Lock, Plus, Rows2, X } from "lucide-react";
+import { backend } from "../services/backend";
 import { agentDisplayName, type AgentStatus } from "../utils/agentStatus";
 import { tabTitle } from "../utils/layout";
 import { titleShowsHost } from "../utils/hostname";
@@ -33,7 +34,7 @@ export interface GroupTabBarProps {
   onRenameTab: (paneId: string, title: string) => void;
   onDuplicateTab: (paneId: string) => void;
   onReconnectTab: (paneId: string) => void;
-  /** Load shell integration into the tab's current shell. */
+  /** Install shell integration for the tab's current user and load it now. */
   onInjectShellIntegration: (paneId: string) => void;
   onCloseOtherTabs: (paneId: string) => void;
   onCloseTabsToRight: (paneId: string) => void;
@@ -111,6 +112,53 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
   };
   useEffect(() => cancelHover, []);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ left: false, right: false });
+
+  const updateOverflow = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const left = el.scrollLeft > 1;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setOverflow((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  };
+
+  // Track overflow on resize; the wheel listener is native because React's onWheel is passive.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    const ro = new ResizeObserver(updateOverflow);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      ro.disconnect();
+    };
+  }, []);
+
+  // Keep the active tab visible when it changes or tabs are added/removed.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const tab = el?.querySelector<HTMLElement>(`[data-pane-id="${CSS.escape(group.activeTabId)}"]`);
+    if (el && tab) {
+      const start = tab.getBoundingClientRect().left - el.getBoundingClientRect().left + el.scrollLeft;
+      const end = start + tab.offsetWidth;
+      if (start < el.scrollLeft) el.scrollLeft = start;
+      else if (end > el.scrollLeft + el.clientWidth) el.scrollLeft = end - el.clientWidth;
+    }
+    updateOverflow();
+  }, [group.activeTabId, group.tabs.length]);
+
+  const scrollTabs = (dir: -1 | 1) => {
+    const el = scrollRef.current;
+    if (el) el.scrollBy({ left: dir * Math.max(120, el.clientWidth * 0.8), behavior: "smooth" });
+  };
+
   const startHover = (e: React.MouseEvent, paneId: string) => {
     cancelHover();
     // No switching while a mouse button is held (drag, selection) or a tab is being renamed.
@@ -154,7 +202,10 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
     const point = { clientX: e.clientX, clientY: e.clientY };
     onSelectTab(leaf.paneId);
     const single = group.tabs.length < 2;
-    const windows = await moveToWindowTargets();
+    const [windows, shellStatus] = await Promise.all([
+      moveToWindowTargets(),
+      backend.shellIntegrationStatus(leaf.paneId).catch(() => null),
+    ]);
     const colorItems: MenuItem[] = [
       { label: t("menu.noColor"), checked: !leaf.color, onClick: () => onSetTabColor(leaf.paneId, null) },
       ...TAB_COLORS.map((c) => ({ label: c, swatch: c, checked: leaf.color === c, onClick: () => onSetTabColor(leaf.paneId, c) })),
@@ -178,8 +229,8 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
         { label: t("menu.duplicateTab"), shortcut: keymap["tab.duplicate"], onClick: () => onDuplicateTab(leaf.paneId) },
         { label: t("pane.reconnect"), shortcut: keymap["tab.reconnect"], onClick: () => onReconnectTab(leaf.paneId) },
         {
-          label: t("si.menu"),
-          disabled: !canInjectShellIntegration(leaf.session.protocol, leaf.status),
+          label: t(shellStatus?.loading ? "si.menuLoading" : shellStatus?.detected ? "si.menuDetected" : shellStatus ? "si.menuNotDetected" : "si.menu"),
+          disabled: Boolean(shellStatus?.loading) || !canInjectShellIntegration(leaf.session.protocol, leaf.status),
           onClick: () => onInjectShellIntegration(leaf.paneId),
         },
         {
@@ -227,7 +278,18 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
       onDragLeave={() => setDropIndex(null)}
       onDrop={(e) => handleDrop(e, group.tabs.length)}
     >
-      <div className="tabbar-scroll">
+      {(overflow.left || overflow.right) && (
+        <button
+          type="button"
+          className="tab-scroll-btn"
+          title={t("tabbar.scrollLeft")}
+          disabled={!overflow.left}
+          onClick={() => scrollTabs(-1)}
+        >
+          <ChevronLeft size={14} />
+        </button>
+      )}
+      <div className="tabbar-scroll" ref={scrollRef} onScroll={updateOverflow}>
         {group.tabs.map((leaf, idx) => {
           const isActive = leaf.paneId === group.activeTabId;
           const title = tabTitle(leaf);
@@ -244,6 +306,7 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
           return (
             <div
               key={leaf.paneId}
+              data-pane-id={leaf.paneId}
               className={`tab-item ${isActive ? "active" : ""} ${running ? "tab-running" : ""} ${dropIndex === idx ? "drop-before" : ""} ${leaf.color ? "tab-colored" : ""} ${
                 mark?.activity ? "tab-activity" : ""
               } ${mark?.bell ? "tab-bell" : ""} ${agent ? `tab-agent-${agent.state}` : ""} ${
@@ -372,6 +435,17 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
         })}
         {dropIndex === group.tabs.length && <div className="tab-drop-tail" />}
       </div>
+      {(overflow.left || overflow.right) && (
+        <button
+          type="button"
+          className="tab-scroll-btn"
+          title={t("tabbar.scrollRight")}
+          disabled={!overflow.right}
+          onClick={() => scrollTabs(1)}
+        >
+          <ChevronRight size={14} />
+        </button>
+      )}
 
       <div className="tab-new">
         <button type="button" className="tab-new-btn" title={`${t("tabbar.newTab")}${keymap["tab.newShell"] ? ` (${keymap["tab.newShell"]})` : ""}`} onClick={onNewTab}>

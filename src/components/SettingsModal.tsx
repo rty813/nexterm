@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { anyInstalled, type HookStatus } from "../utils/agentHooks";
+import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentHooks";
 import { useTranslation } from "react-i18next";
+import { backend } from "../services/backend";
 import { X } from "lucide-react";
 import type { AppSettings, SessionConfig, ThemeDefinition } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
@@ -330,6 +331,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               onClick={() => void onAgentHooksLocal(false).then(refreshHooks)}
             >
               {t("agent.uninstallLocal")}
+            </button>
+            <button type="button" className="btn-ghost" onClick={() => void backend.writeClipboard(posixHookCommand(true))}>
+              {t("agent.copyPosixInstall")}
+            </button>
+            <button type="button" className="btn-ghost" onClick={() => void backend.writeClipboard(posixHookCommand(false))}>
+              {t("agent.copyPosixRemove")}
             </button>
             <button type="button" className="btn-ghost" onClick={onTestNotification}>
               {t("agent.testNotify")}

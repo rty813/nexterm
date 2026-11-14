@@ -16,42 +16,139 @@
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <!-- Pairing / status -->
-    <section id="gate" class="screen">
+    <!-- Pairing (no computer yet, or adding one) -->
+    <section id="gate" class="screen hidden">
       <div class="gate-card">
         <img src="icon.svg" alt="" class="gate-logo" />
         <h1>Nexterm</h1>
-        <p id="gate-text" class="muted">正在连接…</p>
-        <div id="gate-pair" class="hidden">
-          <p class="muted">请在电脑上打开 <b>设置 → 手机远程</b>，用手机相机扫描二维码。</p>
+        <p id="gate-text" class="muted"></p>
+        <div id="gate-pair">
+          <p class="muted">在电脑上打开 <b>设置 → 手机远程</b>，用手机相机扫描二维码。可以配对多台电脑。</p>
           <label class="paste">
             <span class="muted">或粘贴配对链接：</span>
             <input id="pair-input" type="url" placeholder="https://…#k=…" autocomplete="off" />
           </label>
           <button id="pair-go" class="btn">配对</button>
         </div>
-        <button id="gate-retry" class="btn hidden">重新连接</button>
-        <button id="gate-forget" class="link hidden">忘记这台电脑</button>
+        <button id="gate-cancel" class="link hidden">返回</button>
       </div>
     </section>
 
-    <!-- Tab list -->
-    <section id="tabs" class="screen hidden">
+    <!-- Computers -->
+    <section id="home" class="screen hidden">
       <header class="bar">
+        <div class="bar-title"><b>我的电脑</b></div>
+        <button id="add-computer" class="icon" aria-label="添加电脑">＋</button>
+      </header>
+      <ul id="computer-list" class="list"></ul>
+    </section>
+
+    <!-- One computer: tabs / sessions / files -->
+    <section id="computer" class="screen hidden">
+      <header class="bar">
+        <button class="icon back" data-back aria-label="返回">‹</button>
         <div class="bar-title">
-          <b id="computer">电脑</b>
+          <b id="computer-name">电脑</b>
+          <span id="computer-state" class="muted small"></span>
           <span id="ro-badge" class="badge hidden">只读</span>
         </div>
-        <button id="menu-btn" class="icon" aria-label="菜单">⋯</button>
+        <button id="computer-menu" class="icon" aria-label="菜单">⋯</button>
       </header>
-      <ul id="tab-list"></ul>
-      <p id="tab-empty" class="muted center hidden">电脑上没有打开的标签页</p>
+      <nav class="seg">
+        <button data-pane="tabs" class="on">标签页</button>
+        <button data-pane="sessions">会话</button>
+        <button data-pane="files">文件</button>
+      </nav>
+      <div id="pane-tabs" class="pane">
+        <ul id="tab-list" class="list"></ul>
+        <p id="tab-empty" class="muted center hidden">电脑上没有打开的标签页</p>
+      </div>
+      <div id="pane-sessions" class="pane hidden">
+        <div class="pane-tools">
+          <input id="session-filter" class="search" type="search" placeholder="搜索会话" autocomplete="off" />
+          <button id="session-new" class="chip">＋ 新建</button>
+        </div>
+        <ul id="session-list" class="list"></ul>
+        <p id="session-empty" class="muted center hidden">没有保存的会话</p>
+      </div>
+      <div id="pane-files" class="pane hidden">
+        <p class="muted small pad">选择一个已连接的 SSH 标签页浏览它的文件：</p>
+        <ul id="file-targets" class="list"></ul>
+        <p id="file-targets-empty" class="muted center hidden">没有已连接的 SSH 标签页</p>
+      </div>
+    </section>
+
+    <!-- Session form -->
+    <section id="session-form" class="screen hidden">
+      <header class="bar">
+        <button class="icon back" data-back aria-label="返回">‹</button>
+        <div class="bar-title"><b id="sf-title">新建会话</b></div>
+        <button id="sf-save" class="chip on">保存</button>
+      </header>
+      <form id="sf" class="form" autocomplete="off">
+        <label>名称<input name="label" placeholder="留空自动生成" /></label>
+        <label>分组<input name="group" placeholder="例如 生产/web" /></label>
+        <label
+          >协议
+          <select name="protocol">
+            <option value="ssh">SSH</option>
+            <option value="telnet">Telnet</option>
+            <option value="tcp">TCP</option>
+            <option value="powershell">PowerShell（电脑本地）</option>
+            <option value="cmd">CMD（电脑本地）</option>
+            <option value="wsl">WSL（电脑本地）</option>
+          </select>
+        </label>
+        <div class="row remote-only">
+          <label class="grow">主机<input name="host" inputmode="url" autocapitalize="off" spellcheck="false" /></label>
+          <label class="port">端口<input name="port" type="number" inputmode="numeric" min="1" max="65535" /></label>
+        </div>
+        <label class="ssh-only">用户名<input name="username" autocapitalize="off" spellcheck="false" /></label>
+        <label class="ssh-only"
+          >认证方式
+          <select name="authType">
+            <option value="password">密码</option>
+            <option value="privatekey">私钥</option>
+            <option value="none">无</option>
+          </select>
+        </label>
+        <label class="ssh-only auth-password"
+          >密码<input name="password" type="password" autocomplete="new-password" />
+          <span id="sf-pw-hint" class="muted small"></span>
+        </label>
+        <label class="ssh-only auth-password check hidden" id="sf-clear-row"
+          ><input name="clearPassword" type="checkbox" /> 清除已保存的密码</label
+        >
+        <label class="ssh-only auth-key">私钥路径（电脑上）<input name="privateKeyPath" spellcheck="false" placeholder="~/.ssh/id_ed25519" /></label>
+        <label>启动命令<input name="startupCommand" spellcheck="false" autocapitalize="off" /></label>
+        <p class="muted small">其它选项（跳板机、代理、隧道等）请在电脑上编辑，这里保存时会保留原值。</p>
+      </form>
+    </section>
+
+    <!-- File browser -->
+    <section id="files" class="screen hidden">
+      <header class="bar">
+        <button class="icon back" data-back aria-label="返回">‹</button>
+        <div class="bar-title">
+          <b id="files-title"></b>
+        </div>
+        <button id="files-refresh" class="icon" aria-label="刷新">⟳</button>
+        <button id="files-menu" class="icon" aria-label="更多">⋯</button>
+      </header>
+      <div class="pathbar">
+        <button id="files-up" class="chip" aria-label="上一级">↑</button>
+        <input id="files-path" class="search mono" spellcheck="false" autocapitalize="off" />
+      </div>
+      <ul id="file-list" class="list"></ul>
+      <p id="file-status" class="muted center hidden"></p>
+      <div id="transfers" class="transfers hidden"></div>
+      <input id="upload-input" type="file" multiple class="hidden" />
     </section>
 
     <!-- Terminal -->
     <section id="term" class="screen hidden">
       <header class="bar">
-        <button id="back" class="icon" aria-label="返回">‹</button>
+        <button class="icon back" data-back aria-label="返回">‹</button>
         <div class="bar-title">
           <b id="term-title"></b>
           <span id="term-size" class="muted small"></span>
@@ -59,8 +156,13 @@
         <button id="font-down" class="icon" aria-label="缩小字体">A-</button>
         <button id="font-up" class="icon" aria-label="放大字体">A+</button>
         <button id="take" class="chip">接管尺寸</button>
+        <button id="term-close" class="icon hidden" aria-label="关闭标签页">✕</button>
       </header>
-      <div id="term-wrap"><div id="term-host"></div></div>
+      <div id="term-body">
+        <div id="term-wrap"><div id="term-host"></div></div>
+        <!-- Login form, host key question or reconnect of the tab (filled by app.js) -->
+        <div id="term-gate" class="term-gate hidden"></div>
+      </div>
       <div id="keys">
         <button data-key="esc">Esc</button>
         <button data-key="tab">Tab</button>
@@ -86,9 +188,11 @@
       </div>
     </section>
 
+    <!-- Action sheet, filled per use -->
     <div id="sheet" class="sheet hidden">
       <div class="sheet-card">
-        <button id="sheet-forget" class="sheet-item danger">忘记这台电脑</button>
+        <div id="sheet-title" class="sheet-title muted small"></div>
+        <div id="sheet-items"></div>
         <button id="sheet-close" class="sheet-item">取消</button>
       </div>
     </div>

@@ -37,3 +37,4 @@ ring = "0.17"
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+russh-sftp = "3"

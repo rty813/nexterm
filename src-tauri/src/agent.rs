@@ -138,7 +138,7 @@ fn codex_dir() -> Option<PathBuf> {
 }
 
 fn script_path() -> Option<PathBuf> {
-    home().map(|h| h.join(".nexterm").join("agent-state.sh"))
+    home().map(|h| h.join(".nexterm").join(if cfg!(windows) { "agent-state.ps1" } else { "agent-state.sh" }))
 }
 
 #[derive(Debug, Serialize)]

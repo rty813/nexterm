@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectFromScreen, needsQuietConfirm, SCREEN_DONE_QUIET_MS } from "../utils/agentStatus";
+import { codexDetachedFromTerminal, detectFromScreen, needsQuietConfirm, SCREEN_DONE_QUIET_MS } from "../utils/agentStatus";
 
 // Claude Code 2.x screens as reported (working line while generating, then the done line).
 const footer = ["─".repeat(40), "❯ ", "─".repeat(40), "  ⏵⏵ auto mode on (shift+tab to cycle)"];
@@ -39,5 +39,16 @@ describe("Codex screen", () => {
     expect(needsQuietConfirm(streaming, streaming)).toBe(false);
     expect(needsQuietConfirm(working, working)).toBe(false);
     expect(SCREEN_DONE_QUIET_MS).toBeGreaterThanOrEqual(2000);
+  });
+});
+
+
+describe("Codex detach", () => {
+  const lines = ["Disconnected from this task. Any running work continues.", "To reconnect, run:", "  codex resume 123", "Stop the current turn: run codex agents, select this task, and press x.", "rty813@doufu /m/c/U/doufu> "];
+  it("recognizes detach only when a shell prompt has returned", () => {
+    expect(codexDetachedFromTerminal(lines, "rty813@doufu /m/c/U/doufu> ", true)).toBe(true);
+    expect(codexDetachedFromTerminal(lines, "", true)).toBe(false);
+    expect(codexDetachedFromTerminal(lines, "rty813@doufu /m/c/U/doufu> ", false)).toBe(false);
+    expect(codexDetachedFromTerminal(["Disconnected from this task. Any running work continues. (example)"], "user@host:~$ ", true)).toBe(false);
   });
 });

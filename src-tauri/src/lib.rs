@@ -12,14 +12,18 @@ pub mod notify;
 pub mod output;
 pub mod remote;
 pub mod remote_crypto;
+pub mod remote_ops;
+pub mod scp;
 pub mod serial_conn;
 pub mod session_log;
+pub mod sftp;
 pub mod shell_integration;
 pub mod ssh_conn;
 pub mod storage;
 pub mod tcp_conn;
 pub mod telnet_conn;
 pub mod term_capture;
+pub mod transfer;
 pub mod xserver;
 pub mod xymodem;
 pub mod zmodem;
@@ -77,6 +81,16 @@ fn log_dir(settings: &AppSettings) -> PathBuf {
 
 fn extra_bool(settings: &AppSettings, key: &str, default: bool) -> bool {
     settings.extra.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+}
+
+/// Parallel transfers of the file browser's queue (settings.sftp.concurrency).
+fn sftp_concurrency(settings: &AppSettings) -> usize {
+    settings
+        .extra
+        .get("sftp")
+        .and_then(|v| v.get("concurrency"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(3) as usize
 }
 
 fn extra_str(settings: &AppSettings, key: &str) -> String {
@@ -166,6 +180,9 @@ fn save_settings(ctx: State<'_, AppContext>, settings: AppSettings) -> Result<()
     crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
     crate::xserver::configure(xserver_config(&settings));
     crate::remote::configure(remote_config(&settings));
+    if let Some(hub) = crate::transfer::hub() {
+        hub.set_limit(sftp_concurrency(&settings));
+    }
     let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
     storage.save_settings(&settings).map_err(|e| e.to_string())
 }
@@ -482,7 +499,37 @@ async fn ssh_exec(ctx: State<'_, AppContext>, instance_id: String, command: Stri
     rx.await.map_err(|_| "SSH 连接已断开".to_string())?
 }
 
-/// Pane menu › "Load shell integration": "loaded" / "unsupported" / "noAnswer".
+/// Execute the hook installer in the default WSL distribution and user, matching
+/// the application's WSL session launcher (wsl.exe with no distro/user override).
+#[tauri::command]
+async fn wsl_agent_exec(ctx: State<'_, AppContext>, instance_id: String, command: String) -> Result<String, String> {
+    let runtime = ctx.connections.pane_runtime(&instance_id).ok_or("该窗格没有活动的连接")?;
+    if runtime.protocol != "wsl" || runtime.status != "connected" {
+        return Err("该窗格不是已连接的 WSL 会话".into());
+    }
+    let mut child = tokio::process::Command::new("wsl.exe");
+    child.args(["--exec", "sh", "-c", &command]);
+    #[cfg(windows)]
+    child.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    child.kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(20), child.output())
+        .await.map_err(|_| "WSL 命令执行超时".to_string())?
+        .map_err(|e| format!("无法启动 WSL: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("WSL 命令失败: {}", if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() }));
+    }
+    Ok(stdout)
+}
+
+/// Integration markers observed on a connection, queried when opening its menu.
+#[tauri::command]
+fn shell_integration_status(ctx: State<'_, AppContext>, instance_id: String) -> Option<crate::manager::ShellIntegrationStatus> {
+    ctx.connections.shell_integration_status(&instance_id)
+}
+
+/// Pane menu › "Install shell integration": install for this user and load immediately.
 #[tauri::command]
 async fn inject_shell_integration(ctx: State<'_, AppContext>, instance_id: String) -> Result<InjectOutcome, String> {
     let rx = ctx.connections.inject_shell_integration(&instance_id).map_err(|e| format!("{:#}", e))?;
@@ -591,6 +638,274 @@ fn zmodem_unstage(ctx: State<'_, AppContext>, token: Option<String>) -> Result<(
 #[tauri::command]
 fn zmodem_cancel(ctx: State<'_, AppContext>, instance_id: String) {
     ctx.connections.zmodem_cancel(&instance_id);
+}
+
+// ---------------------------------------------------------------------------------------
+// SFTP file browser and transfer queue (sftp.rs, scp.rs, transfer.rs)
+
+/// Run `f` on the pane's files (SFTP, or shell commands when the server has no SFTP). A
+/// broken SFTP channel (server closed an idle session, pane reconnected) is replaced once.
+pub(crate) async fn with_sftp<T, F, Fut>(ctx: &AppContext, instance_id: &str, f: F) -> Result<T, String>
+where
+    F: Fn(crate::sftp::Fs) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let mut retried = false;
+    loop {
+        let link = ctx.connections.ssh_link(instance_id).map_err(|e| format!("{:#}", e))?;
+        let fs = crate::sftp::fs(instance_id, &link).await.map_err(|e| format!("{:#}", e))?;
+        match f(fs).await {
+            Ok(v) => return Ok(v),
+            Err(e) if !retried && crate::sftp::is_link_error(&e) => {
+                crate::sftp::forget(instance_id);
+                retried = true;
+            }
+            Err(e) => return Err(format!("{:#}", e)),
+        }
+    }
+}
+
+#[tauri::command]
+async fn sftp_home(ctx: State<'_, AppContext>, instance_id: String) -> Result<String, String> {
+    with_sftp(&ctx, &instance_id, |s| async move { s.home().await }).await
+}
+
+#[tauri::command]
+async fn sftp_list(ctx: State<'_, AppContext>, instance_id: String, path: String) -> Result<crate::sftp::Listing, String> {
+    with_sftp(&ctx, &instance_id, |s| {
+        let path = path.clone();
+        async move { s.list(&path).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sftp_stat(ctx: State<'_, AppContext>, instance_id: String, path: String) -> Result<crate::sftp::RemoteEntry, String> {
+    with_sftp(&ctx, &instance_id, |s| {
+        let path = path.clone();
+        async move { s.stat(&path).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sftp_mkdir(ctx: State<'_, AppContext>, instance_id: String, path: String) -> Result<(), String> {
+    with_sftp(&ctx, &instance_id, |s| {
+        let path = path.clone();
+        async move { s.mkdir(&path).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sftp_touch(ctx: State<'_, AppContext>, instance_id: String, path: String) -> Result<(), String> {
+    with_sftp(&ctx, &instance_id, |s| {
+        let path = path.clone();
+        async move { s.touch(&path).await }
+    })
+    .await
+}
+
+/// Rename or move (to another folder) a remote file or folder.
+#[tauri::command]
+async fn sftp_rename(ctx: State<'_, AppContext>, instance_id: String, from: String, to: String) -> Result<(), String> {
+    with_sftp(&ctx, &instance_id, |s| {
+        let (from, to) = (from.clone(), to.clone());
+        async move { s.rename(&from, &to).await }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sftp_remove(ctx: State<'_, AppContext>, instance_id: String, paths: Vec<String>) -> Result<(), String> {
+    for path in paths {
+        with_sftp(&ctx, &instance_id, |s| {
+            let path = path.clone();
+            async move { s.remove(&path).await }
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn sftp_chmod(ctx: State<'_, AppContext>, instance_id: String, paths: Vec<String>, mode: u32) -> Result<(), String> {
+    for path in paths {
+        with_sftp(&ctx, &instance_id, |s| {
+            let path = path.clone();
+            async move { s.chmod(&path, mode).await }
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn sftp_symlink(ctx: State<'_, AppContext>, instance_id: String, link: String, target: String) -> Result<(), String> {
+    with_sftp(&ctx, &instance_id, |s| {
+        let (link, target) = (link.clone(), target.clone());
+        async move { s.symlink(&link, &target).await }
+    })
+    .await
+}
+
+/// A remote file's bytes for the preview (raw, not JSON). Above `limit`: "TOO_LARGE:<size>".
+#[tauri::command]
+async fn sftp_read(ctx: State<'_, AppContext>, instance_id: String, path: String, limit: u64) -> Result<tauri::ipc::Response, String> {
+    let bytes = with_sftp(&ctx, &instance_id, |s| {
+        let path = path.clone();
+        async move { crate::sftp::read_limited(s.sftp()?, &path, limit).await }
+    })
+    .await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Write one chunk of an item dropped on the file browser. Headers: x-token (one dropped
+/// item), x-rel (base64 UTF-8 path below it, `/`-separated), x-dir ("1": an empty folder),
+/// x-append ("1" after the first chunk). Returns the staging folder of the token.
+#[tauri::command]
+fn sftp_stage_chunk(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    use std::io::Write;
+    let header = |key: &str| request.headers().get(key).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let token = safe_component(&header("x-token")).ok_or("bad token")?;
+    let rel = B64.decode(header("x-rel")).map_err(|e| e.to_string())?;
+    let rel = String::from_utf8(rel).map_err(|e| e.to_string())?;
+    let base = crate::transfer::staging_root().join(token);
+    let mut path = base.clone();
+    for part in rel.split('/').filter(|p| !p.is_empty()) {
+        // Every component on its own: no separators, no "..".
+        if safe_component(part).as_deref() != Some(part) {
+            return Err(format!("bad file name: {}", part));
+        }
+        path.push(part);
+    }
+    if path == base {
+        return Err("empty path".into());
+    }
+    if header("x-dir") == "1" {
+        std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+        return Ok(base.to_string_lossy().into_owned());
+    }
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw bytes".into());
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let append = header("x-append") == "1";
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(append)
+        .truncate(!append)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(bytes).map_err(|e| e.to_string())?;
+    Ok(base.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn sftp_edit_start(
+    app: AppHandle,
+    ctx: State<'_, AppContext>,
+    instance_id: String,
+    path: String,
+    program: Option<String>,
+) -> Result<crate::sftp::EditInfo, String> {
+    let link = ctx.connections.ssh_link(&instance_id).map_err(|e| format!("{:#}", e))?;
+    crate::sftp::edit_start(app, &instance_id, &link, &path, program)
+        .await
+        .map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+fn sftp_edit_stop(app: AppHandle, id: String) {
+    crate::sftp::edit_stop(&app, &id);
+}
+
+#[tauri::command]
+fn sftp_edit_retry(id: String) {
+    crate::sftp::edit_retry(&id);
+}
+
+#[tauri::command]
+fn sftp_edit_list() -> Vec<crate::sftp::EditInfo> {
+    crate::sftp::edit_list()
+}
+
+fn transfer_hub() -> Result<&'static crate::transfer::Hub, String> {
+    crate::transfer::hub().ok_or_else(|| "传输队列未就绪".to_string())
+}
+
+#[tauri::command]
+fn transfer_enqueue(requests: Vec<crate::transfer::TransferRequest>) -> Result<Vec<crate::transfer::TransferInfo>, String> {
+    Ok(transfer_hub()?.enqueue(requests))
+}
+
+#[tauri::command]
+fn transfer_list() -> Vec<crate::transfer::TransferInfo> {
+    crate::transfer::hub().map(|h| h.list()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn transfer_pause(id: String) -> Result<(), String> {
+    transfer_hub()?.pause(&id);
+    Ok(())
+}
+
+#[tauri::command]
+fn transfer_resume(id: String) -> Result<(), String> {
+    transfer_hub()?.resume(&id);
+    Ok(())
+}
+
+#[tauri::command]
+fn transfer_cancel(id: String) -> Result<(), String> {
+    transfer_hub()?.cancel(&id);
+    Ok(())
+}
+
+#[tauri::command]
+fn transfer_retry(id: String) -> Result<(), String> {
+    transfer_hub()?.retry(&id);
+    Ok(())
+}
+
+#[tauri::command]
+fn transfer_answer(id: String, answer: crate::transfer::ConflictAnswer) -> Result<(), String> {
+    transfer_hub()?.answer(&id, answer);
+    Ok(())
+}
+
+/// Clear finished transfers (`ids`, or all of them).
+#[tauri::command]
+fn transfer_remove(ids: Option<Vec<String>>) -> Result<Vec<String>, String> {
+    Ok(transfer_hub()?.remove(ids))
+}
+
+/// Show a file (selected) or folder in Explorer.
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("{} 已不存在", path));
+    }
+    let mut cmd = std::process::Command::new("explorer");
+    if p.is_dir() {
+        cmd.arg(path.replace('/', "\\"));
+    } else {
+        cmd.arg(format!("/select,{}", path.replace('/', "\\")));
+    }
+    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Open a local file with its default program.
+#[tauri::command]
+fn open_local_path(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).exists() {
+        return Err(format!("{} 已不存在", path));
+    }
+    crate::sftp::open_local(&path, None).map_err(|e| format!("{:#}", e))
 }
 
 #[tauri::command]
@@ -769,6 +1084,10 @@ fn disconnect_terminal(
 ) -> Result<(), String> {
     ctx.connections.disconnect(&instance_id);
     mcp::forget(&instance_id);
+    crate::sftp::forget_instance(&app, &instance_id);
+    if let Some(hub) = crate::transfer::hub() {
+        hub.forget_instance(&instance_id);
+    }
     let sink = TauriSink { app };
     crate::manager::TerminalSink::emit_state(
         &sink,
@@ -981,6 +1300,13 @@ pub fn run() {
             agent::start(app.handle().clone());
             mcp::start(app.handle().clone());
             crate::remote::init(app.handle().clone(), remote_config(&settings));
+            crate::transfer::init(app.handle().clone());
+            if let Some(hub) = crate::transfer::hub() {
+                hub.set_limit(sftp_concurrency(&settings));
+            }
+            // Local copies of remote files edited in an earlier run, files dropped then.
+            crate::sftp::edit_cleanup();
+            let _ = std::fs::remove_dir_all(crate::transfer::staging_root());
 
             let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Nexterm", true, None::<&str>)?;
@@ -1105,6 +1431,8 @@ pub fn run() {
             respond_host_key,
             ssh_exec,
             inject_shell_integration,
+            wsl_agent_exec,
+            shell_integration_status,
             zmodem_start,
             tunnel_list,
             tunnel_start,
@@ -1136,7 +1464,32 @@ pub fn run() {
             remote_report_tabs,
             remote_watch_state,
             remote_release,
-            remote_feed
+            remote_feed,
+            sftp_home,
+            sftp_list,
+            sftp_stat,
+            sftp_mkdir,
+            sftp_touch,
+            sftp_rename,
+            sftp_remove,
+            sftp_chmod,
+            sftp_symlink,
+            sftp_read,
+            sftp_stage_chunk,
+            sftp_edit_start,
+            sftp_edit_stop,
+            sftp_edit_retry,
+            sftp_edit_list,
+            transfer_enqueue,
+            transfer_list,
+            transfer_pause,
+            transfer_resume,
+            transfer_cancel,
+            transfer_retry,
+            transfer_answer,
+            transfer_remove,
+            reveal_path,
+            open_local_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexterm");

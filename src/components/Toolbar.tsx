@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ArrowRightLeft,
   ArrowRight,
   History,
+  HardDrive,
   Send,
   Columns2,
   Command,
@@ -19,9 +20,11 @@ import {
   RotateCw,
   Rows2,
   Settings,
+  Smartphone,
   Zap,
 } from "lucide-react";
 import type { SplitDirection, SyncInputScope } from "../types/domain";
+import { backend, type RemoteStatus } from "../services/backend";
 import { TOOLBAR_ITEMS, type ToolbarItem } from "../utils/actions";
 import { useContextMenu, type MenuItem } from "./ContextMenu";
 
@@ -63,6 +66,13 @@ interface ToolbarProps {
   onToggleSender: () => void;
   historyOpen: boolean;
   onToggleHistory: () => void;
+  filesOpen: boolean;
+  onToggleFiles: () => void;
+  remoteEnabled: boolean;
+  /** A relay address is saved; without one the button opens the remote settings. */
+  remoteConfigured: boolean;
+  onToggleRemote: () => void;
+  onOpenRemoteSettings: () => void;
   /** Right-click on the toolbar: customize. */
   onCustomize: () => void;
   channelCount: number;
@@ -99,6 +109,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleSender,
   historyOpen,
   onToggleHistory,
+  filesOpen,
+  onToggleFiles,
+  remoteEnabled,
+  remoteConfigured,
+  onToggleRemote,
+  onOpenRemoteSettings,
   onCustomize,
   channelCount,
   onOpenPalette,
@@ -110,6 +126,23 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const show = (item: ToolbarItem) => !hidden.includes(item);
   const pausedPanes = syncMembers.filter((m) => m.paused).length;
   const tip = (label: string, action: string) => (keymap[action] ? `${label} (${keymap[action]})` : label);
+  const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
+  useEffect(() => {
+    void backend.remoteStatus().then(setRemoteStatus);
+    const un = backend.onRemoteState(setRemoteStatus);
+    return () => void un.then((f) => f());
+  }, []);
+  const remoteState = remoteEnabled ? remoteStatus?.state ?? "connecting" : "off";
+  const phoneCount = remoteStatus?.phones.length ?? 0;
+  const remoteTip = !remoteConfigured
+    ? t("remote.toolbarSetup")
+    : [
+        t(`remote.state.${remoteState}`),
+        phoneCount > 0 ? t("remote.toolbarPhones", { count: phoneCount }) : "",
+        remoteEnabled ? t("remote.toolbarOn") : t("remote.toolbarOff"),
+      ]
+        .filter(Boolean)
+        .join("\n");
 
   const showSyncMenu = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -156,6 +189,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     portForward: { label: t("forward.title"), shortcut: keymap["view.portForward"], checked: portForwardOpen, onClick: onTogglePortForward },
     sender: { label: t("sender.title"), shortcut: keymap["view.sender"], checked: senderOpen, onClick: onToggleSender },
     history: { label: t("history.title"), shortcut: keymap["view.history"], checked: historyOpen, onClick: onToggleHistory },
+    files: { label: t("sftp.title"), shortcut: keymap["view.files"], checked: filesOpen, onClick: onToggleFiles },
+    remote: { label: t("remote.enabled"), checked: remoteEnabled, onClick: onToggleRemote },
     settings: { label: t("toolbar.settings"), shortcut: keymap["view.settings"], onClick: onOpenSettings },
     focusMode: { label: t("toolbar.focusMode"), shortcut: keymap["view.focusMode"], checked: focusMode, onClick: onToggleFocusMode },
   };
@@ -357,6 +392,32 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             title={tip(t("history.title"), "view.history")}
           >
             <History size={15} />
+          </button>
+        )}
+        {show("files") && (
+          <button
+            type="button"
+            className={`icon-btn ${filesOpen ? "active" : ""}`}
+            onClick={onToggleFiles}
+            title={tip(t("sftp.title"), "view.files")}
+          >
+            <HardDrive size={15} />
+          </button>
+        )}
+        {show("remote") && (
+          <button
+            type="button"
+            className={`icon-btn remote-btn ${remoteEnabled ? "active" : ""}`}
+            onClick={onToggleRemote}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onOpenRemoteSettings();
+            }}
+            title={remoteTip}
+          >
+            <Smartphone size={15} />
+            {remoteEnabled && <span className={`remote-dot remote-dot-${remoteState}`} />}
           </button>
         )}
         {show("settings") && (

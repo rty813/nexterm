@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { utf8Base64 } from "../utils/zmodemDrop";
+import type { RemoteEntry } from "../utils/sftpPaths";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -32,6 +33,79 @@ export interface HostKeyPromptPayload {
   fingerprint: string;
   changed: boolean;
   knownHosts: string;
+}
+
+export type { RemoteEntry };
+
+export interface SftpListing {
+  path: string;
+  entries: RemoteEntry[];
+  /** "scp": the server has no SFTP; listed with shell commands, transfers use SCP. */
+  mode: "sftp" | "scp";
+}
+
+/** Mirrors transfer.rs ConflictInfo. */
+export interface TransferConflict {
+  path: string;
+  isDir: boolean;
+  srcSize: number;
+  srcMtime?: number | null;
+  dstSize: number;
+  dstMtime?: number | null;
+}
+
+/** Mirrors transfer.rs TransferInfo. */
+export interface TransferInfo {
+  id: string;
+  instanceId: string;
+  label: string;
+  direction: "upload" | "download";
+  protocol: "" | "sftp" | "scp" | "zmodem" | "xmodem" | "ymodem";
+  name: string;
+  localPath?: string | null;
+  remotePath: string;
+  isDir: boolean;
+  state: "queued" | "running" | "paused" | "conflict" | "done" | "error" | "cancelled";
+  total: number;
+  transferred: number;
+  filesTotal: number;
+  filesDone: number;
+  skipped: number;
+  current?: string | null;
+  speed: number;
+  error?: string | null;
+  conflict?: TransferConflict | null;
+  createdAt: number;
+  finishedAt?: number | null;
+}
+
+export interface TransferRequest {
+  instanceId: string;
+  direction: "upload" | "download";
+  /** Upload: the source. Download: the full local target (folder + name). */
+  localPath: string;
+  /** Upload: the full remote target. Download: the source. */
+  remotePath: string;
+  isDir?: boolean;
+  options: {
+    conflict: string;
+    preserveTimes: boolean;
+    protocol: string;
+    /** Staging folder of dropped files, deleted when the job is over. */
+    cleanup?: string | null;
+  };
+}
+
+/** Mirrors sftp.rs EditInfo. */
+export interface SftpEditInfo {
+  id: string;
+  instanceId: string;
+  remotePath: string;
+  localPath: string;
+  state: "watching" | "uploading" | "error" | "stopped";
+  uploads: number;
+  lastUpload?: number | null;
+  error?: string | null;
 }
 
 export interface TunnelStatus {
@@ -82,6 +156,30 @@ export interface RemoteTab {
   command: string;
   /** AI agent state, e.g. "Claude Code: working". */
   agent: string;
+  /** Session protocol: phones offer the file browser on SSH tabs. */
+  protocol: string;
+  /** Why the connection ended or failed. */
+  message: string;
+  /** Set while the pane's login form waits for a username / password. */
+  auth: RemoteAuth | null;
+  /** SSH with password auth: phones offer another password after a failure. */
+  passwordAuth: boolean;
+}
+
+/** What a pane's login form asks for (mirrors Rust `remote::RemoteAuth`). */
+export interface RemoteAuth {
+  user: boolean;
+  password: boolean;
+  /** Prefill of the username field. */
+  username: string;
+}
+
+/** Credentials a phone typed into a pane's login form; none: reconnect as is. */
+export interface RemoteLoginPayload {
+  paneId: string;
+  username: string | null;
+  password: string | null;
+  remember: boolean;
 }
 
 export interface RemoteSizePayload {
@@ -433,8 +531,20 @@ export const backend = {
     return invoke<string>("ssh_exec", { instanceId, command });
   },
 
-  /** Type the shell integration loader into the pane's shell (echo hidden) and wait for it. */
-  async injectShellIntegration(instanceId: string): Promise<"loaded" | "unsupported" | "noAnswer"> {
+  /** Execute agent hook setup in the WSL session's default distribution. */
+  async wslAgentExec(instanceId: string, command: string): Promise<string> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    return invoke<string>("wsl_agent_exec", { instanceId, command });
+  },
+
+  /** Integration observed on this connection; null if the connection is unavailable. */
+  async shellIntegrationStatus(instanceId: string): Promise<{ detected: boolean; loading: boolean } | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke("shell_integration_status", { instanceId });
+  },
+
+  /** Install for the shell's current user, load now (echo hidden) and wait for the result. */
+  async injectShellIntegration(instanceId: string): Promise<"loaded" | "failed" | "unsupported" | "noAnswer"> {
     if (!isTauriRuntime()) throw new Error("Browser preview mode");
     return invoke("inject_shell_integration", { instanceId });
   },
@@ -469,6 +579,158 @@ export const backend = {
   async zmodemUnstage(token: string | null): Promise<void> {
     if (!isTauriRuntime()) return;
     await invoke("zmodem_unstage", { token }).catch(() => undefined);
+  },
+
+  // ------------------------------------------------------------ SFTP file browser / transfer queue
+
+  async sftpHome(instanceId: string): Promise<string> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    return invoke<string>("sftp_home", { instanceId });
+  },
+
+  async sftpList(instanceId: string, path: string): Promise<SftpListing> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    return invoke<SftpListing>("sftp_list", { instanceId, path });
+  },
+
+  async sftpStat(instanceId: string, path: string): Promise<RemoteEntry> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    return invoke<RemoteEntry>("sftp_stat", { instanceId, path });
+  },
+
+  async sftpMkdir(instanceId: string, path: string): Promise<void> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    await invoke("sftp_mkdir", { instanceId, path });
+  },
+
+  async sftpTouch(instanceId: string, path: string): Promise<void> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    await invoke("sftp_touch", { instanceId, path });
+  },
+
+  async sftpRename(instanceId: string, from: string, to: string): Promise<void> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    await invoke("sftp_rename", { instanceId, from, to });
+  },
+
+  async sftpRemove(instanceId: string, paths: string[]): Promise<void> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    await invoke("sftp_remove", { instanceId, paths });
+  },
+
+  async sftpChmod(instanceId: string, paths: string[], mode: number): Promise<void> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    await invoke("sftp_chmod", { instanceId, paths, mode });
+  },
+
+  async sftpSymlink(instanceId: string, link: string, target: string): Promise<void> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    await invoke("sftp_symlink", { instanceId, link, target });
+  },
+
+  /** Raw bytes of a remote file; rejects with "TOO_LARGE:<size>" above `limit`. */
+  async sftpRead(instanceId: string, path: string, limit: number): Promise<ArrayBuffer> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    return invoke<ArrayBuffer>("sftp_read", { instanceId, path, limit });
+  },
+
+  /**
+   * Copy one file (or empty folder: `file` null) dropped on the file browser into the
+   * staging folder of `token`, at `rel` below it. Returns that staging folder.
+   */
+  async sftpStage(token: string, rel: string, file: File | null, onProgress?: (written: number) => void): Promise<string> {
+    if (!isTauriRuntime()) return "";
+    const CHUNK = 4 * 1024 * 1024;
+    const headers = { "x-token": token, "x-rel": utf8Base64(rel) };
+    if (!file) return invoke<string>("sftp_stage_chunk", new Uint8Array(), { headers: { ...headers, "x-dir": "1" } });
+    let base = "";
+    let offset = 0;
+    do {
+      const bytes = new Uint8Array(await file.slice(offset, offset + CHUNK).arrayBuffer());
+      base = await invoke<string>("sftp_stage_chunk", bytes, { headers: { ...headers, "x-append": offset > 0 ? "1" : "0" } });
+      offset += bytes.length;
+      onProgress?.(bytes.length);
+    } while (offset < file.size);
+    return base;
+  },
+
+  async sftpEditStart(instanceId: string, path: string, program?: string): Promise<SftpEditInfo> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    return invoke<SftpEditInfo>("sftp_edit_start", { instanceId, path, program: program || null });
+  },
+
+  async sftpEditStop(id: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("sftp_edit_stop", { id });
+  },
+
+  async sftpEditRetry(id: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("sftp_edit_retry", { id });
+  },
+
+  async sftpEditList(): Promise<SftpEditInfo[]> {
+    if (!isTauriRuntime()) return [];
+    return invoke<SftpEditInfo[]>("sftp_edit_list");
+  },
+
+  async onSftpEdit(handler: (e: SftpEditInfo) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<SftpEditInfo>("sftp-edit", (e) => handler(e.payload));
+  },
+
+  async transferEnqueue(requests: TransferRequest[]): Promise<TransferInfo[]> {
+    if (!isTauriRuntime()) return [];
+    return invoke<TransferInfo[]>("transfer_enqueue", { requests });
+  },
+
+  async transferList(): Promise<TransferInfo[]> {
+    if (!isTauriRuntime()) return [];
+    return invoke<TransferInfo[]>("transfer_list");
+  },
+
+  async transferAction(action: "pause" | "resume" | "cancel" | "retry", id: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke(`transfer_${action}`, { id });
+  },
+
+  async transferAnswer(id: string, action: "overwrite" | "skip" | "rename" | "cancel", applyAll: boolean): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("transfer_answer", { id, answer: { action, applyAll } });
+  },
+
+  /** Clear finished transfers (`ids`, or every finished one). */
+  async transferRemove(ids?: string[]): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("transfer_remove", { ids: ids ?? null });
+  },
+
+  async onTransferUpdate(handler: (t: TransferInfo) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<TransferInfo>("transfer-update", (e) => handler(e.payload));
+  },
+
+  async onTransferRemoved(handler: (ids: string[]) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<string[]>("transfer-removed", (e) => handler(e.payload));
+  },
+
+  /** Show a local file (selected) or folder in Explorer. */
+  async revealPath(path: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("reveal_path", { path });
+  },
+
+  async openLocalPath(path: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("open_local_path", { path });
+  },
+
+  async pickDirectories(title: string, defaultPath?: string): Promise<string[]> {
+    if (!isTauriRuntime()) return [];
+    const selected = await open({ title, multiple: true, directory: true, defaultPath: defaultPath || undefined });
+    if (!selected) return [];
+    return Array.isArray(selected) ? selected : [selected];
   },
 
   async zmodemCancel(instanceId: string): Promise<void> {
@@ -507,6 +769,12 @@ export const backend = {
   async onHostKeyPrompt(handler: (p: HostKeyPromptPayload) => void): Promise<UnlistenFn> {
     if (!isTauriRuntime()) return () => {};
     return listen<HostKeyPromptPayload>("host-key-prompt", (e) => handler(e.payload));
+  },
+
+  /** A phone answered a host key question (payload: its request id). */
+  async onHostKeyResolved(handler: (requestId: string) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<string>("host-key-resolved", (e) => handler(e.payload));
   },
 
   async onZmodemRequest(handler: (p: ZmodemRequestPayload) => void): Promise<UnlistenFn> {
@@ -968,9 +1236,26 @@ export const backend = {
     return listen<string>("remote-snapshot", (e) => handler(e.payload));
   },
 
+  /** A phone asked to open a saved session (payload: its id). */
+  async onRemoteOpenSession(handler: (sessionId: string) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<string>("remote-open-session", (e) => handler(e.payload));
+  },
+
+  /** A phone asked to close a tab (payload: its pane id); it asked for confirmation itself. */
+  async onRemoteClosePane(handler: (paneId: string) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<string>("remote-close-pane", (e) => handler(e.payload));
+  },
+
   async onRemoteSize(handler: (p: RemoteSizePayload) => void): Promise<UnlistenFn> {
     if (!isTauriRuntime()) return () => {};
     return listen<RemoteSizePayload>("remote-size", (e) => handler(e.payload));
+  },
+
+  async onRemoteLogin(handler: (p: RemoteLoginPayload) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<RemoteLoginPayload>("remote-login", (e) => handler(e.payload));
   },
 
   async onRemotePhoneJoined(handler: (name: string) => void): Promise<UnlistenFn> {

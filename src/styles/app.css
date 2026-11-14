@@ -258,6 +258,25 @@ textarea {
   opacity: 0.32;
   cursor: not-allowed;
 }
+/* Phone remote toggle: relay connection state as a corner dot. */
+.remote-btn {
+  position: relative;
+}
+.remote-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+.remote-dot-online {
+  background: var(--success);
+}
+.remote-dot-error {
+  background: var(--danger);
+}
 
 .icon-btn-xs {
   width: 22px;
@@ -902,6 +921,21 @@ textarea {
   height: 100%;
   box-sizing: border-box;
   padding: 6px 2px 6px 10px;
+}
+
+/* xterm's IME overlay otherwise extends past the pane at the right edge. Keep
+   the invisible textarea aligned so the OS positions its candidate window there. */
+.xterm-mount .xterm-helpers {
+  width: 100%;
+}
+.xterm-mount .composition-view {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateX(var(--composition-shift, 0px));
+}
+.xterm-mount .xterm-helper-textarea {
+  transform: translateX(var(--composition-shift, 0px));
 }
 
 /* Search Bar in Terminal */
@@ -3526,6 +3560,27 @@ html.ctxmenu-host #root {
 /* ---------- Tab bar: "+" and its menu ---------- */
 .tabbar-scroll {
   flex: 0 1 auto;
+}
+.tab-scroll-btn {
+  width: 18px;
+  height: 26px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.tab-scroll-btn:hover:not(:disabled) {
+  color: var(--fg-strong);
+  background: var(--bg-hover);
+}
+.tab-scroll-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 .tabbar-spacer {
   flex: 1;

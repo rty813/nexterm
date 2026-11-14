@@ -283,6 +283,33 @@ pub struct SshShared {
 
 pub type SshLink = Arc<SshShared>;
 
+impl SshShared {
+    /// Start the SFTP subsystem on a channel of its own (file browser, transfers).
+    pub async fn open_sftp(&self) -> Result<russh_sftp::client::SftpSession> {
+        let ch = self.handle.channel_open_session().await.context("无法打开 SFTP 通道")?;
+        ch.request_subsystem(true, "sftp").await.context("无法请求 SFTP 子系统")?;
+        // A server without the subsystem closes the channel: init fails instead of hanging.
+        let sftp = tokio::time::timeout(Duration::from_secs(15), russh_sftp::client::SftpSession::new(ch.into_stream()))
+            .await
+            .context("SFTP 初始化超时")?
+            .context("服务器不支持 SFTP")?;
+        sftp.set_timeout(30);
+        Ok(sftp)
+    }
+
+    /// Run `command` as is (not through `posix_wrap`: scp needs the channel's stdin).
+    pub async fn open_exec(&self, command: &str) -> Result<russh::Channel<client::Msg>> {
+        let ch = self.handle.channel_open_session().await.context("无法打开 SSH 执行通道")?;
+        ch.exec(true, command).await.context("远程命令启动失败")?;
+        Ok(ch)
+    }
+
+    /// Run a POSIX sh script on an exec channel and return its stdout.
+    pub async fn exec_output(&self, command: &str) -> Result<String> {
+        run_exec(&self.handle, command).await
+    }
+}
+
 /// Target of a remote (-R) forward plus its live connection counter.
 #[derive(Clone)]
 struct RemoteTarget {

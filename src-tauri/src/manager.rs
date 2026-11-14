@@ -92,8 +92,14 @@ fn pending_host_keys() -> &'static Mutex<HashMap<String, oneshot::Sender<HostKey
     PENDING.get_or_init(Default::default)
 }
 
-/// Deliver the user's answer to a `host-key-prompt` event.
+/// Deliver the desktop's answer to a `host-key-prompt` event.
 pub fn resolve_host_key(request_id: &str, decision: HostKeyDecision) {
+    answer_host_key(request_id, decision);
+    crate::remote::host_key_done(request_id);
+}
+
+/// Deliver an answer (desktop or phone) to the waiting connection.
+pub fn answer_host_key(request_id: &str, decision: HostKeyDecision) {
     if let Some(tx) = lock(pending_host_keys()).remove(request_id) {
         let _ = tx.send(decision);
     }
@@ -121,6 +127,7 @@ impl TerminalSink for TauriSink {
         let (tx, rx) = oneshot::channel();
         let request_id = uuid::Uuid::new_v4().to_string();
         lock(pending_host_keys()).insert(request_id.clone(), tx);
+        crate::remote::host_key_prompt(instance_id, &request_id, &prompt);
         let mut payload = serde_json::to_value(&prompt).unwrap_or_default();
         payload["requestId"] = request_id.into();
         payload["instanceId"] = instance_id.into();
@@ -224,11 +231,21 @@ struct ManualInject {
     done: Option<oneshot::Sender<InjectOutcome>>,
 }
 
+/// State observed on this connection; a nested shell can differ from an earlier shell.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellIntegrationStatus {
+    pub detected: bool,
+    pub loading: bool,
+}
+
 /// How a manual shell integration load ended.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum InjectOutcome {
     Loaded,
+    /// The installer could not write the current user's scripts / startup files.
+    Failed,
     /// Not bash, zsh or fish.
     Unsupported,
     /// No answer (no base64 / gunzip, not at a prompt, a program running ...).
@@ -284,6 +301,8 @@ impl ScopedSink {
             if let Some(mut m) = finished {
                 let outcome = if m.injector.loaded {
                     InjectOutcome::Loaded
+                } else if m.injector.failed {
+                    InjectOutcome::Failed
                 } else if m.injector.unsupported {
                     InjectOutcome::Unsupported
                 } else {
@@ -591,6 +610,15 @@ impl ConnectionManager {
         })
     }
 
+    /// Observed integration markers and whether a manual load is in progress.
+    pub fn shell_integration_status(&self, instance_id: &str) -> Option<ShellIntegrationStatus> {
+        let map = lock(&self.sessions);
+        let entry = map.get(instance_id)?;
+        let detected = lock(&entry.sink.tracker).integrated;
+        let loading = lock(&entry.sink.inject).is_some();
+        Some(ShellIntegrationStatus { detected, loading })
+    }
+
     /// Start collecting the pane's output for an agent request (replaces any earlier one).
     pub fn arm_capture(&self, instance_id: &str, mode: CaptureMode) -> Result<SharedCapture> {
         let map = lock(&self.sessions);
@@ -617,8 +645,8 @@ impl ConnectionManager {
         }
     }
 
-    /// Type the shell integration loader into the pane's shell (whatever it is: nested ssh,
-    /// container, WSL ...) and hide its echo; resolves once the script answered or not.
+    /// Install shell integration for the pane's current user (nested ssh, container,
+    /// WSL ...) and load it now; hide its echo and wait for success or failure.
     pub fn inject_shell_integration(&self, instance_id: &str) -> Result<oneshot::Receiver<InjectOutcome>> {
         let map = lock(&self.sessions);
         let entry = map.get(instance_id).ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
@@ -654,6 +682,21 @@ impl ConnectionManager {
         Ok(rx)
     }
 
+    /// The live SSH connection behind a pane (file browser, transfers).
+    pub fn ssh_link(&self, instance_id: &str) -> Result<SshLink> {
+        let map = lock(&self.sessions);
+        let entry = map
+            .get(instance_id)
+            .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+        let link = lock(&entry.ssh).clone();
+        link.ok_or_else(|| anyhow::anyhow!("该窗格不是已连接的 SSH 会话"))
+    }
+
+    /// Session name of a pane ("一楼服务器"), for transfer records.
+    pub fn pane_label(&self, instance_id: &str) -> Option<String> {
+        lock(&self.sessions).get(instance_id).map(|e| e.label.clone())
+    }
+
     /// Send a request to the port-forward manager of the SSH connection behind `instance_id`.
     pub fn tunnel(&self, instance_id: &str, req: TunnelRequest) -> Result<()> {
         let map = lock(&self.sessions);
@@ -669,12 +712,12 @@ impl ConnectionManager {
 
     /// Start the ZModem transfer the remote requested. `files` for `rz`, `dir` for `sz`.
     pub fn zmodem_start(&self, instance_id: &str, files: Vec<PathBuf>, dir: Option<PathBuf>) -> Result<()> {
-        let (sink, control) = {
+        let (sink, control, label) = {
             let map = lock(&self.sessions);
             let entry = map
                 .get(instance_id)
                 .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
-            (Arc::clone(&entry.sink), entry.control.clone())
+            (Arc::clone(&entry.sink), entry.control.clone(), entry.label.clone())
         };
         let (direction, buffered, rx, cancel) = {
             let mut z = lock(&sink.zmodem);
@@ -730,6 +773,15 @@ impl ConnectionManager {
                 Err(zmodem::ZError::Cancelled) => ("cancelled", "[ZModem] 传输已取消".to_string()),
                 Err(e) => ("error", format!("[ZModem] 传输失败：{}", e)),
             };
+            crate::transfer::record_modem(
+                &id,
+                &label,
+                "zmodem",
+                direction == Direction::Receive,
+                state,
+                &message,
+                result.as_deref().unwrap_or_default(),
+            );
             let files: Vec<String> = result
                 .as_ref()
                 .map(|p| p.iter().map(|x| x.to_string_lossy().to_string()).collect())
@@ -759,12 +811,12 @@ impl ConnectionManager {
         command: Option<String>,
         packet_size: usize,
     ) -> Result<()> {
-        let (sink, control) = {
+        let (sink, control, label) = {
             let map = lock(&self.sessions);
             let entry = map
                 .get(instance_id)
                 .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
-            (Arc::clone(&entry.sink), entry.control.clone())
+            (Arc::clone(&entry.sink), entry.control.clone(), entry.label.clone())
         };
         if !sink.zmodem_enabled {
             anyhow::bail!("本地终端不支持 X/YMODEM 传输，请在 SSH、Telnet、串口或 TCP 会话中使用");
@@ -828,6 +880,15 @@ impl ConnectionManager {
                 Err(MError::Cancelled) => ("cancelled", format!("[{}] 传输已取消", name)),
                 Err(e) => ("error", format!("[{}] 传输失败：{}", name, e)),
             };
+            crate::transfer::record_modem(
+                &id,
+                &label,
+                &name.to_lowercase(),
+                !send,
+                state,
+                &message,
+                result.as_deref().unwrap_or_default(),
+            );
             let files: Vec<String> = result
                 .as_ref()
                 .map(|p| p.iter().map(|x| x.to_string_lossy().to_string()).collect())
@@ -1129,7 +1190,7 @@ mod tests {
     }
 }
 
-/// Real local WSL tab (ConPTY, default distro): `cargo test --lib manual_inject_e2e -- --ignored`.
+/// Real WSL ConPTY, isolated home: `cargo test --lib manual_inject_e2e -- --ignored`.
 #[cfg(test)]
 mod manual_inject_e2e {
     use super::*;
@@ -1151,24 +1212,64 @@ mod manual_inject_e2e {
     #[test]
     #[ignore]
     fn loads_into_wsl_and_hides_the_line() {
-        let session: SessionConfig = serde_json::from_value(serde_json::json!({ "id": "w", "label": "w", "protocol": "wsl" })).unwrap();
+        check_shell("bash", "--noprofile --norc -i");
+        let fish = std::process::Command::new("wsl.exe").args(["--exec", "sh", "-c", "command -v fish"]).output().unwrap();
+        if fish.status.success() {
+            check_shell("fish", "--no-config -i");
+        }
+    }
+
+    fn check_shell(shell: &str, clean_flags: &str) {
+        use std::process::Command;
+        struct TestHome(String);
+        impl Drop for TestHome {
+            fn drop(&mut self) {
+                if self.0.strip_prefix("/tmp/nexterm-si-e2e-").is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_alphanumeric())) {
+                    let _ = Command::new("wsl.exe").args(["--exec", "python3", "-c",
+                        "import shutil,sys; shutil.rmtree(sys.argv[1])", &self.0]).output();
+                }
+            }
+        }
+        let home = Command::new("wsl.exe").args(["--exec", "mktemp", "-d", "/tmp/nexterm-si-e2e-XXXXXXXX"]).output().unwrap();
+        assert!(home.status.success());
+        let home = TestHome(String::from_utf8(home.stdout).unwrap().trim().to_string());
+        assert!(home.0.starts_with("/tmp/nexterm-si-e2e-") && home.0[5..].bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+        let launch = format!("wsl.exe --exec env HOME={} XDG_CONFIG_HOME={}/.config {shell}", home.0, home.0);
+        let session: SessionConfig = serde_json::from_value(serde_json::json!({
+            "id": "w", "label": "w", "protocol": "custom", "shellCommand": format!("{launch} {clean_flags}")
+        })).unwrap();
         let sink = Arc::new(Collect::default());
         let mgr = ConnectionManager::new();
-        mgr.connect("w".into(), session, 120, 30, sink.clone(), None).unwrap();
+        mgr.connect("w".into(), session.clone(), 120, 30, sink.clone(), None).unwrap();
         // Answer ConPTY's cursor query, then wait for the prompt to settle.
         std::thread::sleep(std::time::Duration::from_millis(500));
         mgr.write("w", b"\x1b[1;1R").unwrap();
         std::thread::sleep(std::time::Duration::from_secs(4));
         let before = lock(&sink.0).len();
-        let outcome = mgr.inject_shell_integration("w").unwrap().blocking_recv().unwrap();
+        let rx = mgr.inject_shell_integration("w").unwrap();
+        assert!(mgr.shell_integration_status("w").unwrap().loading);
+        let outcome = rx.blocking_recv().unwrap();
+        let integration = mgr.shell_integration_status("w").unwrap();
+        assert!(integration.detected && !integration.loading);
         let after = text(&sink)[before..].to_string();
-        eprintln!("OUTCOME {outcome:?} AFTER {after:?}");
+        eprintln!("{shell}: OUTCOME {outcome:?} AFTER {after:?}");
         assert_eq!(outcome, InjectOutcome::Loaded);
         assert!(!after.contains("nexterm-si") && !after.contains("base64"), "loader line showed");
         assert!(after.contains("\x1b]133;A\x07"));
         mgr.write("w", b"sleep 1\r").unwrap();
         std::thread::sleep(std::time::Duration::from_secs(2));
         assert!(text(&sink).contains("\x1b]633;E;sleep 1\x07"), "no command reported");
+        mgr.disconnect("w");
+        let mut session = session;
+        session.shell_command = Some(format!("{launch} -i"));
+        mgr.connect("w".into(), session, 120, 30, sink.clone(), None).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        mgr.write("w", b"\x1b[1;1R").unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while !mgr.shell_integration_status("w").unwrap().detected && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert!(mgr.shell_integration_status("w").unwrap().detected, "reopened WSL shell did not load integration");
         mgr.disconnect("w");
     }
 }

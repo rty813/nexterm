@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { detectFromScreen, parseOsc7501 } from "../utils/agentStatus";
-import { AGENT_STATE_SCRIPT, fromBase64, hasOurHooks, hookStatus, mergeClaudeSettings, mergeCodexHooks, parseRemoteRead, toBase64 } from "../utils/agentHooks";
+import { AGENT_STATE_SCRIPT, WINDOWS_AGENT_STATE_SCRIPT, fromBase64, hasOurHooks, hookStatus, mergeClaudeSettings, mergeCodexHooks, parseRemoteRead, toBase64 } from "../utils/agentHooks";
 
 describe("OSC 7501", () => {
   it("parses Herdr's format", () => {
@@ -56,5 +56,22 @@ describe("hook install status", () => {
     expect(hookStatus({ ...base, script: "old" })).toEqual({ claude: "installed", codex: "absent", outdated: true });
     expect(hookStatus({ ...base, script: null }).claude).toBe("missing");
     expect(hookStatus({ ...base, codexDir: true, claudeSettings: "{}", script: null })).toEqual({ claude: "missing", codex: "missing", outdated: false });
+  });
+});
+
+
+describe("Windows hook migration", () => {
+  it("preserves other commands in a mixed group and replaces old hooks", () => {
+    const input = JSON.stringify({ hooks: { Stop: [{ hooks: [
+      { type: "command", command: "custom" },
+      { type: "command", command: 'sh "$HOME/.nexterm/agent-state.sh" claude Stop' },
+    ] }] } });
+    const updated = mergeClaudeSettings(input, true, true);
+    const groups = JSON.parse(updated).hooks.Stop;
+    expect(groups[0].hooks).toEqual([{ type: "command", command: "custom" }]);
+    expect(groups[1].hooks[0].command).toContain(".nexterm/agent-state.ps1");
+    expect(hasOurHooks(updated)).toBe(true);
+    expect(JSON.parse(mergeClaudeSettings(updated, false, true)).hooks.Stop[0].hooks[0].command).toBe("custom");
+    expect(hookStatus({ claudeDir: true, codexDir: false, claudeSettings: updated, codexHooks: null, script: WINDOWS_AGENT_STATE_SCRIPT, windows: true }).outdated).toBe(false);
   });
 });

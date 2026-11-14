@@ -19,6 +19,7 @@ export const ACTIONS: ActionDef[] = [
   { id: "view.portForward", group: "view", defaultKey: "Ctrl+Shift+P" },
   { id: "view.sender", group: "view", defaultKey: "Alt+S" },
   { id: "view.history", group: "view", defaultKey: "Alt+H" },
+  { id: "view.files", group: "view", defaultKey: "Ctrl+Shift+O" },
   { id: "view.toggleStatusBar", group: "view", defaultKey: "" },
 
   { id: "terminal.copy", group: "terminal", defaultKey: "Ctrl+Shift+C" },
@@ -137,6 +138,8 @@ export const TOOLBAR_ITEMS = [
   "portForward",
   "sender",
   "history",
+  "files",
+  "remote",
   "settings",
   "focusMode",
 ] as const;

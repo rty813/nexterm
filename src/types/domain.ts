@@ -247,7 +247,7 @@ export interface AppSettings {
   tabHostname?: boolean;
   /** Show the command running in the pane (make, colcon build ...) on its tab (default on). */
   tabCommand?: boolean;
-  /** Load shell integration (OSC 133 / 633 / 7) into SSH bash / zsh / fish and local PowerShell (default on; read by the backend from settings.extra). */
+  /** Load shell integration (OSC 133 / 633 / 7) into SSH and WSL bash / zsh / fish and local PowerShell (default on; read by the backend from settings.extra). */
   shellIntegration?: boolean;
   /** Guess Claude Code / Codex state from the screen when their hooks are not installed (default on). */
   agentScreenDetect?: boolean;
@@ -302,6 +302,9 @@ export interface AppSettings {
 
   /** X/Y/ZModem upload commands and packet sizes (xmodem.uploadCommand ...). */
   modem?: ModemSettings;
+
+  /** SSH file browser (SFTP / SCP). */
+  sftp?: SftpSettings;
 
   /** Duplicate / split an SSH tab over its existing connection (no new login). */
   reuseSshConnection?: boolean;
@@ -371,6 +374,25 @@ export interface MouseSettings {
     move: boolean;
     wheel: boolean;
   };
+}
+
+/** SSH file browser and its transfer queue (settings.sftp; the backend reads `concurrency`). */
+export interface SftpSettings {
+  /** Transfers running at the same time (1 - 16). */
+  concurrency: number;
+  /** What to do when the target already exists. */
+  conflict: "ask" | "overwrite" | "skip" | "rename" | "newer";
+  /** Keep modification / access times. */
+  preserveTimes: boolean;
+  /** auto: SFTP, SCP when the server has no SFTP subsystem. */
+  protocol: "auto" | "sftp" | "scp";
+  /** Follow the terminal's directory (OSC 7, needs shell integration). */
+  followCwd: boolean;
+  showHidden: boolean;
+  /** Program for "Edit locally" ("" = the program Windows uses for the file type). */
+  editor: string;
+  /** Last local folder downloads went to ("" = Downloads). */
+  downloadDir: string;
 }
 
 export interface ModemSettings {

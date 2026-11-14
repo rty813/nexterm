@@ -1,129 +1,96 @@
-<div align="center">
-
-<img src="src-tauri/icons/128x128.png" alt="Nexterm" width="96" height="96" />
-
 # Nexterm
-
-**A modern SSH & local terminal client for Windows, built with Tauri, Rust and React.**
 
 English | [简体中文](README.zh-CN.md)
 
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6.svg)](#requirements)
-[![Tauri](https://img.shields.io/badge/Tauri-v2-24C8DB.svg)](https://tauri.app)
-[![Rust](https://img.shields.io/badge/Rust-async-DEA584.svg)](https://www.rust-lang.org)
-[![React](https://img.shields.io/badge/React-TypeScript-61DAFB.svg)](https://react.dev)
-[![Stars](https://img.shields.io/github/stars/rty813/nexterm?style=social)](https://github.com/rty813/nexterm/stargazers)
+<img src="src-tauri/icons/128x128.png" alt="" width="64" align="right" />
 
-</div>
+**Nexterm** is a fast, modern Windows terminal client supporting SSH, local shells (PowerShell / CMD / WSL), Telnet, raw TCP, and serial ports—built with Rust, Tauri v2, React, and [xterm.js](https://xtermjs.org).
 
----
+It keeps WindTerm's familiar workflow (session tree, nested split panes, quick commands, one-click WindTerm import) and adds several built-in capabilities:
 
-Nexterm is a from-scratch terminal client with a pure Rust async backend and an [xterm.js](https://xtermjs.org) front end. It keeps the workflow people like in classic tabbed SSH clients — session tree, recursive split panes, quick commands, command history — and adds things those clients lack: an AI-agent status indicator, an MCP server, and end-to-end encrypted phone access to your terminal tabs.
+- **Remote File Workflow**: Side-by-side SFTP browser (with automatic SCP fallback), parallel transfer queue, instant previews, and **local edit with auto-upload on save**.
+- **AI Agent Awareness & Control**: Live tab badges for **Claude Code / Codex**; desktop notifications when an agent **finishes, needs permission approval, or errors out** (click to jump straight to the pane); plus a built-in MCP server for human-approved terminal delegation.
+- **E2EE Phone Access**: Scan a QR code to view and control desktop terminals from your mobile browser, adapt terminal dimensions to your phone screen, manage sessions, and transfer files with zero-knowledge encryption.
 
-## Highlights
-
-- **Many protocols, one app** — SSH, local shells (ConPTY), Telnet, raw TCP and serial ports.
-- **Fast and light** — Tauri instead of Electron; terminal output goes through a flow-controlled binary channel with back-pressure to the remote end.
-- **Built for AI coding agents** — see at a glance which tab has a Claude Code / Codex session that is working, waiting for approval or finished; let agents drive terminals over MCP.
-- **Your terminal on your phone** — a self-hosted relay and PWA with end-to-end encryption (AES-256-GCM); the relay only ever sees ciphertext.
-- **Familiar and importable** — bring over sessions from WindTerm and OpenSSH config in one click.
+Windows 10 / 11 only. Current version: `0.1.0`.
 
 ## Features
 
 ### Connections
-- **SSH** (`russh`): password, keyboard-interactive and private-key auth (OpenSSH / PEM / Ed25519 / RSA, with passphrase), **ProxyJump**, keep-alive, live PTY resize, post-login scripts, host-key confirmation.
-- **Local terminal** (`portable-pty`): PowerShell, CMD, WSL and custom commands through Windows ConPTY.
-- **Telnet, TCP and serial** sessions.
-- **Port forwarding / tunnels** and an optional bundled **X server** for X11 forwarding.
-- **File transfer inside the terminal** with ZMODEM, XMODEM and YMODEM; per-session **logging**.
 
-### Workspace
-- Session-manager sidebar with nested groups, search, duplicate / edit / delete and double-click to connect.
-- Tabs with **unlimited recursive split panes**, drag to resize or rearrange, move tabs between windows.
-- **Broadcast input** to every pane of a tab or to all tabs.
-- Quick-connect bar (`ssh user@host:22`, `ssh -p 2222 -i key user@host`, `powershell`, `wsl`), a command palette, and a **QuickBar** of grouped quick commands.
-- Command **history**, **auto-completion**, a **sender** panel (send text to several sessions with delays), output folding and highlight rules, timestamp gutter and ruler marks.
-- Stable **focus mode** (`F11`) and **lock screen** — explicit state, no background timers.
+- **SSH** (`russh`): Password, `keyboard-interactive`, and private-key auth (OpenSSH / PEM, Ed25519 / RSA, passphrase support), ProxyJump, keep-alive, post-login scripts, and first-connect host key verification.
+- **Local & Hardware Protocols**: Native ConPTY local shells (PowerShell / CMD / WSL / custom commands), Telnet, raw TCP, and Serial ports.
+- **Shell Integration**: Automatically tracks prompts, commands, and working directories (OSC 133 / 633 / 7) in SSH `bash` / `zsh` / `fish` and local `PowerShell`. The context menu's **Load shell integration** installs scripts and startup configuration for the current `bash` / `zsh` / `fish` user, taking effect immediately and in future sessions, including WSL, SSH, nested shells, and serial consoles. Existing startup files are backed up as `.nexterm-si.bak` before changes.
+- **Forwarding & In-Band Transfers**: Port forwarding, one-click X11 forwarding via bundled VcXsrv, **ZMODEM / XMODEM / YMODEM** transfers, and session logging.
 
-### AI agents
-- Live state badges for **Claude Code** and **Codex** — working, blocked on permission, done, error — from agent hooks (installable locally or on an SSH host in one click) with screen-based detection as a fallback.
-- Built-in **MCP server**, so agents can read and operate terminal tabs you hand over to them.
+### File Browser
 
-### Remote access from your phone
-- Pair by scanning a QR code; add the page to your home screen as a PWA.
-- Live view of all tabs with a mobile key bar (Esc / Tab / Ctrl / Alt / arrows).
-- **End-to-end encrypted**: the pairing key lives in the QR code fragment and never reaches the relay. See [`relay/`](relay/README.md) to self-host it with Docker.
+- **SFTP with SCP Fallback**: Open via `Ctrl+Shift+O` or context menu; automatically falls back to SCP + shell commands when SFTP is unavailable.
+- **Two-Way Directory Sync**: Filter folders, jump by path, **auto-follow terminal `cd`**, or `cd` the terminal to the current folder.
+- **Edit Locally, Auto-Upload**: Open remote files in your local editor—every save automatically uploads back to the server.
+- **Zero-Download Previews**: Preview code/text, JSON, Markdown, CSV/TSV tables, images (zoom/rotate), and PDFs directly.
+- **Transfer Queue**: Drag-and-drop folders/files, edit permissions (checkboxes or octal), pause / resume / retry parallel transfers with conflict rules, and track ZMODEM transfers in one place.
 
-### Look and feel
-- Built-in themes (`Dige Black`, `Dige Black & White`, `Dige White`, `Wind Abyss`) plus custom themes.
-- English and Simplified Chinese UI.
-- Import sessions, quick commands and color schemes from **WindTerm** profiles and `~/.ssh/config`.
+### Windows & Input
 
-## Requirements
+- **Splits & Multi-Window**: Searchable nested session tree; arbitrary nested split panes, drag-to-rearrange, and tear-off tabs into separate windows.
+- **Fast Input**: **Broadcast input** (to current tab panes or all tabs), timed multi-session Sender, Command Palette, grouped Quick Commands, and **history/dictionary auto-completion**.
+- **Quick-Connect Bar**: Connect instantly with `ssh user@host:22`, `ssh -p 2222 -i key user@host`, `powershell`, or `wsl`.
+- **Command Alerts & Readability**: One-shot **"Notify When Command Finishes"** alerts (with duration and exit code), output folding, highlight rules, timestamp gutter, Focus Mode (`F11`), and workspace lock.
 
-Nexterm currently targets **Windows 10/11** (it relies on ConPTY and WebView2).
+### AI Agents
 
-To build from source you need:
+- **Live Tab Status**: Tabs display whether Claude Code or Codex is **Working**, **Waiting for Approval / Input**, **Finished (Unread)**, or in **Error**.
+- **Instant Notifications**: When a background agent **completes a task**, **pauses for permission approval**, or **fails**, Nexterm flashes the taskbar and sends a system notification—click it to focus that exact pane.
+- **One-Click Hooks + Screen Fallback**: Install Claude Code / Codex hooks in one click on local Windows, remote SSH, or WSL (or copy a one-liner for other Linux / serial shells); falls back to screen detection when hooks aren't installed.
+- **Human-in-the-Loop MCP Server**: Register Nexterm as an MCP server so agents can read screens, run commands, or drive TUI apps (`vim`, `top`). Every takeover or new session requires **dialog approval**, locks pane keyboard input against stray keystrokes, and lets you **Pause** or **Take Back Control** anytime.
 
-- [Node.js](https://nodejs.org) 20+
-- [Rust](https://rustup.rs) (stable, MSVC toolchain)
-- The [Tauri v2 prerequisites](https://tauri.app/start/prerequisites/) for Windows
+### Phone Access
 
-## Getting started
+- **Self-Hosted Zero-Knowledge E2EE**: Uses a lightweight self-hosted relay (see [relay/README.md](relay/README.md); Docker included) with a one-click toolbar toggle. Pair via QR code—keys stay in the URL `#` fragment and never reach the relay, which sees only AES-256-GCM ciphertext.
+- **Mobile PWA & Adaptive Sizing**: Add to your home screen, use the touch bar (`Esc`, `Tab`, `Ctrl`, `Alt`, arrows), and connect one phone to multiple PCs at once; **"Take over size"** resizes the terminal to fit your phone screen and restores desktop dimensions when you leave.
+- **Direct Mobile Login & Reconnect**: Enter **SSH usernames / passwords** and confirm **host keys** directly from your phone when opening sessions (dismissing the desktop prompt automatically), plus reconnect or re-enter passwords on failed/closed tabs.
+- **Sessions, Files & Read-Only Mode**: Browse, create, edit, or launch saved PC sessions (saved passwords never leave your PC), upload/download remote files up to **1 GB**, or enable **"View only"** mode (up to 8 phones connected at once).
+
+### Other
+
+- **Easy Migration**: Import sessions, quick commands, and color schemes from **WindTerm**, or hosts from `~/.ssh/config`.
+- **Customization**: 4 built-in themes + custom themes, configurable shortcuts and toolbar, in English and Simplified Chinese.
+
+## Building
+
+Prerequisites: [Node.js](https://nodejs.org) >= 20, [Rust](https://rustup.rs) stable (MSVC), and [Tauri v2 Windows prerequisites](https://tauri.app/start/prerequisites/).
 
 ```powershell
 git clone https://github.com/rty813/nexterm.git
 cd nexterm
 npm install
 
-npm run tauri:dev      # development with hot reload
-npm run tauri:build    # production build -> src-tauri/target/release/nexterm.exe
+npm run tauri:dev      # development mode
+npm run tauri:build    # release build -> src-tauri/target/release/nexterm.exe (quit running nexterm.exe first)
 ```
 
-Run the tests:
+Tests:
 
 ```powershell
-npm test                                                 # front end (vitest)
+npm test                                                 # front-end tests (Vitest)
 cargo test --manifest-path src-tauri/Cargo.toml --lib    # Rust unit tests
-cd relay; npm test                                       # relay + crypto protocol
+cd relay; npm test                                       # relay & E2EE protocol tests
 ```
 
-> If `nexterm.exe` is still running, stop it before building a release — Windows locks the file.
+## Layout
 
-## Project layout
-
-| Path | What it is |
+| Path | Contents |
 | --- | --- |
-| `src/` | React + TypeScript front end (components, hooks, pure `utils/`, i18n, themes) |
-| `src-tauri/` | Rust backend: connection manager, SSH / PTY / serial / Telnet / TCP, ZMODEM, MCP, remote bridge |
-| `relay/` | Self-hosted relay and phone PWA for remote tabs (Node.js) |
-| `bench/` | Terminal throughput and memory benchmarks |
-
-## Third-party components
-
-- The Windows build bundles **[VcXsrv](https://sourceforge.net/projects/vcxsrv/)** (GPL-2.0) under `src-tauri/resources/vcxsrv/` as a separate program for optional X11 forwarding. Its license and source are available from the upstream project.
-- [xterm.js](https://xtermjs.org), [Tauri](https://tauri.app), [russh](https://github.com/Eugeny/russh), [portable-pty](https://github.com/wez/wezterm/tree/main/pty) and other dependencies keep their own licenses.
+| `src/` | Front end (React + TypeScript); `utils/` holds UI-independent logic and core unit tests |
+| `src-tauri/` | Rust backend: connections, protocols, SFTP / SCP, shell integration, MCP, phone access |
+| `relay/` | Self-hosted relay server and mobile PWA (Node.js) |
+| `bench/` | Throughput and memory benchmark scripts |
 
 ## Contributing
 
-Issues and pull requests are welcome. Please run the front-end and Rust tests before submitting, and keep new UI strings in both English and Chinese.
+Issues and PRs are welcome. Please run front-end and Rust tests before submitting, and provide both English and Chinese strings for new UI text.
 
 ## License
 
-Licensed under either of
-
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT license](LICENSE-MIT)
-
-at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Nexterm by you shall be dual licensed as above, without any additional terms or conditions.
-
-## Star History
-
-<a href="https://star-history.com/#rty813/nexterm&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=rty813/nexterm&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=rty813/nexterm&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=rty813/nexterm&type=Date" />
-  </picture>
-</a>
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE). The bundled [VcXsrv](https://sourceforge.net/projects/vcxsrv/) (`src-tauri/resources/vcxsrv/`) is a separate program under GPL-2.0; other dependencies keep their own licenses.

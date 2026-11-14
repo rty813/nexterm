@@ -11,9 +11,14 @@
 //! 3. [`Injector`] holds the output back from the loader up to [`READY`], then redraws the
 //!    new prompt over the old one, so the loader line never shows.
 //!
-//! Manual loading (pane menu, any protocol: nested ssh, `sudo -i`, containers, WSL, serial)
-//! cannot use an exec channel, so [`manual_line`] carries the scripts in the line itself
-//! (gzip + base64, about 2 KB); the manager hides its echo the same way.
+//! WSL panes (local_pty.rs) do the same, with a separate `wsl.exe` in the same distribution
+//! and user in place of the exec channel.
+//!
+//! Permanent installation (pane menu, including nested ssh, containers, WSL and serial)
+//! uses [`manual_line`] to carry an installer and the scripts in the line itself
+//! (gzip + base64). It installs for the current user, backs up startup files before
+//! adding a loader, and sources the script immediately. Automatic SSH injection above
+//! remains independent of startup files.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -37,6 +42,8 @@ const FISH: &str = include_str!("../shell-integration/fish.fish");
 pub const READY: &[u8] = b"\x1b]633;P;NextermShellIntegration=1\x07";
 /// Printed by the manual loader when the shell is not bash, zsh or fish.
 pub const UNSUPPORTED: &[u8] = b"\x1b]633;P;NextermShellIntegration=0\x07";
+/// The permanent installer failed (for example, a read-only home directory).
+pub const FAILED: &[u8] = b"\x1b]633;P;NextermShellIntegration=2\x07";
 /// Held output beyond this (a program printing instead of a prompt): give up and show it.
 const HOLD_LIMIT: usize = 1 << 20;
 
@@ -90,30 +97,29 @@ fn strip_comments(script: &str) -> String {
         .join("\n")
 }
 
-/// sh script for the manual loader: `sh -s -- "$FISH_VERSION" "$ZSH_VERSION" "$BASH_VERSION" <rc>`
-/// prints the integration script of the running shell (sourced from `<rc>` next).
-fn manual_picker() -> String {
-    let mut s = String::from(
-        "if [ -n \"$1\" ]; then s=fish; elif [ -n \"$2\" ]; then s=zsh; elif [ -n \"$3\" ]; then s=bash; else s=none; fi\ncase $s in\n",
-    );
+/// Install for the running shell, then write a disposable script for immediate sourcing.
+fn permanent_installer() -> String {
+    let mut scripts = String::from("case $s in\n");
     for (name, body) in [("fish", FISH), ("zsh", ZSH), ("bash", BASH)] {
-        s += &format!("{name}) cat <<'NEXTERM_SI_EOF'\n{}\nNEXTERM_SI_EOF\n;;\n", strip_comments(body));
+        // The automatic /tmp loaders delete themselves. Installed copies stay in place.
+        let body = body.lines().filter(|line| !line.starts_with("rm -f -- ")).collect::<Vec<_>>().join("\n");
+        scripts += &format!("{name}) cat > \"$script.tmp\" <<'NEXTERM_SI_EOF'\n{}\nNEXTERM_SI_EOF\n;;\n", strip_comments(&body));
     }
-    s += "*) rm -f \"$4\"; printf '\\033]633;P;NextermShellIntegration=0\\007' >&2 ;;\nesac\n";
-    s
+    scripts += "esac";
+    strip_comments(&include_str!("../shell-integration/install.sh").replace("# NEXTERM_SCRIPT", &scripts))
 }
 
-/// One line typed into whatever shell runs in the pane; parses in bash, zsh and fish.
-/// Needs `base64`, `gunzip` and a writable /tmp on that machine.
+/// Permanently install for the current user and load into the running bash, zsh or fish.
+/// Needs `base64`, `gunzip`, writable startup files, a home directory and /tmp.
 pub fn manual_line(token: &str) -> String {
     use base64::Engine;
     use std::io::Write;
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
-    let _ = gz.write_all(manual_picker().as_bytes());
+    let _ = gz.write_all(permanent_installer().as_bytes());
     let b64 = base64::engine::general_purpose::STANDARD.encode(gz.finish().unwrap_or_default());
     let rc = format!("{}.rc", base(token));
     format!(
-        " echo '{b64}' | base64 -d | gunzip | sh -s -- \"$FISH_VERSION\" \"$ZSH_VERSION\" \"$BASH_VERSION\" {rc} > {rc}; source {rc}\r"
+        " echo '{b64}' | base64 -d | gunzip | sh -s -- \"$FISH_VERSION\" \"$ZSH_VERSION\" \"$BASH_VERSION\" {rc} \"$ZDOTDIR\" \"$XDG_CONFIG_HOME\" > {rc}; source {rc}\r"
     )
 }
 
@@ -188,27 +194,30 @@ pub struct Injector {
     pub loaded: bool,
     /// The manual loader reported [`UNSUPPORTED`] (not bash / zsh / fish).
     pub unsupported: bool,
+    /// Installation could not persist its scripts or startup configuration.
+    pub failed: bool,
 }
 
 impl Injector {
     pub fn new(now: Instant) -> Self {
-        Self { state: State::Waiting { quiet_at: None, give_up: now + WAIT_LIMIT }, shell_ok: None, injected: false, loaded: false, unsupported: false }
+        Self { state: State::Waiting { quiet_at: None, give_up: now + WAIT_LIMIT }, shell_ok: None, injected: false, loaded: false, unsupported: false, failed: false }
     }
 
     /// Manual loading: the loader line goes out right now.
     pub fn loading(now: Instant) -> Self {
         Self {
-            state: State::Loading { held: Vec::new(), give_up: now + LOAD_LIMIT },
+            state: State::Loading { held: Vec::new(), give_up: now + Duration::from_secs(15) },
             shell_ok: Some(true),
             injected: true,
             loaded: false,
             unsupported: false,
+            failed: false,
         }
     }
 
     /// Injection off: everything passes through.
     pub fn disabled() -> Self {
-        Self { state: State::Done, shell_ok: Some(false), injected: false, loaded: false, unsupported: false }
+        Self { state: State::Done, shell_ok: Some(false), injected: false, loaded: false, unsupported: false, failed: false }
     }
 
     pub fn is_done(&self) -> bool {
@@ -231,11 +240,14 @@ impl Injector {
             }
             State::Loading { held, .. } => {
                 held.extend_from_slice(data);
-                let mark = find(held, READY).map(|p| (p, true)).or_else(|| find(held, UNSUPPORTED).map(|p| (p, false)));
-                if let Some((pos, ok)) = mark {
+                let mark = [(READY, 1), (UNSUPPORTED, 0), (FAILED, 2)].into_iter()
+                    .filter_map(|(mark, kind)| find(held, mark).map(|pos| (pos, kind)))
+                    .min_by_key(|(pos, _)| *pos);
+                if let Some((pos, kind)) = mark {
                     let prompt = held[pos + READY.len()..].to_vec();
-                    self.loaded = ok;
-                    self.unsupported = !ok;
+                    self.loaded = kind == 1;
+                    self.unsupported = kind == 0;
+                    self.failed = kind == 2;
                     self.state = State::Settling { prompt, flush_at: now + SETTLE };
                 } else if held.len() > HOLD_LIMIT {
                     let held = std::mem::take(held);
@@ -298,7 +310,7 @@ impl Injector {
                     return Step::Nothing;
                 }
                 // Unsupported: the new prompt may follow an error line, so it goes below.
-                let out = if self.unsupported { [b"\r\n".as_slice(), prompt].concat() } else { redraw(prompt) };
+                let out = if self.unsupported || self.failed { [b"\r\n".as_slice(), prompt].concat() } else { redraw(prompt) };
                 self.state = State::Done;
                 Step::Emit(out)
             }
@@ -411,13 +423,19 @@ mod tests {
         inj.output(b"\x1b]633;P;NextermShellIntegration=0\x07sh: 1: source: not found\r\n$ ", t0);
         assert_eq!(inj.tick(t0 + ms(300)), Step::Emit(b"\r\nsh: 1: source: not found\r\n$ ".to_vec()));
         assert!(inj.unsupported && !inj.loaded);
+
+        let mut inj = Injector::loading(t0);
+        inj.output(b"Permission denied\r\n\x1b]633;P;NextermShellIntegration=2", t0);
+        inj.output(b"\x07$ ", t0 + ms(50));
+        assert_eq!(inj.tick(t0 + ms(300)), Step::Emit(b"\r\n$ ".to_vec()));
+        assert!(inj.failed && !inj.loaded && !inj.unsupported);
     }
 
     #[test]
     fn manual_line_fits_a_canonical_tty_line() {
         let line = manual_line("0123456789abcdef");
         // Linux MAX_CANON is 4096; the line is typed in one go.
-        assert!(line.len() < 3000, "{}", line.len());
+        assert!(line.len() < 4096, "{}", line.len());
         assert!(line.starts_with(" echo '") && line.ends_with("source /tmp/.nexterm-si-0123456789abcdef.rc\r"));
         assert!(!line.contains('!'), "zsh / bash history expansion");
     }
@@ -433,6 +451,25 @@ mod tests {
         assert!(loader_line("abc").starts_with(" sh /tmp/.nexterm-si-abc "));
         assert!(upload_ok("noise\nok\n"));
         assert!(!upload_ok(""));
+    }
+
+    /// Isolated WSL homes: `cargo test --lib installs_shell_integration -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn installs_shell_integration_for_future_shells() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let spec = serde_json::json!({ "line": manual_line(&uuid::Uuid::new_v4().simple().to_string()) });
+        let driver = format!("import json\nSPEC = json.loads({})\n{}",
+            serde_json::to_string(&spec.to_string()).unwrap(), include_str!("../tests/shell_integration_install.py"));
+        let mut child = Command::new("wsl.exe").args(["--exec", "python3", "-"])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(driver.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        let out = String::from_utf8_lossy(&output.stdout);
+        let err = String::from_utf8_lossy(&output.stderr);
+        eprintln!("{out}{err}");
+        assert!(output.status.success(), "{out}{err}");
     }
 }
 

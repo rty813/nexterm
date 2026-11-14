@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 
 import { buildXtermTheme } from "../constants/themes";
-import { backend, isTauriRuntime } from "../services/backend";
+import { backend, isTauriRuntime, type RemoteAuth, type RemoteLoginPayload } from "../services/backend";
 import { terminalBus } from "../services/terminalBus";
 import { registerMcpScreen } from "../services/mcpScreen";
 import {
@@ -46,14 +46,17 @@ import { ProtocolBadge } from "./ProtocolBadge";
 import { OutputHighlighter, resolveScheme } from "../utils/outputHighlighter";
 import { TimestampGutter } from "../utils/timestampGutter";
 import { installWideCursorFix } from "../utils/wideCursorFix";
+import { installCompositionBounds } from "../utils/compositionBounds";
 import { compileUserRules } from "../utils/outputHighlighter";
 import { HIGHLIGHT_PRESETS, readRow } from "../utils/textMatch";
 import { installRulerMarks } from "../utils/rulerMarks";
-import { detectFromScreen, needsQuietConfirm, parseOsc7501, SCREEN_DONE_QUIET_MS, type AgentStatus } from "../utils/agentStatus";
+import { codexDetachedFromTerminal, detectFromScreen, needsQuietConfirm, parseOsc7501, SCREEN_DONE_QUIET_MS, type AgentStatus } from "../utils/agentStatus";
 import { looksLikePrompt, osc133Exit, type CommandDone } from "../utils/commandWatch";
 import { hostFromOsc7, hostFromPrompt, hostFromTitle } from "../utils/hostname";
+import { cwdFromOsc7 } from "../utils/sftpPaths";
+import { paneCwd } from "../utils/paneCwd";
 import { canInjectShellIntegration, CommandTracker, type RunningCommand } from "../utils/runningCommand";
-import { anyInstalled, type HookStatus } from "../utils/agentHooks";
+import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentHooks";
 import { TerminalSearch, type SearchOptionsState } from "./TerminalSearch";
 import type { MenuItem } from "./ContextMenu";
 import { installTerminalFeatures, type SuggestionState, type TerminalFeatures } from "../utils/terminalFeatures";
@@ -148,7 +151,9 @@ export interface PaneExtras {
   /** Command running in the pane (make, colcon build ...), shown on the tab. */
   runningCommands: Record<string, RunningCommand>;
   onRunningCommand: (paneId: string, cmd: RunningCommand | null) => void;
-  /** Load shell integration into the shell running in the pane now. */
+  /** The pane's login form opened / closed (phones show it too). */
+  onAuthPrompt: (paneId: string, auth: RemoteAuth | null) => void;
+  /** Install shell integration for the pane's current user and load it now. */
   onInjectShellIntegration: (paneId: string) => void;
   /** Install (or remove) the agent status hooks on this SSH session's host. */
   onAgentHooks: (leaf: TerminalLeafNode, install: boolean) => void;
@@ -167,6 +172,8 @@ export interface PaneExtras {
   onPauseLog: (paneId: string, paused: boolean) => void;
   /** X / Y / ZModem transfers started from the pane menu. */
   onModemTransfer: (leaf: TerminalLeafNode, protocol: "xmodem" | "ymodem" | "zmodem", send: boolean) => void;
+  /** Open the SFTP file browser on this SSH pane (at its current directory when known). */
+  onOpenFileBrowser: (paneId: string) => void;
   /** Duplicate this SSH tab on its existing connection (no new login). */
   onDuplicateReuse: (leaf: TerminalLeafNode) => void;
   /** Open the Sender panel aimed at this pane. */
@@ -419,6 +426,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     term.unicode.activeVersion = "11";
 
     term.open(el);
+    const compositionBounds = installCompositionBounds(term);
     // GPU renderer: several times faster than the DOM renderer on large output.
     // Falls back to the DOM renderer when WebGL2 is unavailable or the context is lost.
     try {
@@ -567,14 +575,18 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const scanScreen = (quietConfirmed = false) => {
       window.clearTimeout(doneTimer);
       doneTimer = 0;
-      if (hookSeen || settingsRef.current.agentScreenDetect === false) return;
       const buf = term.buffer.active;
       const lines: string[] = [];
       for (let y = Math.max(0, term.rows - 24); y < term.rows; y++) {
         lines.push(buf.getLine(buf.baseY + y)?.translateToString(true) ?? "");
       }
       const prev = extrasRef.current.agentStates[leaf.paneId];
-      if (prev?.source === "hook") return;
+      if (prev?.app === "codex" && codexDetachedFromTerminal(lines, textBeforeCursor(term), buf.type === "normal")) {
+        hookSeen = false;
+        extrasRef.current.onAgentState(leaf.paneId, null);
+        return;
+      }
+      if (hookSeen || settingsRef.current.agentScreenDetect === false || prev?.source === "hook") return;
       const next = detectFromScreen(lines, prev);
       if (!quietConfirmed && needsQuietConfirm(next, prev)) {
         doneTimer = window.setTimeout(() => scanScreen(true), SCREEN_DONE_QUIET_MS);
@@ -586,6 +598,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const reportHost = (host: string | null) => host && extrasRef.current.onHostname(leaf.paneId, host);
     const osc7Disp = term.parser.registerOscHandler(7, (data) => {
       reportHost(hostFromOsc7(data));
+      const cwd = cwdFromOsc7(data);
+      if (cwd) paneCwd.set(leaf.paneId, cwd);
       return false;
     });
     const titleDisp = term.onTitleChange((title) => reportHost(hostFromTitle(title)));
@@ -713,6 +727,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       size: () => ({ cols: term.cols, rows: term.rows }),
       // A phone took / gave back the size. Applied right here, not after a render or the
       // debounce timer: both stall while this window is minimized, which is when phones are used.
+      login: (p) => remoteLoginRef.current(p),
       setSizeOverride: (size) => {
         phoneSizeRef.current = size;
         setPhoneSize(size);
@@ -781,6 +796,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       enterMarker?.dispose();
       tracker.dispose();
       if (trackerRef.current === tracker) trackerRef.current = null;
+      compositionBounds.dispose();
       wideFix.dispose();
       rulerMarks.dispose();
       rulerMarksRef.current = null;
@@ -900,6 +916,33 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     });
   };
 
+  // Phones see the login form as part of the tab and can answer it (remote.rs `login`).
+  useEffect(() => {
+    const auth = awaitingPassword ? { user: needsUsername, password: usesPassword, username: leaf.session.username } : null;
+    extrasRef.current.onAuthPrompt(leaf.paneId, auth);
+  }, [awaitingPassword, needsUsername, usesPassword, leaf.session.username, leaf.paneId]);
+  useEffect(() => () => extrasRef.current.onAuthPrompt(leaf.paneId, null), [leaf.paneId]);
+
+  /** A phone answered the login form, or asked to reconnect a failed pane. */
+  const remoteLogin = (p: RemoteLoginPayload) => {
+    if (awaitingPassword) {
+      const username = p.username?.trim() || usernameInput.trim();
+      if (needsUsername && !username) return;
+      setAwaitingPassword(false);
+      setPasswordInput("");
+      onReconnectPane(leaf.paneId, {
+        username: username || undefined,
+        password: usesPassword ? p.password ?? "" : undefined,
+        remember: p.remember,
+      });
+    } else if (leaf.status === "disconnected" || leaf.status === "error") {
+      const creds = usesPassword && p.password !== null ? { password: p.password, remember: p.remember } : undefined;
+      onReconnectPane(leaf.paneId, creds);
+    }
+  };
+  const remoteLoginRef = useRef(remoteLogin);
+  remoteLoginRef.current = remoteLogin;
+
 
   const saveBuffer = async () => {
     const text = featuresRef.current?.plainText() ?? "";
@@ -963,10 +1006,13 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     };
     const modemOk = leaf.status === "connected" && leaf.session.protocol !== "powershell" && leaf.session.protocol !== "cmd" && leaf.session.protocol !== "wsl" && leaf.session.protocol !== "custom";
     const k = extras.keymap;
-    const windows = await extras.moveToWindowTargets();
+    const [windows, shellStatus] = await Promise.all([
+      extras.moveToWindowTargets(),
+      backend.shellIntegrationStatus(leaf.paneId).catch(() => null),
+    ]);
     const tmux = leaf.session.protocol === "ssh" && leaf.status === "connected";
     // Hook status of this host (cached after the first look; waits briefly for it).
-    const hooks = tmux
+    const hooks = leaf.status === "connected" && (leaf.session.protocol === "ssh" || leaf.session.protocol === "wsl")
       ? await Promise.race([extras.agentHookStatus(leaf), new Promise<null>((r) => window.setTimeout(() => r(null), 1500))])
       : null;
     const hooksOn = anyInstalled(hooks);
@@ -1133,7 +1179,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
             { label: t("ai.copyCodexCommand"), onClick: () => extras.onCopyMcpCommand("codex") },
           ].filter(Boolean) as MenuItem[],
         },
-        leaf.session.protocol === "ssh" && {
+        (leaf.session.protocol === "ssh" || leaf.session.protocol === "wsl") && {
           label: hooks ? `${t("agent.menu")}（${hooksOn ? (hooks.outdated ? t("agent.menuOutdated") : t("agent.menuInstalled")) : t("agent.menuNotInstalled")}）` : t("agent.menu"),
           disabled: leaf.status !== "connected",
           children: [
@@ -1156,10 +1202,23 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
             },
           ],
         },
+        ["serial", "telnet", "tcp", "custom"].includes(leaf.session.protocol) && {
+          label: t("agent.menu"),
+          children: [
+            {
+              label: t("agent.copyPosixInstall"),
+              onClick: () => void backend.writeClipboard(posixHookCommand(true)).then(() => extras.onToast(t("agent.posixCopied"))),
+            },
+            {
+              label: t("agent.copyPosixRemove"),
+              onClick: () => void backend.writeClipboard(posixHookCommand(false)).then(() => extras.onToast(t("agent.posixCopied"))),
+            },
+          ],
+        },
         {
-          label: t("si.menu"),
+          label: t(shellStatus?.loading ? "si.menuLoading" : shellStatus?.detected ? "si.menuDetected" : shellStatus ? "si.menuNotDetected" : "si.menu"),
           disabled:
-            !canInjectShellIntegration(leaf.session.protocol, leaf.status) || xtermRef.current?.buffer.active.type === "alternate",
+            Boolean(shellStatus?.loading) || !canInjectShellIntegration(leaf.session.protocol, leaf.status) || xtermRef.current?.buffer.active.type === "alternate",
           onClick: () => extras.onInjectShellIntegration(leaf.paneId),
         },
         tmux && { label: t("menu.tmux"), onClick: () => void extras.onTmux(leaf).then((items) => setTmuxItems(items.length ? items : null)).then(() => undefined) },
@@ -1174,6 +1233,11 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           onClick: () => extras.onPauseLog(leaf.paneId, !extras.pausedLogs[leaf.paneId]),
         },
         { label: t("menu.openLogFolder"), onClick: () => extras.onRevealLog(leaf.paneId) },
+        leaf.session.protocol === "ssh" && {
+          label: t("sftp.openHere"),
+          disabled: !connected,
+          onClick: () => extras.onOpenFileBrowser(leaf.paneId),
+        },
         {
           label: t("modem.menu"),
           disabled: !modemOk,

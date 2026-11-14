@@ -1,4 +1,4 @@
-import { backend } from "./backend";
+import { backend, type RemoteLoginPayload } from "./backend";
 
 /**
  * Forwards what watched panes show to the phone remote (see src-tauri/src/remote.rs).
@@ -23,6 +23,8 @@ export interface MirrorPane {
   size: () => { cols: number; rows: number };
   /** A phone took over the size (null: given back). */
   setSizeOverride: (size: { cols: number; rows: number } | null) => void;
+  /** A phone answered the login form, or asked to reconnect (no credentials). */
+  login: (p: RemoteLoginPayload) => void;
 }
 
 const enc = new TextEncoder();
@@ -116,6 +118,8 @@ function start() {
     for (const id of list) watched.add(id);
   });
   void backend.onRemoteSnapshot((paneId) => snapshot(paneId));
+  // Every window hears it; only the one showing the pane has it registered.
+  void backend.onRemoteLogin((p) => panes.get(p.paneId)?.login(p));
   void backend.onRemoteSize(({ paneId, cols, rows }) => {
     const size = cols && rows ? { cols, rows } : null;
     if (size) sizes.set(paneId, size);

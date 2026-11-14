@@ -24,7 +24,12 @@ export const HostKeyDialog: React.FC<{ labelFor: (instanceId: string) => string;
   useEffect(() => {
     // Every window receives the event; only the one showing the pane answers.
     const un = backend.onHostKeyPrompt((p) => ownsRef.current(p.instanceId) && setQueue((q) => [...q, p]));
-    return () => void un.then((f) => f());
+    // Answered on a phone.
+    const unResolved = backend.onHostKeyResolved((id) => setQueue((q) => q.filter((p) => p.requestId !== id)));
+    return () => {
+      void un.then((f) => f());
+      void unResolved.then((f) => f());
+    };
   }, []);
 
   const current = queue[0];

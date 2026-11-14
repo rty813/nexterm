@@ -4,6 +4,7 @@ import "./i18n";
 import { App } from "./App";
 import { MenuHost } from "./components/ContextMenu";
 import "./styles/app.css";
+import "./styles/sftp.css";
 import { applyCachedThemeVars } from "./constants/themes";
 
 applyCachedThemeVars();

@@ -1,3 +1,5 @@
+import { looksLikePrompt } from "./commandWatch";
+
 /**
  * AI agent status shown on tabs (Claude Code, Codex ...), in Herdr's model:
  * working, blocked (needs approval / an answer), done (finished, not looked at yet),
@@ -75,6 +77,13 @@ export const SCREEN_DONE_QUIET_MS = 3000;
 /** Whether this screen guess ends a turn and must wait for [SCREEN_DONE_QUIET_MS] of quiet. */
 export function needsQuietConfirm(next: AgentStatus | undefined, prev: AgentStatus | undefined): boolean {
   return next !== prev && next?.state === "done" && (prev?.state === "working" || prev?.state === "blocked");
+}
+
+/** Codex detached from this terminal and returned control to its shell. This says
+ * nothing about whether the detached task continues in the background. */
+export function codexDetachedFromTerminal(lines: string[], beforeCursor: string, normalScreen: boolean): boolean {
+  if (!normalScreen || !looksLikePrompt(beforeCursor)) return false;
+  return lines.some((line) => /^\s*Disconnected from this task\. Any running work continues\.\s*$/i.test(line));
 }
 
 /**

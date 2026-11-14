@@ -150,3 +150,30 @@ test("keepalive does not drop healthy connections", async () => {
   ws.close();
   r.server.close();
 });
+
+test("one phone stays connected to several computers at once", async () => {
+  const roomB = await roomId(new Uint8Array(32).fill(3));
+  const hostA = open(`${base}?role=host&room=${room}&token=tok`);
+  const hostB = open(`${base}?role=host&room=${roomB}&token=tok`);
+  await Promise.all([once(hostA, "open"), once(hostB, "open")]);
+  // The phone page opens one socket per paired computer.
+  const toA = open(`${base}?role=client&room=${room}`);
+  const toB = open(`${base}?role=client&room=${roomB}`);
+  await Promise.all([once(toA, "open"), once(toB, "open")]);
+  const idA = new DataView((await hostA.next()).buffer).getUint32(1);
+  const idB = new DataView((await hostB.next()).buffer).getUint32(1);
+  toA.send(new Uint8Array([1, 0xa]));
+  toB.send(new Uint8Array([1, 0xb]));
+  assert.deepEqual((await hostA.next()).subarray(5), new Uint8Array([1, 0xa]));
+  assert.deepEqual((await hostB.next()).subarray(5), new Uint8Array([1, 0xb]));
+  hostA.send(envelope(DATA, idA, new Uint8Array([7])));
+  hostB.send(envelope(DATA, idB, new Uint8Array([8])));
+  assert.deepEqual(await toA.next(), new Uint8Array([7]));
+  assert.deepEqual(await toB.next(), new Uint8Array([8]));
+  // One computer going away leaves the other link alone.
+  hostA.close();
+  assert.deepEqual(await toA.next(), { t: "host-down" });
+  hostB.send(envelope(DATA, idB, new Uint8Array([9])));
+  assert.deepEqual(await toB.next(), new Uint8Array([9]));
+  for (const ws of [toA, toB, hostB]) ws.close();
+});

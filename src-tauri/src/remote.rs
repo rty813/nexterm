@@ -29,6 +29,8 @@ const R_KICK: u8 = 4;
 /// Plaintext kinds inside the encrypted frames.
 const P_JSON: u8 = 1;
 const P_OUTPUT: u8 = 2;
+/// `[P_FILE][transfer id u32 BE][bytes]`: file contents, both ways (`remote_ops.rs`).
+const P_FILE: u8 = 3;
 /// Feed records from the desktop panes (`remote_feed`).
 const F_OUTPUT: u8 = 1;
 const F_SIZE: u8 = 2;
@@ -94,7 +96,32 @@ pub struct RemoteTab {
     #[serde(default)]
     pub agent: String,
     #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
     pub window: String,
+    /// Why the connection ended or failed.
+    #[serde(default)]
+    pub message: String,
+    /// Set while the pane waits for a username / password before connecting.
+    #[serde(default)]
+    pub auth: Option<RemoteAuth>,
+    /// SSH with password auth: after a failure the phone offers to enter another password.
+    #[serde(default)]
+    pub password_auth: bool,
+    /// Locked on the computer: it cannot be closed (from a phone either).
+    #[serde(default)]
+    pub locked: bool,
+}
+
+/// What a pane's login form asks for.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteAuth {
+    pub user: bool,
+    pub password: bool,
+    /// Prefill of the username field.
+    #[serde(default)]
+    pub username: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +130,16 @@ struct SizePayload {
     pane_id: String,
     cols: Option<u16>,
     rows: Option<u16>,
+}
+
+/// Credentials a phone typed into a pane's login form (or none: just reconnect).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginPayload {
+    pane_id: String,
+    username: Option<String>,
+    password: Option<String>,
+    remember: bool,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +151,23 @@ enum PhoneMsg {
     Take { id: String, cols: u16, rows: u16 },
     Release { id: String },
     Ping,
+    /// Sessions and files (`remote_ops.rs`).
+    Req { rid: u32, op: String, #[serde(default)] a: serde_json::Value },
+    FsAck { x: u32, n: u64 },
+    FsEnd { x: u32 },
+    FsCancel { x: u32 },
+    /// Answer a pane's login form, or reconnect a failed pane (no credentials).
+    Login {
+        id: String,
+        #[serde(default)]
+        user: Option<String>,
+        #[serde(default)]
+        pwd: Option<String>,
+        #[serde(default)]
+        remember: bool,
+    },
+    /// Answer the SSH host key question of a pane.
+    HostKey { id: String, d: crate::manager::HostKeyDecision },
 }
 
 struct Phone {
@@ -137,6 +191,8 @@ struct Inner {
     tabs: HashMap<String, Vec<RemoteTab>>,
     /// Pane -> (phone, cols, rows) that took over its size.
     takeovers: HashMap<String, (u32, u16, u16)>,
+    /// Pane -> (request id, what phones see) of an unanswered host key question.
+    host_keys: HashMap<String, (String, serde_json::Value)>,
 }
 
 struct Remote {
@@ -303,6 +359,14 @@ pub fn kick(phone: u32) {
     publish_status(r, &inner);
 }
 
+/// Whether a window still lists the tab, and whether it is locked.
+pub fn tab_locked(id: &str) -> Option<bool> {
+    let r = remote()?;
+    let inner = lock(&r.inner);
+    let found = inner.tabs.values().flatten().find(|t| t.id == id).map(|t| t.locked);
+    found
+}
+
 pub fn report_tabs(window: &str, mut tabs: Vec<RemoteTab>) {
     let Some(r) = remote() else { return };
     let mut inner = lock(&r.inner);
@@ -320,11 +384,38 @@ pub fn report_tabs(window: &str, mut tabs: Vec<RemoteTab>) {
     // A closed pane gives its size back.
     let alive: HashSet<String> = inner.tabs.values().flatten().map(|t| t.id.clone()).collect();
     inner.takeovers.retain(|pane, _| alive.contains(pane));
+    // A host key question ends with the connection attempt (answered, timed out, closed).
+    let waiting: HashSet<String> =
+        inner.tabs.values().flatten().filter(|t| t.status == "connecting").map(|t| t.id.clone()).collect();
+    inner.host_keys.retain(|pane, _| waiting.contains(pane));
     send_tabs_all(r, &mut inner);
 }
 
 pub fn forget_window(window: &str) {
     report_tabs(window, Vec::new());
+}
+
+/// A pane's connection asks to confirm the SSH host key: phones can answer it too.
+pub fn host_key_prompt(pane: &str, request_id: &str, prompt: &crate::manager::HostKeyPrompt) {
+    let Some(r) = remote() else { return };
+    let mut inner = lock(&r.inner);
+    let view = serde_json::json!({
+        "host": prompt.host, "port": prompt.port, "keyType": prompt.key_type,
+        "fingerprint": prompt.fingerprint, "changed": prompt.changed,
+    });
+    inner.host_keys.insert(pane.to_string(), (request_id.to_string(), view));
+    send_tabs_all(r, &mut inner);
+}
+
+/// The desktop answered a host key question.
+pub fn host_key_done(request_id: &str) {
+    let Some(r) = remote() else { return };
+    let mut inner = lock(&r.inner);
+    let before = inner.host_keys.len();
+    inner.host_keys.retain(|_, (id, _)| id != request_id);
+    if inner.host_keys.len() != before {
+        send_tabs_all(r, &mut inner);
+    }
 }
 
 /// Panes some phone watches (a pane mounting in a window starts forwarding).
@@ -484,6 +575,7 @@ fn tabs_json(inner: &Inner, phone: u32) -> serde_json::Value {
             let mut v = serde_json::to_value(t).unwrap_or_default();
             let taken = inner.takeovers.get(&t.id).map(|(o, _, _)| if *o == phone { "me" } else { "other" });
             v["takenBy"] = serde_json::json!(taken);
+            v["hostKey"] = inner.host_keys.get(&t.id).map(|(_, view)| view.clone()).unwrap_or_default();
             tabs.push(v);
         }
     }
@@ -557,6 +649,7 @@ fn set_state(r: &Remote, state: &str, message: Option<String>) {
 /// A phone left (or was dropped): stop forwarding to it, give back its sizes.
 fn drop_phone(r: &Remote, inner: &mut Inner, phone: u32) {
     let Some(p) = inner.phones.remove(&phone) else { return };
+    crate::remote_ops::forget_phone(phone);
     let released: Vec<String> =
         inner.takeovers.iter().filter(|(_, (o, _, _))| *o == phone).map(|(pane, _)| pane.clone()).collect();
     for pane in &released {
@@ -569,6 +662,39 @@ fn drop_phone(r: &Remote, inner: &mut Inner, phone: u32) {
     if p.watching.is_some() {
         publish_watch(r, inner);
     }
+}
+
+/// JSON to one phone from outside the relay loop (`remote_ops.rs`).
+pub(crate) fn send_to(phone: u32, msg: &serde_json::Value) {
+    let Some(r) = remote() else { return };
+    let mut inner = lock(&r.inner);
+    if inner.phones.get(&phone).is_some_and(|p| p.authed) {
+        send_json(r, &mut inner, phone, msg);
+    }
+}
+
+/// Answer to a phone's `req`.
+pub(crate) fn reply(phone: u32, rid: u32, result: Result<serde_json::Value, String>) {
+    let msg = match result {
+        Ok(data) => serde_json::json!({ "t": "res", "rid": rid, "ok": true, "data": data }),
+        Err(error) => serde_json::json!({ "t": "res", "rid": rid, "ok": false, "error": error }),
+    };
+    send_to(phone, &msg);
+}
+
+/// File contents to a phone; false when it is gone.
+pub(crate) fn send_file(phone: u32, x: u32, bytes: &[u8]) -> bool {
+    let Some(r) = remote() else { return false };
+    let mut inner = lock(&r.inner);
+    if inner.out.is_none() || !inner.phones.get(&phone).is_some_and(|p| p.authed) {
+        return false;
+    }
+    let mut plain = Vec::with_capacity(5 + bytes.len());
+    plain.push(P_FILE);
+    plain.extend_from_slice(&x.to_be_bytes());
+    plain.extend_from_slice(bytes);
+    send_sealed(r, &mut inner, phone, &plain);
+    true
 }
 
 fn pane_exists(inner: &Inner, pane: &str) -> bool {
@@ -628,6 +754,11 @@ fn on_phone_data(r: &Remote, inner: &mut Inner, phone: u32, payload: &[u8]) {
         drop_phone(r, inner, phone);
         return;
     };
+    if plain.first() == Some(&P_FILE) && plain.len() >= 5 && p.authed {
+        let x = u32::from_be_bytes(plain[1..5].try_into().unwrap());
+        crate::remote_ops::upload_chunk(phone, x, &plain[5..]);
+        return;
+    }
     if plain.first() != Some(&P_JSON) {
         return;
     }
@@ -649,7 +780,9 @@ fn on_phone_data(r: &Remote, inner: &mut Inner, phone: u32, payload: &[u8]) {
             let p = inner.phones.get_mut(&phone).unwrap();
             p.authed = true;
             p.name = name.unwrap_or_default().chars().take(60).collect();
-            let hello = serde_json::json!({ "t": "hello", "computer": computer_name(), "readOnly": inner.config.read_only });
+            let hello = serde_json::json!({
+                "t": "hello", "computer": computer_name(), "readOnly": inner.config.read_only, "features": ["sessions", "files", "tabs"],
+            });
             send_json(r, inner, phone, &hello);
             let tabs = tabs_json(inner, phone);
             send_json(r, inner, phone, &tabs);
@@ -694,6 +827,31 @@ fn on_phone_data(r: &Remote, inner: &mut Inner, phone: u32, payload: &[u8]) {
             }
         }
         PhoneMsg::Ping => send_json(r, inner, phone, &serde_json::json!({ "t": "pong" })),
+        PhoneMsg::Req { rid, op, a } => {
+            crate::remote_ops::request(r.app.clone(), phone, rid, op, a, inner.config.read_only);
+        }
+        PhoneMsg::FsAck { x, n } => crate::remote_ops::ack(phone, x, n),
+        PhoneMsg::FsEnd { x } => crate::remote_ops::upload_end(phone, x),
+        PhoneMsg::FsCancel { x } => crate::remote_ops::cancel(phone, x),
+        PhoneMsg::Login { id, user, pwd, remember } => {
+            if inner.config.read_only || !pane_exists(inner, &id) {
+                return;
+            }
+            let clip = |s: String| s.chars().take(1024).collect::<String>();
+            let payload = LoginPayload { pane_id: id, username: user.map(clip), password: pwd.map(clip), remember };
+            let _ = r.app.emit("remote-login", payload);
+        }
+        PhoneMsg::HostKey { id, d } => {
+            if inner.config.read_only {
+                return;
+            }
+            if let Some((request_id, _)) = inner.host_keys.remove(&id) {
+                crate::manager::answer_host_key(&request_id, d);
+                // The desktop dialog drops the question.
+                let _ = r.app.emit("host-key-resolved", &request_id);
+                send_tabs_all(r, inner);
+            }
+        }
     }
 }
 
@@ -822,6 +980,27 @@ async fn session(r: &'static Remote, ws: Ws, generation: &mut watch::Receiver<u6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_and_host_key_messages() {
+        let m: PhoneMsg = serde_json::from_str(r#"{"t":"login","id":"p1","user":"root","pwd":"x","remember":true}"#).unwrap();
+        assert!(matches!(m, PhoneMsg::Login { ref id, user: Some(ref u), pwd: Some(ref p), remember: true } if id == "p1" && u == "root" && p == "x"));
+        // Reconnect: no credentials at all.
+        let m: PhoneMsg = serde_json::from_str(r#"{"t":"login","id":"p1"}"#).unwrap();
+        assert!(matches!(m, PhoneMsg::Login { user: None, pwd: None, remember: false, .. }));
+        let m: PhoneMsg = serde_json::from_str(r#"{"t":"login","id":"p1","user":null,"pwd":"x","remember":false}"#).unwrap();
+        assert!(matches!(m, PhoneMsg::Login { user: None, pwd: Some(_), .. }));
+        let m: PhoneMsg = serde_json::from_str(r#"{"t":"hostKey","id":"p1","d":"acceptAndSave"}"#).unwrap();
+        assert!(matches!(m, PhoneMsg::HostKey { d: crate::manager::HostKeyDecision::AcceptAndSave, .. }));
+    }
+
+    #[test]
+    fn tab_without_new_fields() {
+        // Older windows (or tests) report tabs without the login fields.
+        let t: RemoteTab =
+            serde_json::from_str(r#"{"id":"p","title":"t","status":"connected","cols":80,"rows":24,"active":true}"#).unwrap();
+        assert!(t.auth.is_none() && !t.password_auth && !t.locked && t.message.is_empty());
+    }
 
     #[test]
     fn relay_addresses() {

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { FolderOpen, Monitor, Play, Square } from "lucide-react";
 import type { AppSettings, ClipboardPermission, MouseSettings, SessionConfig, TabMouseAction } from "../types/domain";
 import { backend, type XServerStatus } from "../services/backend";
-import { autoCompleteOf, historyOf, modemOf, mouseOf, xserverOf } from "../utils/settingsDefaults";
+import { autoCompleteOf, historyOf, modemOf, mouseOf, sftpOf, xserverOf } from "../utils/settingsDefaults";
 import { commandHistory } from "../utils/commandHistory";
 
 type Props = { draft: AppSettings; onChange: (next: AppSettings) => void };
@@ -290,6 +290,8 @@ export const LogTransferSettings: React.FC<Props> = ({ draft, onChange }) => {
   const modem = modemOf(draft);
   const set = (patch: Partial<AppSettings>) => onChange({ ...draft, ...patch });
   const setModem = (patch: Partial<typeof modem>) => set({ modem: { ...modem, ...patch } });
+  const sftp = sftpOf(draft);
+  const setSftp = (patch: Partial<typeof sftp>) => set({ sftp: { ...sftp, ...patch } });
 
   return (
     <div className="settings-general">
@@ -387,6 +389,64 @@ export const LogTransferSettings: React.FC<Props> = ({ draft, onChange }) => {
         </label>
       </div>
       <p className="adv-hint">{t("modem.hint")}</p>
+
+      <h4 className="section-heading">{t("sftp.settingsTitle")}</h4>
+      <div className="form-grid-3">
+        <label className="field">
+          <span>{t("sftp.concurrency")}</span>
+          <input
+            type="number"
+            min={1}
+            max={16}
+            className="text-input"
+            value={sftp.concurrency}
+            onChange={(e) => setSftp({ concurrency: Math.min(16, Math.max(1, Number(e.target.value) || 1)) })}
+          />
+        </label>
+        <label className="field">
+          <span>{t("sftp.conflictTitle")}</span>
+          <select className="text-input" value={sftp.conflict} onChange={(e) => setSftp({ conflict: e.target.value as typeof sftp.conflict })}>
+            {(["ask", "overwrite", "newer", "rename", "skip"] as const).map((v) => (
+              <option key={v} value={v}>
+                {t(`sftp.conflict.${v}`)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>{t("sftp.protocol")}</span>
+          <select className="text-input" value={sftp.protocol} onChange={(e) => setSftp({ protocol: e.target.value as typeof sftp.protocol })}>
+            {(["auto", "sftp", "scp"] as const).map((v) => (
+              <option key={v} value={v}>
+                {t(`sftp.protocolOpt.${v}`)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label className="checkbox-row">
+        <input type="checkbox" checked={sftp.preserveTimes} onChange={(e) => setSftp({ preserveTimes: e.target.checked })} />
+        <span>{t("sftp.preserveTimes")}</span>
+      </label>
+      <label className="checkbox-row">
+        <input type="checkbox" checked={sftp.followCwd} onChange={(e) => setSftp({ followCwd: e.target.checked })} />
+        <span>{t("sftp.followCwd")}</span>
+      </label>
+      <label className="field">
+        <span>{t("sftp.downloadDir")}</span>
+        <input
+          type="text"
+          className="text-input"
+          placeholder={t("sftp.downloadDirHint")}
+          value={sftp.downloadDir}
+          onChange={(e) => setSftp({ downloadDir: e.target.value })}
+        />
+      </label>
+      <label className="field">
+        <span>{t("sftp.editor")}</span>
+        <input type="text" className="text-input mono" value={sftp.editor} onChange={(e) => setSftp({ editor: e.target.value })} />
+      </label>
+      <p className="adv-hint">{t("sftp.editorHint")}</p>
     </div>
   );
 };

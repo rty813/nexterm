@@ -5,6 +5,7 @@ import type {
   ModemSettings,
   MouseSettings,
   RemoteSettings,
+  SftpSettings,
   XServerSettings,
 } from "../types/domain";
 
@@ -76,6 +77,22 @@ export function mouseOf(s: AppSettings): MouseSettings {
 
 export function modemOf(s: AppSettings): ModemSettings {
   return { ...DEFAULT_MODEM, ...(s.modem ?? {}) };
+}
+
+export const DEFAULT_SFTP: SftpSettings = {
+  concurrency: 3,
+  conflict: "ask",
+  preserveTimes: true,
+  protocol: "auto",
+  followCwd: false,
+  showHidden: false,
+  editor: "",
+  downloadDir: "",
+};
+
+export function sftpOf(s: AppSettings): SftpSettings {
+  const v = { ...DEFAULT_SFTP, ...(s.sftp ?? {}) };
+  return { ...v, concurrency: Math.min(16, Math.max(1, Math.round(v.concurrency) || 3)) };
 }
 
 export const DEFAULT_REMOTE: RemoteSettings = { enabled: false, relayUrl: "", hostToken: "", readOnly: false };

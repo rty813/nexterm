@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { Minimize2 } from "lucide-react";
 import { applyThemeCssVars, BUILTIN_THEMES } from "./constants/themes";
-import { backend, currentWindowLabel, isTauriRuntime } from "./services/backend";
+import { backend, currentWindowLabel, isTauriRuntime, type RemoteAuth, type RemoteTab } from "./services/backend";
 import { actionForCombo, comboFromEvent, resolveKeymap } from "./utils/actions";
 import { terminalBus } from "./services/terminalBus";
 import { parseQuickConnectInput } from "./utils/quickConnect";
@@ -72,10 +72,14 @@ import { ConfirmDialog, PasteDialog, type ConfirmAnswer, type ConfirmRequest } f
 import { SenderPanel } from "./components/SenderPanel";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { commandHistory, historyKeyOf } from "./utils/commandHistory";
-import { historyOf, modemOf } from "./utils/settingsDefaults";
+import { historyOf, modemOf, remoteOf, sftpOf } from "./utils/settingsDefaults";
 import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem } from "./types/domain";
 import { AiRequestDialog } from "./components/AiRequestDialog";
 import { PortForwardPanel, type ForwardTarget } from "./components/PortForwardPanel";
+import { SftpPanel, type SftpTarget } from "./components/SftpPanel";
+import { FilePreview, type PreviewRequest } from "./components/FilePreview";
+import { paneCwd } from "./utils/paneCwd";
+import { downloadDir as downloadDirPath } from "@tauri-apps/api/path";
 import { newHighlightRule } from "./components/HighlightEditor";
 import { sessionTargetSummary } from "./utils/sessionSummary";
 import { usePersistentUiState } from "./hooks/usePersistentUiState";
@@ -204,6 +208,10 @@ export const App: React.FC = () => {
   const [senderOpen, setSenderOpen] = useState(false);
   const [senderPaneId, setSenderPaneId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  /** SFTP file browser, the pane it was opened on, and the open file previews. */
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [filesPaneId, setFilesPaneId] = useState<string | null>(null);
+  const [previews, setPreviews] = useState<PreviewRequest[]>([]);
   const [senders, setSenders] = useState<SenderItem[]>([]);
   /** paneId -> log paused. */
   const [pausedLogs, setPausedLogs] = useState<Record<string, boolean>>({});
@@ -542,7 +550,9 @@ export const App: React.FC = () => {
     for (const paneId of paneIds) {
       void backend.disconnectTerminal(paneId);
       terminalBus.clearPane(paneId);
+      paneCwd.forget(paneId);
     }
+    setPreviews((list) => list.filter((x) => !paneIds.includes(x.instanceId)));
     setWs((prev) => {
       let root = prev.root;
       for (const paneId of paneIds) root = removeTab(root, paneId);
@@ -580,6 +590,18 @@ export const App: React.FC = () => {
     return () => void un.then((f) => f());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A phone opens a saved session here (it may have saved it a moment ago: read the file).
+  useEffect(() => {
+    if (currentWindowLabel() !== "main") return;
+    const un = backend.onRemoteOpenSession((id) => {
+      void backend.loadInitialState().then((snap) => {
+        const session = snap.sessions.find((s) => s.id === id);
+        if (session) openSessionInNewTab(session);
+      });
+    });
+    return () => void un.then((f) => f());
+  }, [openSessionInNewTab]);
 
   /** Close tabs, asking first when live connections would end (WindTerm terminal.askBeforeCloseTab). */
   const closePanesAsk = useCallback(
@@ -720,6 +742,37 @@ export const App: React.FC = () => {
       sessionId: l.session.id,
       saved: sessions.find((s) => s.id === l.session.id)?.tunnels ?? [],
     }));
+
+  // SSH tabs in this window, for the file browser (offline ones stay listed while selected).
+  const sftpTargets: SftpTarget[] = useMemo(
+    () =>
+      allLeaves(ws.root)
+        .filter((l) => l.session.protocol === "ssh")
+        .map((l) => ({ paneId: l.paneId, title: tabTitle(l), connected: l.status === "connected" })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ws.root]
+  );
+  const openFileBrowser = useCallback((paneId: string | null) => {
+    setFilesPaneId(paneId);
+    setFilesOpen(true);
+  }, []);
+  const editLocalPreview = (req: PreviewRequest) =>
+    void backend.sftpEditStart(req.instanceId, req.path, sftpOf(settingsRef.current).editor).catch((e) => setToast(String(e)));
+  const downloadPreview = async (req: PreviewRequest) => {
+    const s = sftpOf(settingsRef.current);
+    const dir = s.downloadDir || (await downloadDirPath().catch(() => ""));
+    if (!dir) return;
+    await backend.transferEnqueue([
+      {
+        instanceId: req.instanceId,
+        direction: "download",
+        localPath: `${dir.replace(/[\\/]+$/, "")}\\${req.name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")}`,
+        remotePath: req.path,
+        options: { conflict: s.conflict, preserveTimes: s.preserveTimes, protocol: s.protocol },
+      },
+    ]);
+    setToast(t("sftp.queued", { name: req.name }));
+  };
 
   const saveTunnelRule = (sessionId: string, rule: TunnelConfig) => {
     const target = sessions.find((s) => s.id === sessionId);
@@ -1272,6 +1325,10 @@ export const App: React.FC = () => {
       case "view.history":
         setHistoryOpen((v) => !v);
         return true;
+      case "view.files":
+        setFilesPaneId(null);
+        setFilesOpen((v) => !v);
+        return true;
       case "window.lock":
         setLocked(true);
         return true;
@@ -1615,6 +1672,15 @@ export const App: React.FC = () => {
     void backend.mcpOpenRespond(req.requestId, { accept: true, pane, needsLogin, title: session.label });
   };
 
+  // A phone closes a tab (locked ones are skipped; the phone already asked).
+  useEffect(() => {
+    const un = backend.onRemoteClosePane((id) => {
+      if (findLeaf(wsRef.current.root, id)) closePanes([id]);
+    });
+    return () => void un.then((f) => f());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // The agent closes a pane it opened (the backend checked it may).
   useEffect(() => {
     const un = backend.onMcpClosePane((id) => {
@@ -1648,6 +1714,17 @@ export const App: React.FC = () => {
       return next;
     });
   }, []);
+  /** Panes whose login form is open, so phones can show and answer it. */
+  const [authPrompts, setAuthPrompts] = useState<Record<string, RemoteAuth>>({});
+  const onAuthPrompt = useCallback((paneId: string, auth: RemoteAuth | null) => {
+    setAuthPrompts((prev) => {
+      if (auth) return { ...prev, [paneId]: auth };
+      if (!prev[paneId]) return prev;
+      const next = { ...prev };
+      delete next[paneId];
+      return next;
+    });
+  }, []);
 
   // The phone remote lists every window's tabs; each window reports its own.
   const remoteTabsJson = JSON.stringify(
@@ -1664,15 +1741,20 @@ export const App: React.FC = () => {
         agent: agentStates[l.paneId]
           ? `${agentDisplayName(agentStates[l.paneId].app)}: ${t(`agent.state.${agentStates[l.paneId].state}`)}`
           : "",
+        protocol: l.session.protocol,
+        message: l.statusMessage ?? "",
+        auth: authPrompts[l.paneId] ?? null,
+        passwordAuth: l.session.protocol === "ssh" && l.session.authType === "password",
+        locked: Boolean(l.locked),
       }))
-    )
+    ) satisfies RemoteTab[]
   );
   useEffect(() => {
     const timer = window.setTimeout(() => void backend.remoteReportTabs(JSON.parse(remoteTabsJson)), 150);
     return () => window.clearTimeout(timer);
   }, [remoteTabsJson]);
 
-  /** Pane / tab menu › "Load shell integration" into whatever shell runs there now. */
+  /** Pane / tab menu › install shell integration for the current user and load now. */
   const injectShellIntegration = (paneId: string) => {
     setToast(t("si.loading"));
     backend
@@ -1868,6 +1950,7 @@ export const App: React.FC = () => {
       return !a.ok ? "no" : a.extra ? "always" : "once";
     },
     onModemTransfer: (leaf, protocol, send) => void modemTransfer(leaf, protocol, send),
+    onOpenFileBrowser: (paneId) => openFileBrowser(paneId),
     onDuplicateReuse: (leaf) => {
       const group = findGroupOfPane(wsRef.current.root, leaf.paneId);
       openSessionInNewTab(leaf.session, group?.id, leaf.paneId);
@@ -1890,6 +1973,7 @@ export const App: React.FC = () => {
     onHostname,
     runningCommands,
     onRunningCommand,
+    onAuthPrompt,
     onInjectShellIntegration: (paneId) => injectShellIntegration(paneId),
     onAgentHooks: (leaf, install) => void agentHooks(leaf, install),
     agentHookStatus: (leaf, fresh) => agentHookStatus(leaf, fresh),
@@ -2257,6 +2341,26 @@ export const App: React.FC = () => {
             }}
             historyOpen={historyOpen}
             onToggleHistory={() => setHistoryOpen((v) => !v)}
+            filesOpen={filesOpen}
+            onToggleFiles={() => {
+              setFilesPaneId(null);
+              setFilesOpen((v) => !v);
+            }}
+            remoteEnabled={remoteOf(settings).enabled}
+            remoteConfigured={Boolean(remoteOf(settings).relayUrl.trim())}
+            onToggleRemote={() => {
+              const r = remoteOf(settingsRef.current);
+              if (!r.relayUrl.trim()) {
+                setSettingsTab("remote");
+                setSettingsModalOpen(true);
+                return;
+              }
+              saveSettings({ ...settingsRef.current, remote: { ...r, enabled: !r.enabled } });
+            }}
+            onOpenRemoteSettings={() => {
+              setSettingsTab("remote");
+              setSettingsModalOpen(true);
+            }}
             onCustomize={() => {
               setSettingsTab("toolbar");
               setSettingsModalOpen(true);
@@ -2387,6 +2491,33 @@ export const App: React.FC = () => {
             onClose={() => {
               setSenderOpen(false);
               setSenderPaneId(null);
+            }}
+          />
+        )}
+        {filesOpen && (
+          <SftpPanel
+            targets={sftpTargets}
+            preferredPaneId={
+              filesPaneId && sftpTargets.some((x) => x.paneId === filesPaneId)
+                ? filesPaneId
+                : activeLeaf?.session.protocol === "ssh"
+                ? activeLeaf.paneId
+                : null
+            }
+            settings={sftpOf(settings)}
+            onSettings={(patch) => saveSettings({ ...settingsRef.current, sftp: { ...sftpOf(settingsRef.current), ...patch } })}
+            ask={ask}
+            onToast={setToast}
+            onPreview={(req) =>
+              setPreviews((list) => [...list.filter((x) => !(x.instanceId === req.instanceId && x.path === req.path)), req])
+            }
+            onTerminalInput={(paneId, text) => {
+              void backend.writeTerminal(paneId, text);
+              paneApis.current.get(paneId)?.focus();
+            }}
+            onClose={() => {
+              setFilesOpen(false);
+              setFilesPaneId(null);
             }}
           />
         )}
@@ -2526,6 +2657,16 @@ export const App: React.FC = () => {
           onOpenShell={(p) => openQuickShell(p)}
           onQuickConnect={(raw) => handleQuickConnect(raw, false)}
           onClose={closePalette}
+        />
+      )}
+
+      {previews.length > 0 && (
+        <FilePreview
+          requests={previews}
+          onClose={() => setPreviews([])}
+          onCloseOne={(path, instanceId) => setPreviews((list) => list.filter((x) => !(x.path === path && x.instanceId === instanceId)))}
+          onDownload={(req) => void downloadPreview(req).catch((e) => setToast(String(e)))}
+          onEdit={editLocalPreview}
         />
       )}
 
