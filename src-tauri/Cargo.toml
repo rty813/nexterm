@@ -1,6 +1,7 @@
 [package]
 name = "nexterm"
 version = "0.1.0"
+license = "MIT OR Apache-2.0"
 description = "Nexterm - Modern SSH & Local Terminal Client"
 authors = ["Nexterm Contributors"]
 edition = "2021"

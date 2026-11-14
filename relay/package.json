@@ -2,6 +2,7 @@
   "name": "nexterm-relay",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
   "description": "Self-hosted relay and phone page for Nexterm remote tabs (end-to-end encrypted)",
   "type": "module",
   "main": "server.js",
