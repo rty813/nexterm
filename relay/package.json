@@ -1,0 +1,20 @@
+{
+  "name": "nexterm-relay",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted relay and phone page for Nexterm remote tabs (end-to-end encrypted)",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@xterm/addon-unicode11": "^0.8.0",
+    "@xterm/xterm": "^5.5.0",
+    "ws": "^8.18.0"
+  }
+}

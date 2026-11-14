@@ -1,0 +1,12 @@
+# Nexterm relay (HTTPS is terminated by your own reverse proxy).
+# 1. cp .env.example .env and fill in HOST_TOKEN.
+# 2. docker compose up -d
+# 3. Point your HTTPS reverse proxy at 127.0.0.1:7085 (see README).
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      - HOST_TOKEN=${HOST_TOKEN:-}
+    ports:
+      - "127.0.0.1:7085:8080"

@@ -1,0 +1,1174 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Instant;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::charset::Codec;
+use crate::local_pty::spawn_local_pty;
+use crate::models::{ProtocolType, SessionConfig, TerminalStatePayload};
+use crate::serial_conn::spawn_serial_session;
+use crate::session_log::SessionLog;
+use crate::shell_integration::{Injector, Step};
+use crate::term_capture::{Capture, CaptureMode, SharedCapture, ShellTracker};
+use crate::ssh_conn::{spawn_ssh_session, SshLink};
+use crate::tcp_conn::spawn_tcp_session;
+use crate::telnet_conn::spawn_telnet_session;
+use crate::xymodem::{MError, ModemTransfer, Protocol};
+use crate::zmodem::{self, Detector, Direction, Transfer};
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Shown to the user when an SSH server's key is not (or no longer) in known_hosts.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostKeyPrompt {
+    pub host: String,
+    pub port: u16,
+    pub key_type: String,
+    pub fingerprint: String,
+    /// true: a different key is recorded for this host (possible man-in-the-middle).
+    pub changed: bool,
+    pub known_hosts: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostKeyDecision {
+    Reject,
+    AcceptOnce,
+    AcceptAndSave,
+}
+
+/// A command to run on the SSH connection's own exec channel.
+pub struct ExecRequest {
+    pub command: String,
+    pub reply: oneshot::Sender<Result<String, String>>,
+}
+
+/// A port forward running on an SSH connection, as shown in the forwarding panel.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelStatus {
+    pub id: String,
+    pub config: crate::models::TunnelConfig,
+    /// Port actually bound (differs from the config when it asked for port 0).
+    pub bound_port: u16,
+    /// Connections open right now / since the forward started.
+    pub active: usize,
+    pub total: usize,
+}
+
+pub enum TunnelRequest {
+    List(oneshot::Sender<Vec<TunnelStatus>>),
+    Start(crate::models::TunnelConfig, oneshot::Sender<Result<Vec<TunnelStatus>, String>>),
+    Stop(String, oneshot::Sender<Vec<TunnelStatus>>),
+}
+
+pub trait TerminalSink: Send + Sync {
+    fn emit_output(&self, instance_id: &str, data: &[u8]);
+    fn emit_state(&self, instance_id: &str, status: &str, message: Option<String>);
+
+    /// Ask the user whether to trust an SSH host key. The default trusts it once.
+    fn confirm_host_key(&self, _instance_id: &str, _prompt: HostKeyPrompt) -> oneshot::Receiver<HostKeyDecision> {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(HostKeyDecision::AcceptOnce);
+        rx
+    }
+
+    /// Side-channel UI events (ZModem requests and progress).
+    fn emit_event(&self, _name: &str, _payload: serde_json::Value) {}
+}
+
+fn pending_host_keys() -> &'static Mutex<HashMap<String, oneshot::Sender<HostKeyDecision>>> {
+    static PENDING: OnceLock<Mutex<HashMap<String, oneshot::Sender<HostKeyDecision>>>> = OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
+/// Deliver the user's answer to a `host-key-prompt` event.
+pub fn resolve_host_key(request_id: &str, decision: HostKeyDecision) {
+    if let Some(tx) = lock(pending_host_keys()).remove(request_id) {
+        let _ = tx.send(decision);
+    }
+}
+
+pub struct TauriSink {
+    pub app: AppHandle,
+}
+
+impl TerminalSink for TauriSink {
+    fn emit_output(&self, instance_id: &str, data: &[u8]) {
+        crate::output::push(instance_id, data);
+    }
+
+    fn emit_state(&self, instance_id: &str, status: &str, message: Option<String>) {
+        let payload = TerminalStatePayload {
+            instance_id: instance_id.to_string(),
+            status: status.to_string(),
+            message,
+        };
+        let _ = self.app.emit("terminal-state", payload);
+    }
+
+    fn confirm_host_key(&self, instance_id: &str, prompt: HostKeyPrompt) -> oneshot::Receiver<HostKeyDecision> {
+        let (tx, rx) = oneshot::channel();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        lock(pending_host_keys()).insert(request_id.clone(), tx);
+        let mut payload = serde_json::to_value(&prompt).unwrap_or_default();
+        payload["requestId"] = request_id.into();
+        payload["instanceId"] = instance_id.into();
+        let _ = self.app.emit("host-key-prompt", payload);
+        rx
+    }
+
+    fn emit_event(&self, name: &str, payload: serde_json::Value) {
+        let _ = self.app.emit(name, payload);
+    }
+}
+
+pub enum ControlMsg {
+    Write(Vec<u8>),
+    Resize(u16, u16),
+    Close,
+}
+
+#[derive(Clone)]
+pub struct AsyncChannels {
+    pub write_tx: mpsc::UnboundedSender<Vec<u8>>,
+    pub resize_tx: mpsc::UnboundedSender<(u16, u16)>,
+    pub close_tx: mpsc::UnboundedSender<()>,
+    /// Only SSH connections can run side commands (tmux integration).
+    pub exec_tx: Option<mpsc::UnboundedSender<ExecRequest>>,
+    /// Only SSH connections can forward ports.
+    pub tunnel_tx: Option<mpsc::UnboundedSender<TunnelRequest>>,
+}
+
+#[derive(Clone)]
+pub enum RuntimeControl {
+    Sync(std_mpsc::Sender<ControlMsg>),
+    Async(AsyncChannels),
+}
+
+impl RuntimeControl {
+    pub fn send_write(&self, data: &[u8]) {
+        match self {
+            Self::Sync(tx) => {
+                let _ = tx.send(ControlMsg::Write(data.to_vec()));
+            }
+            Self::Async(ch) => {
+                let _ = ch.write_tx.send(data.to_vec());
+            }
+        }
+    }
+
+    pub fn send_resize(&self, cols: u16, rows: u16) {
+        match self {
+            Self::Sync(tx) => {
+                let _ = tx.send(ControlMsg::Resize(cols, rows));
+            }
+            Self::Async(ch) => {
+                let _ = ch.resize_tx.send((cols, rows));
+            }
+        }
+    }
+
+    pub fn send_close(&self) {
+        match self {
+            Self::Sync(tx) => {
+                let _ = tx.send(ControlMsg::Close);
+            }
+            Self::Async(ch) => {
+                let _ = ch.close_tx.send(());
+            }
+        }
+    }
+}
+
+type SharedLog = Arc<Mutex<Option<SessionLog>>>;
+
+enum ZState {
+    /// Watching terminal output for a ZRQINIT / ZRINIT.
+    Idle(Detector),
+    /// Transfer detected, waiting for the user to pick files / a folder.
+    Pending { direction: Direction, buffered: Vec<u8> },
+    /// Raw remote bytes feed the running transfer.
+    Active { tx: std_mpsc::Sender<Vec<u8>>, cancel: Arc<AtomicBool> },
+}
+
+/// Per-connection output path: drops output after disconnect, diverts ZModem
+/// transfers, converts the remote charset to UTF-8, and writes the session log.
+struct ScopedSink {
+    inner: Arc<dyn TerminalSink>,
+    cancelled: Arc<AtomicBool>,
+    log: SharedLog,
+    codec: Mutex<Codec>,
+    zmodem: Mutex<ZState>,
+    zmodem_enabled: bool,
+    /// Manual shell integration in progress: output held back until the script is loaded.
+    inject: Mutex<Option<ManualInject>>,
+    /// OSC 133 state and the MCP agent's output capture (see term_capture.rs).
+    tracker: Mutex<ShellTracker>,
+    /// Last status reported for the pane ("connecting", "connected", "disconnected" ...).
+    status: Mutex<String>,
+}
+
+struct ManualInject {
+    injector: Injector,
+    done: Option<oneshot::Sender<InjectOutcome>>,
+}
+
+/// How a manual shell integration load ended.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum InjectOutcome {
+    Loaded,
+    /// Not bash, zsh or fish.
+    Unsupported,
+    /// No answer (no base64 / gunzip, not at a prompt, a program running ...).
+    NoAnswer,
+}
+
+impl ScopedSink {
+    fn emit_terminal(&self, instance_id: &str, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let decoded;
+        let data = {
+            let mut codec = lock(&self.codec);
+            if codec.is_passthrough() {
+                data
+            } else {
+                decoded = codec.decode(data);
+                &decoded[..]
+            }
+        };
+        if let Some(log) = lock(&self.log).as_mut() {
+            log.write(data);
+        }
+        lock(&self.tracker).feed(data, Instant::now());
+        self.inner.emit_output(instance_id, data);
+    }
+
+    fn transfer_busy(&self) -> bool {
+        !matches!(*lock(&self.zmodem), ZState::Idle(_))
+    }
+}
+
+impl ScopedSink {
+    /// Drives a manual load: emits what the injector releases, reports the outcome.
+    fn run_inject(sink: Arc<ScopedSink>, instance_id: String) {
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            let now = Instant::now();
+            let (step, finished) = {
+                let mut guard = lock(&sink.inject);
+                let Some(m) = guard.as_mut() else { return };
+                if m.injector.deadline().is_some_and(|d| now < d) {
+                    continue;
+                }
+                let step = m.injector.tick(now);
+                let finished = m.injector.is_done().then(|| guard.take()).flatten();
+                (step, finished)
+            };
+            if let Step::Emit(bytes) = step {
+                sink.deliver(&instance_id, &bytes);
+            }
+            if let Some(mut m) = finished {
+                let outcome = if m.injector.loaded {
+                    InjectOutcome::Loaded
+                } else if m.injector.unsupported {
+                    InjectOutcome::Unsupported
+                } else {
+                    InjectOutcome::NoAnswer
+                };
+                if let Some(tx) = m.done.take() {
+                    let _ = tx.send(outcome);
+                }
+                return;
+            }
+        });
+    }
+}
+
+impl TerminalSink for ScopedSink {
+    fn emit_output(&self, instance_id: &str, data: &[u8]) {
+        if self.cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        let shown;
+        let data = {
+            let mut guard = lock(&self.inject);
+            match guard.as_mut() {
+                Some(m) => {
+                    shown = m.injector.output(data, Instant::now());
+                    &shown[..]
+                }
+                None => data,
+            }
+        };
+        if !data.is_empty() {
+            self.deliver(instance_id, data);
+        }
+    }
+
+    fn emit_state(&self, instance_id: &str, status: &str, message: Option<String>) {
+        if !self.cancelled.load(Ordering::Acquire) {
+            *lock(&self.status) = status.to_string();
+            self.inner.emit_state(instance_id, status, message);
+        }
+    }
+
+    fn confirm_host_key(&self, instance_id: &str, prompt: HostKeyPrompt) -> oneshot::Receiver<HostKeyDecision> {
+        self.inner.confirm_host_key(instance_id, prompt)
+    }
+
+    fn emit_event(&self, name: &str, payload: serde_json::Value) {
+        self.inner.emit_event(name, payload)
+    }
+}
+
+impl ScopedSink {
+    /// Output past the manual-injection filter: ZModem detection, charset, log, pane.
+    fn deliver(&self, instance_id: &str, data: &[u8]) {
+        if self.cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        if !self.zmodem_enabled {
+            self.emit_terminal(instance_id, data);
+            return;
+        }
+        let mut z = lock(&self.zmodem);
+        match &mut *z {
+            ZState::Idle(detector) => {
+                let Some((offset, direction)) = detector.feed(data) else {
+                    drop(z);
+                    self.emit_terminal(instance_id, data);
+                    return;
+                };
+                *z = ZState::Pending { direction, buffered: data[offset..].to_vec() };
+                drop(z);
+                self.emit_terminal(instance_id, &data[..offset]);
+                self.inner.emit_event(
+                    "zmodem-request",
+                    serde_json::json!({
+                        "instanceId": instance_id,
+                        "direction": if direction == Direction::Receive { "receive" } else { "send" },
+                    }),
+                );
+            }
+            ZState::Pending { buffered, .. } => {
+                if buffered.len() < 4 * 1024 * 1024 {
+                    buffered.extend_from_slice(data);
+                }
+            }
+            ZState::Active { tx, .. } => {
+                let _ = tx.send(data.to_vec());
+            }
+        }
+    }
+}
+
+/// The SSH connection behind a pane, once established (shared by panes that reuse it).
+pub type SshSlot = Arc<Mutex<Option<SshLink>>>;
+
+struct ActiveEntry {
+    control: RuntimeControl,
+    cancelled: Arc<AtomicBool>,
+    log: SharedLog,
+    sink: Arc<ScopedSink>,
+    ssh: SshSlot,
+    /// Session name, protocol ("ssh", "powershell" ...) and target ("me@host:22"), for the
+    /// MCP pane list.
+    label: String,
+    protocol: String,
+    target: String,
+}
+
+/// A pane's connection as the MCP tools see it.
+#[derive(Debug, Clone)]
+pub struct PaneRuntime {
+    /// Session name ("一楼服务器", "Windows PowerShell").
+    pub label: String,
+    pub protocol: String,
+    pub target: String,
+    pub status: String,
+    /// The shell reports commands (OSC 133): `run_command` knows when they end.
+    pub shell_integration: bool,
+    /// A command is running (only known with shell integration).
+    pub command_running: bool,
+}
+
+#[derive(Default)]
+pub struct ConnectionManager {
+    sessions: Mutex<HashMap<String, ActiveEntry>>,
+}
+
+impl ConnectionManager {
+    pub fn new() -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Connect a pane. `reuse_from`: another pane whose live SSH connection gets a new
+    /// shell channel instead of logging in again (WindTerm: duplicate session).
+    pub fn connect(
+        &self,
+        instance_id: String,
+        config: SessionConfig,
+        cols: u16,
+        rows: u16,
+        sink: Arc<dyn TerminalSink>,
+        reuse_from: Option<&str>,
+    ) -> Result<()> {
+        // A running log keeps recording across reconnects of the same pane.
+        let (log, reuse): (SharedLog, Option<SshLink>) = {
+            let map = lock(&self.sessions);
+            let log = map.get(&instance_id).map(|e| Arc::clone(&e.log)).unwrap_or_default();
+            let reuse = reuse_from
+                .filter(|_| config.protocol == ProtocolType::Ssh)
+                .and_then(|id| map.get(id))
+                .and_then(|e| lock(&e.ssh).clone());
+            (log, reuse)
+        };
+        self.disconnect(&instance_id);
+        let ssh_slot: SshSlot = Arc::default();
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let scoped = Arc::new(ScopedSink {
+            inner: sink,
+            cancelled: Arc::clone(&cancelled),
+            log: Arc::clone(&log),
+            codec: Mutex::new(Codec::new(&config.charset)),
+            zmodem: Mutex::new(ZState::Idle(Detector::default())),
+            // Local ConPTY shells are not 8-bit clean, so only network / serial links.
+            zmodem_enabled: matches!(
+                config.protocol,
+                ProtocolType::Ssh | ProtocolType::Telnet | ProtocolType::Serial | ProtocolType::Tcp
+            ),
+            inject: Mutex::new(None),
+            tracker: Mutex::new(ShellTracker::default()),
+            status: Mutex::new("connecting".into()),
+        });
+        let protocol = serde_json::to_value(&config.protocol)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let label = config.label.clone();
+        let target = match config.protocol {
+            ProtocolType::Ssh | ProtocolType::Telnet | ProtocolType::Tcp => {
+                let user = if config.username.is_empty() { String::new() } else { format!("{}@", config.username) };
+                format!("{user}{}:{}", config.host, config.port)
+            }
+            _ => config.host.clone(),
+        };
+        let scoped_sink: Arc<dyn TerminalSink> = scoped.clone();
+
+        let control = match config.protocol {
+            ProtocolType::Ssh => spawn_ssh_session(
+                instance_id.clone(),
+                config,
+                cols,
+                rows,
+                scoped_sink,
+                Arc::clone(&ssh_slot),
+                reuse,
+            ),
+            ProtocolType::Tcp => spawn_tcp_session(instance_id.clone(), config, scoped_sink),
+            ProtocolType::Telnet => {
+                spawn_telnet_session(instance_id.clone(), config, cols, rows, scoped_sink)
+            }
+            ProtocolType::Powershell
+            | ProtocolType::Cmd
+            | ProtocolType::Wsl
+            | ProtocolType::Custom
+            | ProtocolType::Serial => {
+                let is_serial = config.protocol == ProtocolType::Serial;
+                let spawned = if is_serial {
+                    spawn_serial_session(instance_id.clone(), config, Arc::clone(&scoped_sink))
+                } else {
+                    spawn_local_pty(instance_id.clone(), config, cols, rows, Arc::clone(&scoped_sink))
+                };
+                match spawned {
+                    Ok(ctrl) => ctrl,
+                    Err(err) => {
+                        let msg = format!("{:#}", err);
+                        let banner = format!(
+                            "\x1b[31m[{}]\x1b[0m {}\r\n",
+                            if is_serial { "串口打开失败" } else { "本地终端启动失败" },
+                            msg
+                        );
+                        scoped_sink.emit_output(&instance_id, banner.as_bytes());
+                        scoped_sink.emit_state(&instance_id, "error", Some(msg));
+                        // Keep a placeholder entry so a started log survives the retry.
+                        let (dead_tx, _) = std_mpsc::channel::<ControlMsg>();
+                        lock(&self.sessions).insert(
+                            instance_id,
+                            ActiveEntry {
+                                control: RuntimeControl::Sync(dead_tx),
+                                cancelled,
+                                log,
+                                sink: scoped,
+                                ssh: ssh_slot,
+                                label,
+                                protocol,
+                                target,
+                            },
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        };
+
+        lock(&self.sessions)
+            .insert(instance_id, ActiveEntry { control, cancelled, log, sink: scoped, ssh: ssh_slot, label, protocol, target });
+        Ok(())
+    }
+
+    fn write_entry(entry: &ActiveEntry, data: &[u8]) {
+        // Keystrokes must not corrupt a running ZModem transfer.
+        if entry.sink.transfer_busy() {
+            return;
+        }
+        let encoded = lock(&entry.sink.codec).encode(data);
+        entry.control.send_write(&encoded);
+    }
+
+    pub fn write(&self, instance_id: &str, data: &[u8]) -> Result<()> {
+        if let Some(entry) = lock(&self.sessions).get(instance_id) {
+            Self::write_entry(entry, data);
+        }
+        Ok(())
+    }
+
+    pub fn broadcast_write(&self, instance_ids: &[String], data: &[u8]) -> Result<()> {
+        let map = lock(&self.sessions);
+        for id in instance_ids {
+            if let Some(entry) = map.get(id) {
+                Self::write_entry(entry, data);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn resize(&self, instance_id: &str, cols: u16, rows: u16) -> Result<()> {
+        if let Some(entry) = lock(&self.sessions).get(instance_id) {
+            entry.control.send_resize(cols, rows);
+        }
+        Ok(())
+    }
+
+    /// Panes with a connection entry (live or failed).
+    pub fn instance_ids(&self) -> Vec<String> {
+        lock(&self.sessions).keys().cloned().collect()
+    }
+
+    /// What the MCP tools report about a pane (None: no connection).
+    pub fn pane_runtime(&self, instance_id: &str) -> Option<PaneRuntime> {
+        let map = lock(&self.sessions);
+        let entry = map.get(instance_id)?;
+        let (shell_integration, command_running) = {
+            let tracker = lock(&entry.sink.tracker);
+            (tracker.integrated, tracker.running)
+        };
+        let status = lock(&entry.sink.status).clone();
+        Some(PaneRuntime {
+            label: entry.label.clone(),
+            protocol: entry.protocol.clone(),
+            target: entry.target.clone(),
+            status,
+            shell_integration,
+            command_running,
+        })
+    }
+
+    /// Start collecting the pane's output for an agent request (replaces any earlier one).
+    pub fn arm_capture(&self, instance_id: &str, mode: CaptureMode) -> Result<SharedCapture> {
+        let map = lock(&self.sessions);
+        let entry = map.get(instance_id).ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+        let cap: SharedCapture = Arc::new(Mutex::new(Capture::new(mode, Instant::now())));
+        lock(&entry.sink.tracker).capture = Some(Arc::clone(&cap));
+        Ok(cap)
+    }
+
+    /// The capture an earlier agent request left running (it timed out), if any.
+    pub fn current_capture(&self, instance_id: &str) -> Option<SharedCapture> {
+        let map = lock(&self.sessions);
+        let tracker = lock(&map.get(instance_id)?.sink.tracker);
+        tracker.capture.clone()
+    }
+
+    /// Stop collecting for `cap` (left alone when a newer request replaced it).
+    pub fn disarm_capture(&self, instance_id: &str, cap: &SharedCapture) {
+        if let Some(entry) = lock(&self.sessions).get(instance_id) {
+            let mut tracker = lock(&entry.sink.tracker);
+            if tracker.capture.as_ref().is_some_and(|c| Arc::ptr_eq(c, cap)) {
+                tracker.capture = None;
+            }
+        }
+    }
+
+    /// Type the shell integration loader into the pane's shell (whatever it is: nested ssh,
+    /// container, WSL ...) and hide its echo; resolves once the script answered or not.
+    pub fn inject_shell_integration(&self, instance_id: &str) -> Result<oneshot::Receiver<InjectOutcome>> {
+        let map = lock(&self.sessions);
+        let entry = map.get(instance_id).ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+        if entry.sink.transfer_busy() {
+            anyhow::bail!("正在传输文件");
+        }
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut inject = lock(&entry.sink.inject);
+            if inject.is_some() {
+                anyhow::bail!("正在加载 Shell 集成");
+            }
+            *inject = Some(ManualInject { injector: Injector::loading(Instant::now()), done: Some(tx) });
+        }
+        let token = uuid::Uuid::new_v4().simple().to_string()[..16].to_string();
+        Self::write_entry(entry, crate::shell_integration::manual_line(&token).as_bytes());
+        ScopedSink::run_inject(Arc::clone(&entry.sink), instance_id.to_string());
+        Ok(rx)
+    }
+
+    /// Run a command on the SSH connection behind `instance_id` (not in its shell).
+    pub fn exec(&self, instance_id: &str, command: &str) -> Result<oneshot::Receiver<Result<String, String>>> {
+        let map = lock(&self.sessions);
+        let entry = map
+            .get(instance_id)
+            .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+        let RuntimeControl::Async(AsyncChannels { exec_tx: Some(tx), .. }) = &entry.control else {
+            anyhow::bail!("只有 SSH 会话支持该操作");
+        };
+        let (reply, rx) = oneshot::channel();
+        tx.send(ExecRequest { command: command.to_string(), reply })
+            .map_err(|_| anyhow::anyhow!("SSH 连接已断开"))?;
+        Ok(rx)
+    }
+
+    /// Send a request to the port-forward manager of the SSH connection behind `instance_id`.
+    pub fn tunnel(&self, instance_id: &str, req: TunnelRequest) -> Result<()> {
+        let map = lock(&self.sessions);
+        let entry = map
+            .get(instance_id)
+            .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+        let RuntimeControl::Async(AsyncChannels { tunnel_tx: Some(tx), .. }) = &entry.control else {
+            anyhow::bail!("只有 SSH 会话支持端口转发");
+        };
+        tx.send(req).map_err(|_| anyhow::anyhow!("SSH 连接已断开"))?;
+        Ok(())
+    }
+
+    /// Start the ZModem transfer the remote requested. `files` for `rz`, `dir` for `sz`.
+    pub fn zmodem_start(&self, instance_id: &str, files: Vec<PathBuf>, dir: Option<PathBuf>) -> Result<()> {
+        let (sink, control) = {
+            let map = lock(&self.sessions);
+            let entry = map
+                .get(instance_id)
+                .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+            (Arc::clone(&entry.sink), entry.control.clone())
+        };
+        let (direction, buffered, rx, cancel) = {
+            let mut z = lock(&sink.zmodem);
+            let ZState::Pending { direction, buffered } = std::mem::replace(&mut *z, ZState::Idle(Detector::default())) else {
+                anyhow::bail!("没有等待开始的 ZModem 传输");
+            };
+            if direction == Direction::Send && files.is_empty() {
+                *z = ZState::Pending { direction, buffered };
+                anyhow::bail!("请选择要发送的文件");
+            }
+            let (tx, rx) = std_mpsc::channel();
+            let cancel = Arc::new(AtomicBool::new(false));
+            *z = ZState::Active { tx, cancel: Arc::clone(&cancel) };
+            (direction, buffered, rx, cancel)
+        };
+
+        let id = instance_id.to_string();
+        let dir = dir.unwrap_or_else(default_download_dir);
+        std::thread::spawn(move || {
+            let writer = control.clone();
+            let progress_sink = Arc::clone(&sink);
+            let progress_id = id.clone();
+            let mut transfer = Transfer::new(
+                rx,
+                buffered,
+                Box::new(move |bytes: &[u8]| writer.send_write(bytes)),
+                Arc::clone(&cancel),
+                Box::new(move |p: &zmodem::Progress| {
+                    let mut payload = serde_json::to_value(p).unwrap_or_default();
+                    payload["instanceId"] = progress_id.clone().into();
+                    payload["state"] = "running".into();
+                    progress_sink.inner.emit_event("zmodem-progress", payload);
+                }),
+            );
+            let result = match direction {
+                Direction::Receive => transfer.receive(&dir),
+                Direction::Send => transfer.send_files(&files).map(|_| files.clone()),
+            };
+            if result.is_err() {
+                transfer.abort();
+            }
+            let leftover = transfer.leftover();
+            *lock(&sink.zmodem) = ZState::Idle(Detector::default());
+
+            let (state, message) = match &result {
+                Ok(paths) => (
+                    "done",
+                    match direction {
+                        Direction::Receive => format!("[ZModem] 已接收 {} 个文件 → {}", paths.len(), dir.display()),
+                        Direction::Send => format!("[ZModem] 已发送 {} 个文件", paths.len()),
+                    },
+                ),
+                Err(zmodem::ZError::Cancelled) => ("cancelled", "[ZModem] 传输已取消".to_string()),
+                Err(e) => ("error", format!("[ZModem] 传输失败：{}", e)),
+            };
+            let files: Vec<String> = result
+                .as_ref()
+                .map(|p| p.iter().map(|x| x.to_string_lossy().to_string()).collect())
+                .unwrap_or_default();
+            sink.inner.emit_event(
+                "zmodem-progress",
+                serde_json::json!({ "instanceId": id, "state": state, "message": message, "files": files, "dir": dir.to_string_lossy() }),
+            );
+            let color = if state == "done" { "32" } else { "33" };
+            sink.emit_terminal(&id, format!("\r\n\x1b[{}m{}\x1b[0m\r\n", color, message).as_bytes());
+            sink.emit_terminal(&id, &leftover);
+        });
+        Ok(())
+    }
+
+    /// Start an XMODEM / YMODEM transfer from the pane menu. Sending runs `command`
+    /// (e.g. `rx file` / `rb`) on the remote first; receiving expects `sx` / `sb` to run.
+    /// `target`: the file (XMODEM) or folder (YMODEM) to save into.
+    #[allow(clippy::too_many_arguments)]
+    pub fn modem_start(
+        &self,
+        instance_id: &str,
+        protocol: Protocol,
+        send: bool,
+        files: Vec<PathBuf>,
+        target: Option<PathBuf>,
+        command: Option<String>,
+        packet_size: usize,
+    ) -> Result<()> {
+        let (sink, control) = {
+            let map = lock(&self.sessions);
+            let entry = map
+                .get(instance_id)
+                .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+            (Arc::clone(&entry.sink), entry.control.clone())
+        };
+        if !sink.zmodem_enabled {
+            anyhow::bail!("本地终端不支持 X/YMODEM 传输，请在 SSH、Telnet、串口或 TCP 会话中使用");
+        }
+        if send && files.is_empty() {
+            anyhow::bail!("请选择要发送的文件");
+        }
+        let (rx, cancel) = {
+            let mut z = lock(&sink.zmodem);
+            if !matches!(*z, ZState::Idle(_)) {
+                anyhow::bail!("已有文件传输正在进行");
+            }
+            let (tx, rx) = std_mpsc::channel();
+            let cancel = Arc::new(AtomicBool::new(false));
+            *z = ZState::Active { tx, cancel: Arc::clone(&cancel) };
+            (rx, cancel)
+        };
+        let name = if protocol == Protocol::Xmodem { "XMODEM" } else { "YMODEM" };
+        let id = instance_id.to_string();
+        sink.inner.emit_event(
+            "modem-started",
+            serde_json::json!({ "instanceId": id, "direction": if send { "send" } else { "receive" }, "protocol": name }),
+        );
+        if let Some(cmd) = command.filter(|c| !c.trim().is_empty()) {
+            let encoded = lock(&sink.codec).encode(format!("{}\r", cmd.trim_end()).as_bytes());
+            control.send_write(&encoded);
+        }
+        let target = target.unwrap_or_else(default_download_dir);
+        std::thread::spawn(move || {
+            let writer = control.clone();
+            let progress_sink = Arc::clone(&sink);
+            let progress_id = id.clone();
+            let mut transfer = ModemTransfer::new(
+                rx,
+                Vec::new(),
+                Box::new(move |bytes: &[u8]| writer.send_write(bytes)),
+                Arc::clone(&cancel),
+                Box::new(move |p: &zmodem::Progress| {
+                    let mut payload = serde_json::to_value(p).unwrap_or_default();
+                    payload["instanceId"] = progress_id.clone().into();
+                    payload["state"] = "running".into();
+                    progress_sink.inner.emit_event("zmodem-progress", payload);
+                }),
+                packet_size,
+            );
+            let result = transfer.run(protocol, send, &files, &target);
+            if matches!(result, Err(MError::Cancelled) | Err(MError::Timeout)) {
+                transfer.abort();
+            }
+            let leftover = transfer.leftover();
+            *lock(&sink.zmodem) = ZState::Idle(Detector::default());
+
+            let dir = if protocol == Protocol::Xmodem && !send {
+                target.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| target.clone())
+            } else {
+                target.clone()
+            };
+            let (state, message) = match &result {
+                Ok(paths) if send => ("done", format!("[{}] 已发送 {} 个文件", name, paths.len())),
+                Ok(paths) => ("done", format!("[{}] 已接收 {} 个文件 → {}", name, paths.len(), dir.display())),
+                Err(MError::Cancelled) => ("cancelled", format!("[{}] 传输已取消", name)),
+                Err(e) => ("error", format!("[{}] 传输失败：{}", name, e)),
+            };
+            let files: Vec<String> = result
+                .as_ref()
+                .map(|p| p.iter().map(|x| x.to_string_lossy().to_string()).collect())
+                .unwrap_or_default();
+            sink.inner.emit_event(
+                "zmodem-progress",
+                serde_json::json!({ "instanceId": id, "state": state, "message": message, "files": files, "dir": dir.to_string_lossy() }),
+            );
+            let color = if state == "done" { "32" } else { "33" };
+            sink.emit_terminal(&id, format!("\r\n\x1b[{}m{}\x1b[0m\r\n", color, message).as_bytes());
+            sink.emit_terminal(&id, &leftover);
+        });
+        Ok(())
+    }
+
+    /// Refuse a pending transfer or stop a running one.
+    pub fn zmodem_cancel(&self, instance_id: &str) {
+        let Some((sink, control)) = lock(&self.sessions)
+            .get(instance_id)
+            .map(|e| (Arc::clone(&e.sink), e.control.clone()))
+        else {
+            return;
+        };
+        let mut z = lock(&sink.zmodem);
+        match &*z {
+            ZState::Pending { .. } => {
+                *z = ZState::Idle(Detector::default());
+                drop(z);
+                control.send_write(&zmodem::cancel_sequence());
+                sink.inner.emit_event(
+                    "zmodem-progress",
+                    serde_json::json!({ "instanceId": instance_id, "state": "cancelled", "message": "[ZModem] 已拒绝传输" }),
+                );
+            }
+            ZState::Active { cancel, .. } => cancel.store(true, Ordering::Release),
+            ZState::Idle(_) => {}
+        }
+    }
+
+    /// Start logging a pane's output; returns the log file path.
+    pub fn start_log(&self, instance_id: &str, log: SessionLog) -> Result<String> {
+        let map = self
+            .sessions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("连接表已损坏"))?;
+        let entry = map
+            .get(instance_id)
+            .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+        let path = log.path().to_string_lossy().to_string();
+        if let Ok(mut guard) = entry.log.lock() {
+            *guard = Some(log);
+        }
+        Ok(path)
+    }
+
+    pub fn is_logging(&self, instance_id: &str) -> bool {
+        self.log_path(instance_id).is_some()
+    }
+
+    pub fn log_path(&self, instance_id: &str) -> Option<String> {
+        let map = self.sessions.lock().ok()?;
+        let entry = map.get(instance_id)?;
+        let guard = entry.log.lock().ok()?;
+        guard.as_ref().map(|l| l.path().to_string_lossy().to_string())
+    }
+
+    /// Pause or resume a running log; returns the new state (None: not logging).
+    pub fn pause_log(&self, instance_id: &str, paused: bool) -> Option<bool> {
+        let map = self.sessions.lock().ok()?;
+        let entry = map.get(instance_id)?;
+        let mut guard = entry.log.lock().ok()?;
+        let log = guard.as_mut()?;
+        log.set_paused(paused);
+        Some(log.is_paused())
+    }
+
+    pub fn stop_log(&self, instance_id: &str) {
+        if let Ok(map) = self.sessions.lock() {
+            if let Some(entry) = map.get(instance_id) {
+                if let Ok(mut guard) = entry.log.lock() {
+                    *guard = None;
+                }
+            }
+        }
+    }
+
+    pub fn is_open(&self, instance_id: &str) -> bool {
+        lock(&self.sessions).contains_key(instance_id)
+    }
+
+    /// Panes with a connection entry (live or failed, until closed).
+    pub fn count(&self) -> usize {
+        lock(&self.sessions).len()
+    }
+
+    pub fn disconnect(&self, instance_id: &str) {
+        if let Ok(mut map) = self.sessions.lock() {
+            if let Some(entry) = map.remove(instance_id) {
+                entry
+                    .cancelled
+                    .store(true, std::sync::atomic::Ordering::Release);
+                entry.control.send_close();
+            }
+        }
+        crate::output::forget_detached(instance_id);
+    }
+}
+
+fn default_download_dir() -> PathBuf {
+    dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::AuthType;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct MockSink {
+        output: Mutex<Vec<u8>>,
+        states: Mutex<Vec<String>>,
+    }
+
+    impl TerminalSink for MockSink {
+        fn emit_output(&self, _instance_id: &str, data: &[u8]) {
+            if let Ok(mut guard) = self.output.lock() {
+                guard.extend_from_slice(data);
+            }
+        }
+
+        fn emit_state(&self, _instance_id: &str, status: &str, _message: Option<String>) {
+            if let Ok(mut guard) = self.states.lock() {
+                guard.push(status.to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn test_cmd_and_tcp_and_ssh_without_caller_tokio_context() {
+        // Deliberately execute from a plain OS thread with NO Tokio runtime entered,
+        // reproducing the exact Win32 UI thread environment that previously caused crashes.
+        let join = std::thread::spawn(|| {
+            let mgr = ConnectionManager::new();
+
+            // 1. Test CMD ConPTY spawn, write, and output read
+            let cmd_sink = Arc::new(MockSink::default());
+            let cmd_cfg = SessionConfig {
+                id: "test-cmd".into(),
+                label: "CMD".into(),
+                group: String::new(),
+                protocol: ProtocolType::Cmd,
+                host: String::new(),
+                port: 0,
+                username: String::new(),
+                auth_type: AuthType::None,
+                password: None,
+                private_key_path: None,
+                passphrase: None,
+                jump_host: None,
+                term: "xterm-256color".into(),
+                keep_alive_secs: 0,
+                startup_command: None,
+                working_dir: None,
+                shell_command: None,
+                serial: None,
+                auto_log: false,
+                ..Default::default()
+            };
+
+            mgr.connect("pane-cmd".into(), cmd_cfg, 80, 24, cmd_sink.clone(), None)
+                .expect("CMD ConPTY should connect cleanly");
+            // Reply to Windows ConPTY's initial DSR cursor query (\x1b[6n) just like xterm.js does
+            let dsr_reply = format!("{}[1;1R", char::from(27));
+            mgr.write("pane-cmd", dsr_reply.as_bytes())
+                .expect("DSR reply");
+            let mut echo_cmd = String::from("echo CONPTY_OK");
+            echo_cmd.push(char::from(13));
+            echo_cmd.push(char::from(10));
+            mgr.write("pane-cmd", echo_cmd.as_bytes())
+                .expect("CMD write");
+
+            let deadline = Instant::now() + Duration::from_secs(6);
+            let mut saw_cmd_output = false;
+            while Instant::now() < deadline {
+                let text = String::from_utf8_lossy(&cmd_sink.output.lock().unwrap()).to_string();
+                if text.contains("CONPTY_OK") {
+                    saw_cmd_output = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(80));
+            }
+            let final_out = String::from_utf8_lossy(&cmd_sink.output.lock().unwrap()).to_string();
+            let final_states = cmd_sink.states.lock().unwrap().clone();
+            mgr.disconnect("pane-cmd");
+            assert!(
+                saw_cmd_output,
+                "Expected CONPTY_OK from cmd.exe session; states={:?}, out={:?}",
+                final_states,
+                final_out
+            );
+
+            // 2. Test TCP session over Tauri async runtime without caller Tokio context
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+            let port = listener.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                if let Ok((mut sock, _)) = listener.accept() {
+                    let _ = sock.write_all(b"TCP_BANNER_OK");
+                    let mut b = [0u8; 32];
+                    let _ = sock.read(&mut b);
+                }
+            });
+
+            let tcp_sink = Arc::new(MockSink::default());
+            let tcp_cfg = SessionConfig {
+                id: "test-tcp".into(),
+                label: "TCP".into(),
+                group: String::new(),
+                protocol: ProtocolType::Tcp,
+                host: "127.0.0.1".into(),
+                port,
+                username: String::new(),
+                auth_type: AuthType::None,
+                password: None,
+                private_key_path: None,
+                passphrase: None,
+                jump_host: None,
+                term: "xterm-256color".into(),
+                keep_alive_secs: 0,
+                startup_command: None,
+                working_dir: None,
+                shell_command: None,
+                serial: None,
+                auto_log: false,
+                ..Default::default()
+            };
+
+            mgr.connect("pane-tcp".into(), tcp_cfg, 80, 24, tcp_sink.clone(), None)
+                .expect("TCP session should spawn cleanly");
+
+            let deadline_tcp = Instant::now() + Duration::from_secs(4);
+            let mut saw_tcp = false;
+            while Instant::now() < deadline_tcp {
+                let text = String::from_utf8_lossy(&tcp_sink.output.lock().unwrap()).to_string();
+                if text.contains("TCP_BANNER_OK") {
+                    saw_tcp = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            mgr.disconnect("pane-tcp");
+            assert!(saw_tcp, "Expected TCP_BANNER_OK from loopback TCP server");
+
+            // 3. Test SSH spawn against closed port (must emit clean error state, NEVER panic!)
+            let ssh_sink = Arc::new(MockSink::default());
+            let ssh_cfg = SessionConfig {
+                id: "test-ssh".into(),
+                label: "SSH".into(),
+                group: String::new(),
+                protocol: ProtocolType::Ssh,
+                host: "127.0.0.1".into(),
+                port: 1,
+                username: "root".into(),
+                auth_type: AuthType::Password,
+                password: Some("test".into()),
+                private_key_path: None,
+                passphrase: None,
+                jump_host: None,
+                term: "xterm-256color".into(),
+                keep_alive_secs: 60,
+                startup_command: None,
+                working_dir: None,
+                shell_command: None,
+                serial: None,
+                auto_log: false,
+                ..Default::default()
+            };
+            mgr.connect("pane-ssh".into(), ssh_cfg, 80, 24, ssh_sink.clone(), None)
+                .expect("SSH spawn must not panic");
+
+            let deadline_ssh = Instant::now() + Duration::from_secs(5);
+            let mut saw_ssh_err = false;
+            while Instant::now() < deadline_ssh {
+                let states = ssh_sink.states.lock().unwrap().clone();
+                if states.iter().any(|s| s == "error") {
+                    saw_ssh_err = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(saw_ssh_err, "Expected clean SSH error state without panic");
+        });
+
+        join.join().expect("Plain OS thread must not panic");
+    }
+}
+
+/// Real local WSL tab (ConPTY, default distro): `cargo test --lib manual_inject_e2e -- --ignored`.
+#[cfg(test)]
+mod manual_inject_e2e {
+    use super::*;
+
+    #[derive(Default)]
+    struct Collect(Mutex<Vec<u8>>);
+
+    impl TerminalSink for Collect {
+        fn emit_output(&self, _id: &str, data: &[u8]) {
+            lock(&self.0).extend_from_slice(data);
+        }
+        fn emit_state(&self, _id: &str, _status: &str, _message: Option<String>) {}
+    }
+
+    fn text(sink: &Collect) -> String {
+        String::from_utf8_lossy(&lock(&sink.0)).to_string()
+    }
+
+    #[test]
+    #[ignore]
+    fn loads_into_wsl_and_hides_the_line() {
+        let session: SessionConfig = serde_json::from_value(serde_json::json!({ "id": "w", "label": "w", "protocol": "wsl" })).unwrap();
+        let sink = Arc::new(Collect::default());
+        let mgr = ConnectionManager::new();
+        mgr.connect("w".into(), session, 120, 30, sink.clone(), None).unwrap();
+        // Answer ConPTY's cursor query, then wait for the prompt to settle.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        mgr.write("w", b"\x1b[1;1R").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        let before = lock(&sink.0).len();
+        let outcome = mgr.inject_shell_integration("w").unwrap().blocking_recv().unwrap();
+        let after = text(&sink)[before..].to_string();
+        eprintln!("OUTCOME {outcome:?} AFTER {after:?}");
+        assert_eq!(outcome, InjectOutcome::Loaded);
+        assert!(!after.contains("nexterm-si") && !after.contains("base64"), "loader line showed");
+        assert!(after.contains("\x1b]133;A\x07"));
+        mgr.write("w", b"sleep 1\r").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        assert!(text(&sink).contains("\x1b]633;E;sleep 1\x07"), "no command reported");
+        mgr.disconnect("w");
+    }
+}

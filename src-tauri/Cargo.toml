@@ -1,0 +1,38 @@
+[package]
+name = "nexterm"
+version = "0.1.0"
+description = "Nexterm - Modern SSH & Local Terminal Client"
+authors = ["Nexterm Contributors"]
+edition = "2021"
+
+[lib]
+name = "nexterm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+portable-pty = "0.9"
+base64 = "0.22"
+flate2 = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1"
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+serialport = { version = "4", default-features = false }
+tauri-plugin-single-instance = "2"
+tauri-plugin-clipboard-manager = "2"
+windows-sys = { version = "0.52", features = ["Win32_Globalization", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry", "Win32_UI_Shell"] }
+windows = { version = "0.62", features = ["UI_Notifications", "Data_Xml_Dom", "Foundation"] }
+tauri-plugin-window-state = "2"
+ring = "0.17"
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }

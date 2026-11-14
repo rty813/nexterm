@@ -1,0 +1,399 @@
+import React, { useCallback, useEffect, useState } from "react";
+import { anyInstalled, type HookStatus } from "../utils/agentHooks";
+import { useTranslation } from "react-i18next";
+import { X } from "lucide-react";
+import type { AppSettings, SessionConfig, ThemeDefinition } from "../types/domain";
+import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
+
+export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "highlight" | "keys" | "toolbar";
+import { KeymapEditor, ToolbarEditor } from "./SettingsExtra";
+import { HighlightEditor } from "./HighlightEditor";
+import { RemoteSettingsEditor } from "./SettingsRemote";
+import { useCloseGuard } from "./useCloseGuard";
+
+interface SettingsModalProps {
+  settings: AppSettings;
+  themes: ThemeDefinition[];
+  onClose: () => void;
+  onSave: (next: AppSettings) => void;
+  /** Open on a given tab (e.g. "toolbar" from the toolbar's context menu). */
+  initialTab?: SettingsTab;
+  /** Saved sessions, for "open at startup". */
+  sessions?: SessionConfig[];
+  /** Install / remove the Claude Code and Codex status hooks on this computer. */
+  onAgentHooksLocal: (install: boolean) => Promise<void>;
+  /** Hook install status on this computer (null: could not be read). */
+  localHookStatus: () => Promise<HookStatus | null>;
+  onTestNotification: () => void;
+}
+
+export const SettingsModal: React.FC<SettingsModalProps> = ({
+  settings,
+  themes,
+  onClose,
+  onSave,
+  initialTab = "general",
+  onAgentHooksLocal,
+  localHookStatus,
+  onTestNotification,
+  sessions = [],
+}) => {
+  // Hook install status on this computer (undefined while reading).
+  const [hookStatus, setHookStatus] = useState<HookStatus | null | undefined>(undefined);
+  const refreshHooks = useCallback(() => {
+    void localHookStatus().then(setHookStatus);
+  }, [localHookStatus]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => refreshHooks(), []);
+  const hooksOn = anyInstalled(hookStatus);
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState<AppSettings>({
+    ...settings,
+    language: settings.language || "zh-CN",
+  });
+  const [initialJson] = useState(() => JSON.stringify(draft));
+  const { requestClose, prompt } = useCloseGuard(JSON.stringify(draft) !== initialJson, onClose);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={requestClose}>
+      <div className="modal-panel modal-lg settings-panel" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{t("settingsModal.title")}</h3>
+          <button type="button" className="icon-btn" onClick={requestClose}>
+            <X size={16} />
+          </button>
+        </div>
+        {prompt}
+
+        <div className="adv-tabs settings-tabs">
+          {(["general", "terminal", "mouse", "logs", "xserver", "remote", "highlight", "keys", "toolbar"] as const).map((id) => (
+            <button key={id} type="button" className={`adv-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
+              {t(`settingsModal.tab.${id}`)}
+            </button>
+          ))}
+        </div>
+
+        <form
+          className="modal-body"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSave(draft);
+          }}
+        >
+          {tab === "keys" && <KeymapEditor draft={draft} onChange={setDraft} />}
+          {tab === "toolbar" && <ToolbarEditor draft={draft} onChange={setDraft} />}
+          {tab === "highlight" && <HighlightEditor draft={draft} onChange={setDraft} />}
+          {tab === "terminal" && <TerminalSettings draft={draft} onChange={setDraft} sessions={sessions} />}
+          {tab === "mouse" && <MouseSettingsEditor draft={draft} onChange={setDraft} />}
+          {tab === "logs" && <LogTransferSettings draft={draft} onChange={setDraft} />}
+          {tab === "xserver" && <XServerSettingsEditor draft={draft} onChange={setDraft} />}
+          {tab === "remote" && <RemoteSettingsEditor draft={draft} onChange={setDraft} saved={settings} />}
+          <div className={tab === "general" ? "settings-general" : "hidden"}>
+          <div className="form-grid-2">
+            <label className="field">
+              <span>{t("settingsModal.language")}</span>
+              <select
+                className="text-input"
+                value={draft.language}
+                onChange={(e) =>
+                  setDraft({ ...draft, language: e.target.value })
+                }
+              >
+                <option value="zh-CN">{t("settingsModal.langZh")}</option>
+                <option value="en-US">{t("settingsModal.langEn")}</option>
+              </select>
+            </label>
+
+            <label className="field">
+              <span>{t("settingsModal.theme")}</span>
+              <select
+                className="text-input"
+                value={draft.themeId}
+                onChange={(e) =>
+                  setDraft({ ...draft, themeId: e.target.value })
+                }
+              >
+                {themes.map((th) => (
+                  <option key={th.id} value={th.id}>
+                    {th.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="field">
+            <span>{t("settingsModal.fontFamily")}</span>
+            <input
+              type="text"
+              className="text-input"
+              value={draft.fontFamily}
+              onChange={(e) =>
+                setDraft({ ...draft, fontFamily: e.target.value })
+              }
+            />
+          </label>
+
+          <div className="form-grid-3">
+            <label className="field">
+              <span>{t("settingsModal.fontSize")}</span>
+              <input
+                type="number"
+                className="text-input"
+                min={9}
+                max={32}
+                value={draft.fontSize}
+                onChange={(e) =>
+                  setDraft({ ...draft, fontSize: Number(e.target.value) || 14 })
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>{t("settingsModal.cursorStyle")}</span>
+              <select
+                className="text-input"
+                value={draft.cursorStyle}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    cursorStyle: e.target.value as AppSettings["cursorStyle"],
+                  })
+                }
+              >
+                <option value="block">{t("settingsModal.cursorBlock")}</option>
+                <option value="bar">{t("settingsModal.cursorBar")}</option>
+                <option value="underline">
+                  {t("settingsModal.cursorUnderline")}
+                </option>
+              </select>
+            </label>
+
+            <label className="field">
+              <span>{t("settingsModal.scrollback")}</span>
+              <input
+                type="number"
+                className="text-input"
+                min={1000}
+                max={500000}
+                step={1000}
+                value={draft.scrollback}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    scrollback: Number(e.target.value) || 50000,
+                  })
+                }
+              />
+            </label>
+          </div>
+
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.cursorBlink}
+              onChange={(e) =>
+                setDraft({ ...draft, cursorBlink: e.target.checked })
+              }
+            />
+            <span>{t("settingsModal.cursorBlink")}</span>
+          </label>
+
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.syntaxHighlight !== false}
+              onChange={(e) =>
+                setDraft({ ...draft, syntaxHighlight: e.target.checked })
+              }
+            />
+            <span>{t("settingsModal.syntaxHighlight")}</span>
+          </label>
+
+
+          <h4 className="section-heading">{t("settingsModal.terminalBehavior")}</h4>
+          <div className="form-grid-2">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(draft.showTimestamps)}
+                onChange={(e) => setDraft({ ...draft, showTimestamps: e.target.checked })}
+              />
+              <span>{t("settingsModal.showTimestamps")}</span>
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(draft.timestampMs)}
+                onChange={(e) => setDraft({ ...draft, timestampMs: e.target.checked })}
+              />
+              <span>{t("settingsModal.timestampMs")}</span>
+            </label>
+          </div>
+
+          <h4 className="section-heading">{t("settingsModal.windowSection")}</h4>
+          <div className="form-grid-2">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(draft.showStatusBar)}
+                onChange={(e) => setDraft({ ...draft, showStatusBar: e.target.checked })}
+              />
+              <span>{t("settingsModal.showStatusBar")}</span>
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(draft.alwaysOnTop)}
+                onChange={(e) => setDraft({ ...draft, alwaysOnTop: e.target.checked })}
+              />
+              <span>{t("toolbar.alwaysOnTop")}</span>
+            </label>
+            <label className="field">
+              <span>
+                {t("toolbar.opacity")} {Math.round((draft.windowOpacity ?? 1) * 100)}%
+              </span>
+              <input
+                type="range"
+                min={0.3}
+                max={1}
+                step={0.05}
+                value={draft.windowOpacity ?? 1}
+                onChange={(e) => setDraft({ ...draft, windowOpacity: Number(e.target.value) })}
+              />
+            </label>
+          </div>
+
+          <div className="settings-section-title">{t("agent.section")}</div>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.tabActivity !== false}
+              onChange={(e) => setDraft({ ...draft, tabActivity: e.target.checked })}
+            />
+            <span>{t("agent.tabActivity")}</span>
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.tabHostname !== false}
+              onChange={(e) => setDraft({ ...draft, tabHostname: e.target.checked })}
+            />
+            <span>{t("tabbar.hostSetting")}</span>
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.tabCommand !== false}
+              onChange={(e) => setDraft({ ...draft, tabCommand: e.target.checked })}
+            />
+            <span>{t("tabbar.cmdSetting")}</span>
+          </label>
+          <label className="checkbox-row" title={t("tabbar.shellIntegrationTip")}>
+            <input
+              type="checkbox"
+              checked={draft.shellIntegration !== false}
+              onChange={(e) => setDraft({ ...draft, shellIntegration: e.target.checked })}
+            />
+            <span>{t("tabbar.shellIntegration")}</span>
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.agentScreenDetect !== false}
+              onChange={(e) => setDraft({ ...draft, agentScreenDetect: e.target.checked })}
+            />
+            <span>{t("agent.screenDetect")}</span>
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.agentNotify !== false}
+              onChange={(e) => setDraft({ ...draft, agentNotify: e.target.checked })}
+            />
+            <span>{t("agent.notifySetting")}</span>
+          </label>
+          <AgentHookStatusLine status={hookStatus} />
+          <div className="agent-hooks-row">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void onAgentHooksLocal(true).then(refreshHooks)}
+            >
+              {hooksOn ? t("agent.reinstallLocal") : t("agent.installLocal")}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={hookStatus !== undefined && !hooksOn}
+              onClick={() => void onAgentHooksLocal(false).then(refreshHooks)}
+            >
+              {t("agent.uninstallLocal")}
+            </button>
+            <button type="button" className="btn-ghost" onClick={onTestNotification}>
+              {t("agent.testNotify")}
+            </button>
+          </div>
+          <p className="adv-hint">{t("agent.hint")}</p>
+
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.closeToTray !== false}
+              onChange={(e) => setDraft({ ...draft, closeToTray: e.target.checked })}
+            />
+            <span>{t("settingsModal.closeToTray")}</span>
+          </label>
+
+
+          <label className="field">
+            <span>{t("settingsModal.lockPasscode")}</span>
+            <input
+              type="password"
+              className="text-input"
+              placeholder={t("settingsModal.lockPasscodePlaceholder")}
+              value={draft.lockPasscode ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  lockPasscode: e.target.value || null,
+                })
+              }
+            />
+          </label>
+
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn-ghost" onClick={requestClose}>
+              {t("settingsModal.cancel")}
+            </button>
+            <button type="submit" className="btn-primary">
+              {t("settingsModal.save")}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+/** "Claude Code: installed · Codex: not used here" for the hooks on this computer. */
+const AgentHookStatusLine: React.FC<{ status: HookStatus | null | undefined }> = ({ status }) => {
+  const { t } = useTranslation();
+  if (status === undefined) return <p className="adv-hint">{t("agent.checking")}</p>;
+  if (status === null) return <p className="adv-hint">{t("agent.checkFailed")}</p>;
+  const item = (app: string, st: HookStatus["claude"]) => (
+    <span className={`hook-state hook-${st}`}>
+      {app}：{t(`agent.hookState.${st}`)}
+    </span>
+  );
+  return (
+    <div className="hook-status-line">
+      {item("Claude Code", status.claude)}
+      {item("Codex", status.codex)}
+      {status.outdated && <span className="hook-state hook-outdated">{t("agent.outdatedHint")}</span>}
+    </div>
+  );
+};

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#1b1d23" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Nexterm</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icon.svg" />
+    <link rel="stylesheet" href="vendor/xterm.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <!-- Pairing / status -->
+    <section id="gate" class="screen">
+      <div class="gate-card">
+        <img src="icon.svg" alt="" class="gate-logo" />
+        <h1>Nexterm</h1>
+        <p id="gate-text" class="muted">正在连接…</p>
+        <div id="gate-pair" class="hidden">
+          <p class="muted">请在电脑上打开 <b>设置 → 手机远程</b>，用手机相机扫描二维码。</p>
+          <label class="paste">
+            <span class="muted">或粘贴配对链接：</span>
+            <input id="pair-input" type="url" placeholder="https://…#k=…" autocomplete="off" />
+          </label>
+          <button id="pair-go" class="btn">配对</button>
+        </div>
+        <button id="gate-retry" class="btn hidden">重新连接</button>
+        <button id="gate-forget" class="link hidden">忘记这台电脑</button>
+      </div>
+    </section>
+
+    <!-- Tab list -->
+    <section id="tabs" class="screen hidden">
+      <header class="bar">
+        <div class="bar-title">
+          <b id="computer">电脑</b>
+          <span id="ro-badge" class="badge hidden">只读</span>
+        </div>
+        <button id="menu-btn" class="icon" aria-label="菜单">⋯</button>
+      </header>
+      <ul id="tab-list"></ul>
+      <p id="tab-empty" class="muted center hidden">电脑上没有打开的标签页</p>
+    </section>
+
+    <!-- Terminal -->
+    <section id="term" class="screen hidden">
+      <header class="bar">
+        <button id="back" class="icon" aria-label="返回">‹</button>
+        <div class="bar-title">
+          <b id="term-title"></b>
+          <span id="term-size" class="muted small"></span>
+        </div>
+        <button id="font-down" class="icon" aria-label="缩小字体">A-</button>
+        <button id="font-up" class="icon" aria-label="放大字体">A+</button>
+        <button id="take" class="chip">接管尺寸</button>
+      </header>
+      <div id="term-wrap"><div id="term-host"></div></div>
+      <div id="keys">
+        <button data-key="esc">Esc</button>
+        <button data-key="tab">Tab</button>
+        <button data-mod="ctrl" class="mod">Ctrl</button>
+        <button data-mod="alt" class="mod">Alt</button>
+        <button data-key="up">↑</button>
+        <button data-key="down">↓</button>
+        <button data-key="left">←</button>
+        <button data-key="right">→</button>
+        <button data-key="home">Home</button>
+        <button data-key="end">End</button>
+        <button data-key="pgup">PgUp</button>
+        <button data-key="pgdn">PgDn</button>
+        <button data-key="ctrl-c">^C</button>
+        <button data-key="ctrl-d">^D</button>
+        <button data-key="ctrl-z">^Z</button>
+        <button data-key="|">|</button>
+        <button data-key="/">/</button>
+        <button data-key="-">-</button>
+        <button data-key="~">~</button>
+        <button data-key="paste">粘贴</button>
+        <button data-key="kbd" class="kbd">⌨</button>
+      </div>
+    </section>
+
+    <div id="sheet" class="sheet hidden">
+      <div class="sheet-card">
+        <button id="sheet-forget" class="sheet-item danger">忘记这台电脑</button>
+        <button id="sheet-close" class="sheet-item">取消</button>
+      </div>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/addon-unicode11.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
