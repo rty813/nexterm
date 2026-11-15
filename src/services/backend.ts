@@ -875,12 +875,14 @@ export const backend = {
     await invoke("mcp_set_control", { instanceId, mode, title });
   },
 
-  /** The command that adds Nexterm to Claude Code / Codex as an MCP server. */
+  /** The command that adds Nexterm to Claude Code / Codex / Gemini CLI as an MCP server. */
   async mcpClientCommand(client: McpClient): Promise<string> {
     if (!isTauriRuntime()) {
       return client === "codex"
         ? "codex mcp add nexterm nexterm.exe mcp"
-        : "claude mcp add --scope user nexterm nexterm.exe mcp";
+        : client === "gemini"
+          ? "gemini mcp add --scope user nexterm nexterm.exe mcp"
+          : "claude mcp add --scope user nexterm nexterm.exe mcp";
     }
     return invoke<string>("mcp_client_command", { client });
   },
@@ -962,8 +964,10 @@ export const backend = {
   async agentHooksReadLocal(): Promise<{
     claudeDir: boolean;
     codexDir: boolean;
+    geminiDir: boolean;
     claudeSettings: string | null;
     codexHooks: string | null;
+    geminiSettings: string | null;
     scriptInstalled: boolean;
     script: string | null;
   }> {
@@ -975,6 +979,7 @@ export const backend = {
     script: string | null;
     claudeSettings: string | null;
     codexHooks: string | null;
+    geminiSettings: string | null;
   }): Promise<void> {
     if (!isTauriRuntime()) throw new Error("desktop only");
     await invoke("agent_hooks_write_local", { files });

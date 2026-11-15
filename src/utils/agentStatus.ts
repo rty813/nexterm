@@ -1,7 +1,7 @@
 import { looksLikePrompt } from "./commandWatch";
 
 /**
- * AI agent status shown on tabs (Claude Code, Codex ...), in Herdr's model:
+ * AI agent status shown on tabs (Claude Code, Codex, Gemini CLI ...), in Herdr's model:
  * working, blocked (needs approval / an answer), done (finished, not looked at yet),
  * idle (done and seen), error.
  */
@@ -11,7 +11,7 @@ export interface AgentStatus {
   state: AgentState;
   /** For blocked: "permission" | "question". */
   kind?: string;
-  /** "claude" | "codex" | other program name. */
+  /** "claude" | "codex" | "gemini" | other program name. */
   app: string;
   /** "hook": reported by the agent's hooks; "screen": guessed from the screen. */
   source: "hook" | "screen";
@@ -25,11 +25,12 @@ export function normalizeApp(app: string | undefined): string {
   const a = (app || "").toLowerCase();
   if (a.startsWith("claude")) return "claude";
   if (a.startsWith("codex")) return "codex";
+  if (a.startsWith("gemini")) return "gemini";
   return a || "agent";
 }
 
 export function agentDisplayName(app: string): string {
-  return app === "claude" ? "Claude Code" : app === "codex" ? "Codex" : app;
+  return app === "claude" ? "Claude Code" : app === "codex" ? "Codex" : app === "gemini" ? "Gemini CLI" : app;
 }
 
 /**
@@ -55,14 +56,21 @@ const BLOCKED = [
   /Allow (command|this|edit)\?/i,
   /❯\s*1\.\s*Yes/,
   /Press enter to confirm or esc to cancel/i,
+  // Gemini CLI: edit / MCP tool confirmations and its status line while one is open.
+  /Apply this change\?/i,
+  /Allow execution of/i,
+  /Waiting for user confirmation/i,
 ];
 /** Footer / chrome lines that only an agent's prompt shows. */
-const AGENT_UI = /\? for shortcuts|esc to interrupt|context left|accept edits on|bypass permissions on|plan mode on|⏎ send|shift\+tab to cycle/i;
+const AGENT_UI = /\? for shortcuts|esc to interrupt|context left|accept edits on|bypass permissions on|plan mode on|⏎ send|shift\+tab to cycle|press tab twice for more|Type your message or @/i;
 
 /** Which agent the screen belongs to, if any. */
 function screenApp(text: string): string {
+  // Gemini CLI's input placeholder; its screen may well mention the other agents.
+  if (/Type your message or @/.test(text)) return "gemini";
   if (/claude/i.test(text) || /[✻✽✢✳✶]/.test(text)) return "claude";
   if (/codex|openai/i.test(text)) return "codex";
+  if (/gemini/i.test(text)) return "gemini";
   return "agent";
 }
 

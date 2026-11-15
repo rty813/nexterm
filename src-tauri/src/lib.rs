@@ -1008,7 +1008,7 @@ fn mcp_screen_reply(request_id: String, snapshot: mcp::ScreenSnapshot) {
     mcp::screen_reply(&request_id, snapshot);
 }
 
-/// The command line that adds Nexterm to an agent CLI ("claude" or "codex") as an MCP server.
+/// The command line that adds Nexterm to an agent CLI ("claude", "codex" or "gemini") as an MCP server.
 #[tauri::command]
 fn mcp_client_command(client: String) -> String {
     let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "nexterm.exe".into());

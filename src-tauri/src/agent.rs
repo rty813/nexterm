@@ -1,4 +1,4 @@
-//! AI agent status (Claude Code, Codex ...) reported by their lifecycle hooks.
+//! AI agent status (Claude Code, Codex, Gemini CLI ...) reported by their lifecycle hooks.
 //!
 //! Remote shells: the hook script writes OSC 7501 (Herdr's format) to the pane's tty and
 //! the terminal parses it. Local shells (ConPTY drops unknown OSC sequences): the hook
@@ -137,6 +137,11 @@ fn codex_dir() -> Option<PathBuf> {
     std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| home().map(|h| h.join(".codex")))
 }
 
+/// Gemini CLI keeps `.gemini` under GEMINI_CLI_HOME when that is set, else under the home directory.
+fn gemini_dir() -> Option<PathBuf> {
+    std::env::var_os("GEMINI_CLI_HOME").map(PathBuf::from).or_else(home).map(|h| h.join(".gemini"))
+}
+
 fn script_path() -> Option<PathBuf> {
     home().map(|h| h.join(".nexterm").join(if cfg!(windows) { "agent-state.ps1" } else { "agent-state.sh" }))
 }
@@ -146,8 +151,10 @@ fn script_path() -> Option<PathBuf> {
 pub struct LocalHookFiles {
     pub claude_dir: bool,
     pub codex_dir: bool,
+    pub gemini_dir: bool,
     pub claude_settings: Option<String>,
     pub codex_hooks: Option<String>,
+    pub gemini_settings: Option<String>,
     pub script_installed: bool,
     /// Installed script, to tell an outdated install.
     pub script: Option<String>,
@@ -156,11 +163,14 @@ pub struct LocalHookFiles {
 pub fn read_local() -> LocalHookFiles {
     let cd = claude_dir();
     let xd = codex_dir();
+    let gd = gemini_dir();
     LocalHookFiles {
         claude_dir: cd.as_ref().map(|d| d.is_dir()).unwrap_or(false),
         codex_dir: xd.as_ref().map(|d| d.is_dir()).unwrap_or(false),
+        gemini_dir: gd.as_ref().map(|d| d.is_dir()).unwrap_or(false),
         claude_settings: cd.and_then(|d| std::fs::read_to_string(d.join("settings.json")).ok()),
         codex_hooks: xd.and_then(|d| std::fs::read_to_string(d.join("hooks.json")).ok()),
+        gemini_settings: gd.and_then(|d| std::fs::read_to_string(d.join("settings.json")).ok()),
         script_installed: script_path().map(|p| p.is_file()).unwrap_or(false),
         script: script_path().and_then(|p| std::fs::read_to_string(p).ok()),
     }
@@ -173,6 +183,8 @@ pub struct LocalHookWrite {
     pub script: Option<String>,
     pub claude_settings: Option<String>,
     pub codex_hooks: Option<String>,
+    #[serde(default)]
+    pub gemini_settings: Option<String>,
 }
 
 fn write_with_backup(path: PathBuf, content: &str) -> Result<(), String> {
@@ -203,6 +215,9 @@ pub fn write_local(w: LocalHookWrite) -> Result<(), String> {
     }
     if let (Some(content), Some(dir)) = (&w.codex_hooks, codex_dir()) {
         write_with_backup(dir.join("hooks.json"), content)?;
+    }
+    if let (Some(content), Some(dir)) = (&w.gemini_settings, gemini_dir()) {
+        write_with_backup(dir.join("settings.json"), content)?;
     }
     Ok(())
 }

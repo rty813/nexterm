@@ -566,7 +566,8 @@ pub struct Caller {
     pub client: Option<String>,
 }
 
-/// "claude-code" -> "Claude Code", "codex-mcp-client" -> "Codex"; others as they are.
+/// "claude-code" -> "Claude Code", "codex-mcp-client" -> "Codex",
+/// "gemini-cli-mcp-client" -> "Gemini CLI"; others as they are.
 fn client_display(name: Option<&str>) -> String {
     let n = name.unwrap_or("").trim();
     let lower = n.to_ascii_lowercase();
@@ -574,6 +575,8 @@ fn client_display(name: Option<&str>) -> String {
         "Claude Code".into()
     } else if lower.contains("codex") {
         "Codex".into()
+    } else if lower.contains("gemini") {
+        "Gemini CLI".into()
     } else if n.is_empty() {
         "AI agent".into()
     } else {
@@ -1382,12 +1385,14 @@ fn serve(app: &AppHandle, stream: TcpStream, token: &str) -> std::io::Result<()>
 
 // ---------------------------------------------------------------- stdio bridge
 
-/// `claude mcp add ...` / `codex mcp add ...` for this exe. No `--` before the server
-/// command: both CLIs are npm `.ps1` shims on Windows, PowerShell swallows a bare `--`,
+/// `claude mcp add ...` / `codex mcp add ...` / `gemini mcp add ...` for this exe. No `--`
+/// before the server command: the CLIs are npm `.ps1` shims on Windows, PowerShell swallows a bare `--`,
 /// and the CLI then rejects the server's own flag. The bare `mcp` argument needs none.
 pub fn client_command(client: &str, exe: &str) -> String {
     match client {
         "codex" => format!("codex mcp add windterm \"{exe}\" mcp"),
+        // Gemini CLI's default scope is the project in the current directory.
+        "gemini" => format!("gemini mcp add --scope user windterm \"{exe}\" mcp"),
         _ => format!("claude mcp add --scope user windterm \"{exe}\" mcp"),
     }
 }
@@ -1415,7 +1420,7 @@ pub fn run_bridge() {
                 continue;
             }
         };
-        // Remember who connected ("claude-code", "codex-mcp-client"), for the confirm dialog.
+        // Remember who connected ("claude-code", "codex-mcp-client", "gemini-cli-mcp-client"), for the confirm dialog.
         if msg.get("method").and_then(Value::as_str) == Some("initialize") {
             caller.client = msg
                 .pointer("/params/clientInfo/name")
@@ -1490,6 +1495,7 @@ mod tests {
     fn client_names_for_the_dialog() {
         assert_eq!(client_display(Some("claude-code")), "Claude Code");
         assert_eq!(client_display(Some("codex-mcp-client")), "Codex");
+        assert_eq!(client_display(Some("gemini-cli-mcp-client")), "Gemini CLI");
         assert_eq!(client_display(None), "AI agent");
         assert_eq!(client_display(Some("cursor")), "cursor");
     }
@@ -1582,7 +1588,9 @@ mod tests {
         let exe = r"C:\Program Files\Nexterm\nexterm.exe";
         assert_eq!(client_command("claude", exe), format!("claude mcp add --scope user windterm \"{exe}\" mcp"));
         assert_eq!(client_command("codex", exe), format!("codex mcp add windterm \"{exe}\" mcp"));
+        assert_eq!(client_command("gemini", exe), format!("gemini mcp add --scope user windterm \"{exe}\" mcp"));
         assert!(!client_command("codex", exe).contains(" -- "));
+        assert!(!client_command("gemini", exe).contains(" -- "));
     }
 
     #[test]

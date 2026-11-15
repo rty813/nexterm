@@ -299,6 +299,7 @@ export const extraResources = {
       copyMcpCommand: "复制 Claude Code 接入命令",
       mcpCommandCopied: "已复制。在终端运行这条命令，把 Nexterm 添加为 Claude Code 的 MCP 服务器。",
       copyCodexCommand: "复制 Codex 接入命令",
+      copyGeminiCommand: "复制 Gemini CLI 接入命令",
       requestTitle: "{{client}} 申请控制终端",
       requestResumeTitle: "{{client}} 申请继续控制终端",
       requestMessage: "{{client}} 想要操作窗格「{{name}}」：读取屏幕、输入命令。",
@@ -316,6 +317,7 @@ export const extraResources = {
       openMissing: "找不到会话「{{name}}」（可能已被删除）",
       openUnparsed: "无法识别连接地址「{{target}}」",
       codexCommandCopied: "已复制。在终端运行这条命令，把 Nexterm 添加为 Codex 的 MCP 服务器。",
+      geminiCommandCopied: "已复制。在终端运行这条命令，把 Nexterm 添加为 Gemini CLI 的 MCP 服务器。",
     },
     si: {
       menu: "安装 Shell 集成",
@@ -671,6 +673,7 @@ export const extraResources = {
       copyMcpCommand: "Copy Claude Code setup command",
       mcpCommandCopied: "Copied. Run it in a terminal to add Nexterm to Claude Code as an MCP server.",
       copyCodexCommand: "Copy Codex setup command",
+      copyGeminiCommand: "Copy Gemini CLI setup command",
       requestTitle: "{{client}} asks to control a terminal",
       requestResumeTitle: "{{client}} asks to continue controlling a terminal",
       requestMessage: "{{client}} wants to operate the pane \"{{name}}\": read its screen and type commands.",
@@ -688,6 +691,7 @@ export const extraResources = {
       openMissing: "Session \"{{name}}\" not found (deleted?)",
       openUnparsed: "Cannot understand the address \"{{target}}\"",
       codexCommandCopied: "Copied. Run it in a terminal to add Nexterm to Codex as an MCP server.",
+      geminiCommandCopied: "Copied. Run it in a terminal to add Nexterm to Gemini CLI as an MCP server.",
     },
     si: {
       menu: "Install shell integration",

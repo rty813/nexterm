@@ -11,13 +11,14 @@ import {
   hookStatus,
   mergeClaudeSettings,
   mergeCodexHooks,
+  mergeGeminiSettings,
   parseRemoteRead,
   remoteWrite,
   type HookStatus,
 } from "../utils/agentHooks";
 
 /**
- * Claude Code / Codex status hooks: read the install status and install or
+ * Claude Code / Codex / Gemini CLI status hooks: read the install status and install or
  * remove them, on this computer (target null) or on an SSH session's host.
  */
 export function useAgentHooks(setToast: (message: string) => void) {
@@ -40,6 +41,7 @@ export function useAgentHooks(setToast: (message: string) => void) {
           windows: true,
           claudeSettings: f.claudeSettings ?? null,
           codexHooks: f.codexHooks ?? null,
+          geminiSettings: f.geminiSettings ?? null,
           script: f.script ?? null,
         });
       }
@@ -60,32 +62,37 @@ export function useAgentHooks(setToast: (message: string) => void) {
     const plan = (f: {
       claudeDir: boolean;
       codexDir: boolean;
+      geminiDir: boolean;
       claudeSettings: string | null;
       codexHooks: string | null;
+      geminiSettings: string | null;
     }, windows = false) => {
-      if (install && !f.claudeDir && !f.codexDir) throw new Error(t("agent.noAgentDirs"));
+      if (install && !f.claudeDir && !f.codexDir && !f.geminiDir) throw new Error(t("agent.noAgentDirs"));
       const want = (dir: boolean, text: string | null) => (install ? dir : hasOurHooks(text));
       const claude = want(f.claudeDir, f.claudeSettings) ? mergeClaudeSettings(f.claudeSettings, install, windows) : null;
       const codex = want(f.codexDir, f.codexHooks) ? mergeCodexHooks(f.codexHooks, install, windows) : null;
+      const gemini = want(f.geminiDir, f.geminiSettings) ? mergeGeminiSettings(f.geminiSettings, install, windows) : null;
       if (claude !== null) apps.push("Claude Code");
       if (codex !== null) apps.push("Codex");
-      return { claude, codex };
+      if (gemini !== null) apps.push("Gemini CLI");
+      return { claude, codex, gemini };
     };
     try {
       if (target) {
         const f = parseRemoteRead(await exec(target, REMOTE_READ));
         if (!f.hasBase64) throw new Error(t("agent.noBase64"));
-        const { claude, codex } = plan(f);
-        const out = await exec(target, remoteWrite(install ? AGENT_STATE_SCRIPT : null, claude, codex));
+        const { claude, codex, gemini } = plan(f);
+        const out = await exec(target, remoteWrite(install ? AGENT_STATE_SCRIPT : null, claude, codex, gemini));
         if (!out.includes("WTN-OK")) throw new Error(out.trim() || "exec failed");
       } else {
         const f = await backend.agentHooksReadLocal();
-        const { claude, codex } = plan({
+        const { claude, codex, gemini } = plan({
           ...f,
           claudeSettings: f.claudeSettings ?? null,
           codexHooks: f.codexHooks ?? null,
+          geminiSettings: f.geminiSettings ?? null,
         }, true);
-        await backend.agentHooksWriteLocal({ script: install ? WINDOWS_AGENT_STATE_SCRIPT : null, claudeSettings: claude, codexHooks: codex });
+        await backend.agentHooksWriteLocal({ script: install ? WINDOWS_AGENT_STATE_SCRIPT : null, claudeSettings: claude, codexHooks: codex, geminiSettings: gemini });
       }
       if (target) await agentHookStatus(target, true);
       const where = target ? tabTitle(target) : t("agent.thisComputer");

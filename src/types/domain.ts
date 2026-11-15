@@ -529,7 +529,7 @@ export interface AiOpenResult {
 }
 
 /** Agent CLIs the pane menu can copy a setup command for. */
-export type McpClient = "claude" | "codex";
+export type McpClient = "claude" | "codex" | "gemini";
 
 /** Pane screen for the MCP `read_screen` tool (mcp.rs ScreenSnapshot). */
 export interface McpScreenSnapshot {

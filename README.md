@@ -9,7 +9,7 @@ English | [简体中文](README.zh-CN.md)
 It keeps WindTerm's familiar workflow (session tree, nested split panes, quick commands, one-click WindTerm import) and adds several built-in capabilities:
 
 - **Remote File Workflow**: Side-by-side SFTP browser (with automatic SCP fallback), parallel transfer queue, instant previews, and **local edit with auto-upload on save**.
-- **AI Agent Awareness & Control**: Live tab badges for **Claude Code / Codex**; desktop notifications when an agent **finishes, needs permission approval, or errors out** (click to jump straight to the pane); plus a built-in MCP server for human-approved terminal delegation.
+- **AI Agent Awareness & Control**: Live tab badges for **Claude Code / Codex / Gemini CLI**; desktop notifications when an agent **finishes, needs permission approval, or errors out** (click to jump straight to the pane); plus a built-in MCP server for human-approved terminal delegation.
 - **E2EE Phone Access**: Scan a QR code to view and control desktop terminals from your mobile browser, adapt terminal dimensions to your phone screen, manage sessions, and transfer files with zero-knowledge encryption.
 
 Windows 10 / 11 only. Current version: `0.1.0`.
@@ -40,9 +40,9 @@ Windows 10 / 11 only. Current version: `0.1.0`.
 
 ### AI Agents
 
-- **Live Tab Status**: Tabs display whether Claude Code or Codex is **Working**, **Waiting for Approval / Input**, **Finished (Unread)**, or in **Error**.
+- **Live Tab Status**: Tabs display whether Claude Code, Codex or Gemini CLI is **Working**, **Waiting for Approval / Input**, **Finished (Unread)**, or in **Error**.
 - **Instant Notifications**: When a background agent **completes a task**, **pauses for permission approval**, or **fails**, Nexterm flashes the taskbar and sends a system notification—click it to focus that exact pane.
-- **One-Click Hooks + Screen Fallback**: Install Claude Code / Codex hooks in one click on local Windows, remote SSH, or WSL (or copy a one-liner for other Linux / serial shells); falls back to screen detection when hooks aren't installed.
+- **One-Click Hooks + Screen Fallback**: Install Claude Code / Codex / Gemini CLI hooks in one click on local Windows, remote SSH, or WSL (or copy a one-liner for other Linux / serial shells); falls back to screen detection when hooks aren't installed.
 - **Human-in-the-Loop MCP Server**: Register Nexterm as an MCP server so agents can read screens, run commands, or drive TUI apps (`vim`, `top`). Every takeover or new session requires **dialog approval**, locks pane keyboard input against stray keystrokes, and lets you **Pause** or **Take Back Control** anytime.
 
 ### Phone Access

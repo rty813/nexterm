@@ -1693,7 +1693,7 @@ export const App: React.FC = () => {
     void backend
       .mcpClientCommand(client)
       .then((cmd) => backend.writeClipboard(cmd))
-      .then(() => setToast(t(client === "codex" ? "ai.codexCommandCopied" : "ai.mcpCommandCopied")))
+      .then(() => setToast(t(client === "codex" ? "ai.codexCommandCopied" : client === "gemini" ? "ai.geminiCommandCopied" : "ai.mcpCommandCopied")))
       .catch((e) => setToast(String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

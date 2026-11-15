@@ -1177,6 +1177,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
             { type: "separator" as const },
             { label: t("ai.copyMcpCommand"), onClick: () => extras.onCopyMcpCommand("claude") },
             { label: t("ai.copyCodexCommand"), onClick: () => extras.onCopyMcpCommand("codex") },
+            { label: t("ai.copyGeminiCommand"), onClick: () => extras.onCopyMcpCommand("gemini") },
           ].filter(Boolean) as MenuItem[],
         },
         (leaf.session.protocol === "ssh" || leaf.session.protocol === "wsl") && {
@@ -1185,6 +1186,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           children: [
             { label: hookLine("Claude Code", hooks?.claude), disabled: true, checked: hooks?.claude === "installed" },
             { label: hookLine("Codex", hooks?.codex), disabled: true, checked: hooks?.codex === "installed" },
+            { label: hookLine("Gemini CLI", hooks?.gemini), disabled: true, checked: hooks?.gemini === "installed" },
             ...(hooks?.outdated ? [{ label: t("agent.outdatedHint"), disabled: true }] : []),
             { type: "separator" as const },
             { label: hooksOn ? t("agent.reinstallRemote") : t("agent.installRemote"), onClick: () => extras.onAgentHooks(leaf, true) },
@@ -1195,7 +1197,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
                 void extras.agentHookStatus(leaf, true).then((st) =>
                   extras.onToast(
                     st
-                      ? `${hookLine("Claude Code", st.claude)}  ·  ${hookLine("Codex", st.codex)}${st.outdated ? `  ·  ${t("agent.outdatedHint")}` : ""}`
+                      ? `${hookLine("Claude Code", st.claude)}  ·  ${hookLine("Codex", st.codex)}  ·  ${hookLine("Gemini CLI", st.gemini)}${st.outdated ? `  ·  ${t("agent.outdatedHint")}` : ""}`
                       : t("agent.checkFailed")
                   )
                 ),

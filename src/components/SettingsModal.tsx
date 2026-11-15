@@ -400,6 +400,7 @@ const AgentHookStatusLine: React.FC<{ status: HookStatus | null | undefined }> =
     <div className="hook-status-line">
       {item("Claude Code", status.claude)}
       {item("Codex", status.codex)}
+      {item("Gemini CLI", status.gemini)}
       {status.outdated && <span className="hook-state hook-outdated">{t("agent.outdatedHint")}</span>}
     </div>
   );
