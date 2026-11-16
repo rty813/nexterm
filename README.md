@@ -14,6 +14,8 @@ It keeps WindTerm's familiar workflow (session tree, nested split panes, quick c
 
 Windows 10 / 11 only. Current version: `0.1.0`.
 
+![Nexterm main window: session tree, split panes running htop and Claude Code, SFTP file browser, quick-command bar](docs/media/screenshot.jpg)
+
 ## Features
 
 ### Connections
@@ -45,12 +47,24 @@ Windows 10 / 11 only. Current version: `0.1.0`.
 - **One-Click Hooks + Screen Fallback**: Install Claude Code / Codex / Gemini CLI hooks in one click on local Windows, remote SSH, or WSL (or copy a one-liner for other Linux / serial shells); falls back to screen detection when hooks aren't installed.
 - **Human-in-the-Loop MCP Server**: Register Nexterm as an MCP server so agents can read screens, run commands, or drive TUI apps (`vim`, `top`). Every takeover or new session requires **dialog approval**, locks pane keyboard input against stray keystrokes, and lets you **Pause** or **Take Back Control** anytime.
 
+<p align="center">
+  <a href="docs/media/mcp-demo.mp4"><img src="docs/media/mcp-demo.gif" alt="MCP demo: Claude Code asks Nexterm to open WSL and check disk usage" width="860" /></a>
+  <br />
+  <sub>Claude Code opens a WSL pane through Nexterm's MCP server, checks disk usage, and closes it again (2.5× speed; click for the full video).</sub>
+</p>
+
 ### Phone Access
 
 - **Self-Hosted Zero-Knowledge E2EE**: Uses a lightweight self-hosted relay (see [relay/README.md](relay/README.md); Docker included) with a one-click toolbar toggle. Pair via QR code—keys stay in the URL `#` fragment and never reach the relay, which sees only AES-256-GCM ciphertext.
 - **Mobile PWA & Adaptive Sizing**: Add to your home screen, use the touch bar (`Esc`, `Tab`, `Ctrl`, `Alt`, arrows), and connect one phone to multiple PCs at once; **"Take over size"** resizes the terminal to fit your phone screen and restores desktop dimensions when you leave.
 - **Direct Mobile Login & Reconnect**: Enter **SSH usernames / passwords** and confirm **host keys** directly from your phone when opening sessions (dismissing the desktop prompt automatically), plus reconnect or re-enter passwords on failed/closed tabs.
 - **Sessions, Files & Read-Only Mode**: Browse, create, edit, or launch saved PC sessions (saved passwords never leave your PC), upload/download remote files up to **1 GB**, or enable **"View only"** mode (up to 8 phones connected at once).
+
+<p align="center">
+  <a href="docs/media/phone-remote.mp4"><img src="docs/media/phone-remote.gif" alt="Phone access demo: controlling a desktop SSH session from a phone" width="860" /></a>
+  <br />
+  <sub>Typing into a desktop SSH session from the phone, with "Take over size" fitting the terminal to the phone screen (1.5× speed; click for the full video).</sub>
+</p>
 
 ### Config Sync & Backup
 

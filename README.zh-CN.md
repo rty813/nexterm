@@ -14,6 +14,8 @@
 
 仅支持 Windows 10 / 11，当前版本 `0.1.0`。
 
+![Nexterm 主界面：会话树、分屏运行 htop 与 Claude Code、SFTP 文件浏览器、快捷命令栏](docs/media/screenshot.jpg)
+
 ## 功能
 
 ### 连接
@@ -45,12 +47,24 @@
 - **一键 Hooks + 读屏兜底**：本机、SSH 与 WSL 支持一键安装状态 Hooks（其他 Linux / 串口可复制单行命令安装）；未装 Hooks 时自动回退为屏幕内容识别。
 - **MCP 终端受控托管**：可将 Nexterm 注册为 MCP 服务器，让 AI 读屏、执行命令或操作 `vim` / `top` 等交互程序。每次接管或新建会话均需**弹窗审批**，托管期间自动锁键盘防误触，随时可**暂停**或**一键收回控制**。
 
+<p align="center">
+  <a href="docs/media/mcp-demo.mp4"><img src="docs/media/mcp-demo.gif" alt="MCP 演示：Claude Code 通过 Nexterm 打开 WSL 查看磁盘占用" width="860" /></a>
+  <br />
+  <sub>Claude Code 通过 Nexterm 的 MCP 服务打开 WSL 窗格、查看磁盘占用后自动关闭（2.5 倍速，点击查看完整视频）。</sub>
+</p>
+
 ### 手机远程
 
 - **自建中继 + 端到端加密**：配套轻量自建中继（见 [relay/README.md](relay/README.md)，含 Docker 配置），工具栏可一键开关。扫码配对，密钥仅保存在 URL `#` 后，中继只转发 AES-256-GCM 密文。
 - **移动端 PWA 与自适应尺寸**：免安装添加到主屏幕，带 `Esc` / `Tab` / `Ctrl` / `Alt` / 方向键触控栏，一部手机可同时连多台电脑；支持「接管尺寸」将终端行列数临时适配手机屏幕，离开自动恢复。
 - **手机端直接登录与重连**：连接等待输入**用户名 / 密码**或首次确认 **SSH 主机密钥**时，可直接在手机弹窗中填写确认（电脑端弹窗同步关闭）；断线或失败后支持手机端直接重连或重输密码。
 - **会话、文件与只读模式**：手机端可浏览、新建、编辑并打开电脑会话（已存密码不下发手机），上传或下载最大 **1 GB** 远端文件；支持开启「手机只能查看」只读模式（最多 8 台设备同时在线）。
+
+<p align="center">
+  <a href="docs/media/phone-remote.mp4"><img src="docs/media/phone-remote.gif" alt="手机远程演示：在手机上操控电脑的 SSH 会话" width="860" /></a>
+  <br />
+  <sub>在手机上直接输入操控电脑端 SSH 会话，「接管尺寸」让终端适配手机屏幕（1.5 倍速，点击查看完整视频）。</sub>
+</p>
 
 ### 配置同步与备份
 
