@@ -20,6 +20,7 @@ pub mod sftp;
 pub mod shell_integration;
 pub mod ssh_conn;
 pub mod storage;
+pub mod sync;
 pub mod tcp_conn;
 pub mod telnet_conn;
 pub mod term_capture;
@@ -174,17 +175,104 @@ fn save_quick_commands(
 
 #[tauri::command]
 fn save_settings(ctx: State<'_, AppContext>, settings: AppSettings) -> Result<(), String> {
+    apply_settings_effects(&ctx, &settings);
+    let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
+    storage.save_settings(&settings).map_err(|e| e.to_string())
+}
+
+/// Push saved settings into the backend's running parts.
+fn apply_settings_effects(ctx: &AppContext, settings: &AppSettings) {
     ctx.close_to_tray.store(settings.close_to_tray, Ordering::Relaxed);
     ctx.ask_before_quit
         .store(extra_bool(&settings, "askBeforeCloseWindow", true), Ordering::Relaxed);
     crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
-    crate::xserver::configure(xserver_config(&settings));
-    crate::remote::configure(remote_config(&settings));
+    crate::xserver::configure(xserver_config(settings));
+    crate::remote::configure(remote_config(settings));
     if let Some(hub) = crate::transfer::hub() {
-        hub.set_limit(sftp_concurrency(&settings));
+        hub.set_limit(sftp_concurrency(settings));
     }
+}
+
+// ------------------------------------------------------------------ config export / import / sync
+
+/// Imported or downloaded data was written: refresh the backend and every window.
+fn config_applied(app: &AppHandle, ctx: &AppContext, applied: &[String]) {
+    use tauri::Emitter;
+    if applied.is_empty() {
+        return;
+    }
+    if applied.iter().any(|c| c == "settings") {
+        apply_settings_effects(ctx, &ctx.settings());
+    }
+    let _ = app.emit("config-applied", applied);
+    let _ = app.emit("settings-changed", ());
+    let _ = app.emit("sessions-changed", ());
+}
+
+#[tauri::command]
+fn config_export(ctx: State<'_, AppContext>, path: String, categories: Vec<String>, password: String) -> Result<(), String> {
+    let categories = sync::normalize_categories(&categories);
+    let data = {
+        let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
+        sync::collect(storage.base_dir(), &categories)
+    };
+    let bytes = sync::seal(&data, &password)?;
+    std::fs::write(&path, bytes).map_err(|e| format!("{}: {}", path, e))
+}
+
+#[tauri::command]
+fn config_inspect(path: String) -> Result<sync::BundleInfo, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))?;
+    Ok(sync::BundleInfo::from(&sync::Envelope::parse(&bytes)?))
+}
+
+#[tauri::command]
+fn config_import(
+    app: AppHandle,
+    ctx: State<'_, AppContext>,
+    path: String,
+    password: String,
+    categories: Vec<String>,
+    mode: sync::ImportMode,
+) -> Result<Vec<String>, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))?;
+    let data = sync::Envelope::parse(&bytes)?.open(&password)?;
+    let applied = sync::apply_locked(&ctx.storage, &data, &sync::normalize_categories(&categories), mode)?;
+    config_applied(&app, &ctx, &applied);
+    Ok(applied)
+}
+
+/// Reach the remote storage; returns what is there (None: no file yet).
+#[tauri::command]
+async fn sync_test(config: sync::SyncConfig) -> Result<Option<sync::BundleInfo>, String> {
+    match sync::remote_get(&config).await? {
+        Some(bytes) => Ok(Some(sync::BundleInfo::from(&sync::Envelope::parse(&bytes)?))),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+async fn sync_run(
+    app: AppHandle,
+    ctx: State<'_, AppContext>,
+    config: sync::SyncConfig,
+    action: sync::SyncAction,
+) -> Result<sync::SyncOutcome, String> {
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("busy".into());
+    }
+    let result = sync::run(&ctx.storage, &config, action).await;
+    RUNNING.store(false, Ordering::SeqCst);
+    let outcome = result?;
+    config_applied(&app, &ctx, &outcome.applied);
+    Ok(outcome)
+}
+
+#[tauri::command]
+fn sync_state(ctx: State<'_, AppContext>) -> Result<sync::SyncState, String> {
     let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
-    storage.save_settings(&settings).map_err(|e| e.to_string())
+    Ok(sync::load_state(storage.base_dir()))
 }
 
 #[tauri::command]
@@ -1397,6 +1485,12 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            config_export,
+            config_inspect,
+            config_import,
+            sync_test,
+            sync_run,
+            sync_state,
             load_initial_state,
             save_sessions,
             save_quick_commands,

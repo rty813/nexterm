@@ -5,6 +5,8 @@ import type {
   ModemSettings,
   MouseSettings,
   RemoteSettings,
+  SyncCategory,
+  SyncSettings,
   SftpSettings,
   XServerSettings,
 } from "../types/domain";
@@ -99,6 +101,34 @@ export const DEFAULT_REMOTE: RemoteSettings = { enabled: false, relayUrl: "", ho
 
 export function remoteOf(s: AppSettings): RemoteSettings {
   return { ...DEFAULT_REMOTE, ...(s.remote ?? {}) };
+}
+
+export const SYNC_CATEGORIES: SyncCategory[] = ["sessions", "quickCommands", "themes", "settings", "senders", "history"];
+
+export const DEFAULT_SYNC: SyncSettings = {
+  provider: "none",
+  s3: { endpoint: "", region: "", bucket: "", accessKeyId: "", secretAccessKey: "", prefix: "nexterm", pathStyle: false },
+  webdav: { url: "", username: "", password: "" },
+  folder: { path: "" },
+  gist: { token: "", gistId: "", apiUrl: "" },
+  fileName: "nexterm-config.json",
+  password: "",
+  categories: [...SYNC_CATEGORIES],
+  autoSync: false,
+  intervalMin: 30,
+};
+
+export function syncOf(s: AppSettings): SyncSettings {
+  const saved: Partial<SyncSettings> = s.sync ?? {};
+  return {
+    ...DEFAULT_SYNC,
+    ...saved,
+    s3: { ...DEFAULT_SYNC.s3, ...(saved.s3 ?? {}) },
+    webdav: { ...DEFAULT_SYNC.webdav, ...(saved.webdav ?? {}) },
+    folder: { ...DEFAULT_SYNC.folder, ...(saved.folder ?? {}) },
+    gist: { ...DEFAULT_SYNC.gist, ...(saved.gist ?? {}) },
+    categories: Array.isArray(saved.categories) ? saved.categories : [...SYNC_CATEGORIES],
+  };
 }
 
 export function xserverOf(s: AppSettings): XServerSettings {

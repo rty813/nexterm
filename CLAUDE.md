@@ -36,6 +36,7 @@ cd relay; npm test                    # 中继 + 加密协议（node:test；vite
 - `agent.rs`：Claude Code / Codex / Gemini CLI 的 hook 上报的 agent 状态（Gemini 的事件名和超时单位不同，见 `utils/agentHooks.ts`）。远程 shell 用 OSC 7501 写到 tty；本地 shell 因为 ConPTY 会丢掉未知 OSC，改为调用本地 HTTP 端点（环境变量 `NEXTERM_AGENT_URL`、`NEXTERM_PANE_ID`）。前端在没有 hook 时退回读屏识别（`utils/agentStatus.ts`）。
 - `remote.rs` / `remote_crypto.rs` / `remote_ops.rs`：手机远程。电脑以 host 身份连接自建中继（`relay/`：Node + ws，同时托管手机 PWA），两端之间 AES-256-GCM 端到端加密（配对密钥在二维码 URL 的 `#` 之后，存于 `remote_pairing.json`）。手机画面来自桌面 xterm.js：`services/remoteMirror.ts` 把已解析的输出和序列化快照经 `remote_feed` 转发；手机“接管尺寸”通过 `remote-size` 事件让窗格固定为手机的行列数。`remote_ops.rs` 处理会话管理和 SFTP 文件传输的请求/响应帧。**这条链路不能依赖 `setTimeout` 或渲染**（窗口最小化时 WebView2 会节流）。`remote_crypto.rs` 的测试向量由 `relay/public/crypto.js` 生成，改任一侧加密都要同步另一侧。
 - `storage.rs`：JSON 文件持久化（`sessions.json`、`quick_commands.json`、`settings.json`、`custom_themes.json`），位于 Tauri `app_data_dir`。`app_paths.rs` 给出数据目录和打包资源目录（`resources/vcxsrv` 是 X11 转发用的 VcXsrv；`resources/commands` 是补全目录，由 `commands.rs` 加载）。
+- `sync.rs`：配置导出/导入与云同步（S3 兼容存储用自写 SigV4 签名、WebDAV、GitHub Gist、本地/网络文件夹）。打包格式 `nexterm-config` v1，可选 PBKDF2 + AES-256-GCM 加密；`hash` 明文保留用于变更判断。`sync_state.json` 记录上次同步两侧的哈希，决定上传/下载/冲突。`settings` 中的 `sync`、`remote`、`logDir`、`zmodemDownloadDir`、`xserver` 属于本机，不导出也不被覆盖。写入前备份到 `<data>/backups/`（保留 10 份），完成后发 `config-applied` 事件让各窗口重新加载。前端界面是 `components/SettingsSync.tsx`。
 - `importer.rs`：从 `~/.wind/profiles/*/terminal/user.sessions`、`~/.ssh/config`、WindTerm 的 `scheme.theme` 导入。
 - `sftp.rs` / `scp.rs`：SSH 窗格的文件面板（前端是 `SftpPanel.tsx`）。
 

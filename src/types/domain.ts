@@ -315,8 +315,69 @@ export interface AppSettings {
   /** Phone remote through a self-hosted relay (remote.*). */
   remote?: RemoteSettings;
 
+  /** Config sync to S3 / WebDAV / a folder. Stays on this computer (never synced itself). */
+  sync?: SyncSettings;
+
   /** Session sidebar order: saved order, name, most recently used, most used. */
   sessionSort?: "default" | "name" | "recent" | "frequent";
+}
+
+/** What export / import / sync carry. Mirrors Rust `sync::CATEGORIES`. */
+export type SyncCategory = "sessions" | "quickCommands" | "themes" | "settings" | "senders" | "history";
+
+export type SyncProvider = "none" | "s3" | "webdav" | "gist" | "folder";
+
+/** Mirrors Rust `sync::SyncConfig` (plus the frontend-only auto sync options). */
+export interface SyncSettings {
+  provider: SyncProvider;
+  s3: {
+    /** Empty: AWS. R2 / MinIO / OSS / COS ... give their endpoint. */
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    prefix: string;
+    pathStyle: boolean;
+  };
+  webdav: { url: string; username: string; password: string };
+  folder: { path: string };
+  /** GitHub Gist: token with the gist scope; empty gistId = find / create by file name. */
+  gist: { token: string; gistId: string; apiUrl: string };
+  fileName: string;
+  /** Encrypts the synced file (AES-256-GCM); empty = plain JSON. */
+  password: string;
+  categories: SyncCategory[];
+  /** Sync at startup and every intervalMin minutes (0 = startup only). */
+  autoSync: boolean;
+  intervalMin: number;
+}
+
+/** Mirrors Rust `sync::BundleInfo`. */
+export interface ConfigBundleInfo {
+  encrypted: boolean;
+  exportedAt: string;
+  device: string;
+  /** Unknown (null) while the file is encrypted. */
+  categories: SyncCategory[] | null;
+}
+
+export type SyncResult = "uploaded" | "downloaded" | "merged" | "upToDate" | "conflict";
+
+/** Mirrors Rust `sync::SyncOutcome`. */
+export interface SyncOutcome {
+  result: SyncResult;
+  applied: SyncCategory[];
+  remoteDevice: string;
+  remoteTime: string;
+  at: number;
+}
+
+/** Mirrors Rust `sync::SyncState`. */
+export interface SyncStateInfo {
+  target: string;
+  lastSync: number;
+  lastResult: string;
 }
 
 /** Mirrors Rust `remote::RemoteConfig`. */

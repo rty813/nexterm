@@ -22,6 +22,11 @@ import type {
   SessionConfig,
   TunnelConfig,
   TerminalStatePayload,
+  ConfigBundleInfo,
+  SyncCategory,
+  SyncOutcome,
+  SyncSettings,
+  SyncStateInfo,
 } from "../types/domain";
 
 export interface HostKeyPromptPayload {
@@ -1130,6 +1135,40 @@ export const backend = {
       return;
     }
     await invoke("save_data_file", { name, value }).catch(() => undefined);
+  },
+
+  /** Write the selected categories to a file (encrypted when a password is given). */
+  async configExport(path: string, categories: SyncCategory[], password: string): Promise<void> {
+    await invoke("config_export", { path, categories, password });
+  },
+
+  async configInspect(path: string): Promise<ConfigBundleInfo> {
+    return invoke<ConfigBundleInfo>("config_inspect", { path });
+  },
+
+  /** Returns the categories that were written. Every window gets `config-applied`. */
+  async configImport(path: string, password: string, categories: SyncCategory[], mode: "merge" | "replace"): Promise<SyncCategory[]> {
+    return invoke<SyncCategory[]>("config_import", { path, password, categories, mode });
+  },
+
+  /** Reach the sync target; what is stored there (null: nothing yet). */
+  async syncTest(config: SyncSettings): Promise<ConfigBundleInfo | null> {
+    return invoke<ConfigBundleInfo | null>("sync_test", { config });
+  },
+
+  async syncRun(config: SyncSettings, action: "auto" | "push" | "pull" | "merge"): Promise<SyncOutcome> {
+    return invoke<SyncOutcome>("sync_run", { config, action });
+  },
+
+  async syncState(): Promise<SyncStateInfo | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke<SyncStateInfo>("sync_state").catch(() => null);
+  },
+
+  /** Imported / downloaded config was written to disk (the categories it touched). */
+  async onConfigApplied(handler: (categories: SyncCategory[]) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => undefined;
+    return listen<SyncCategory[]>("config-applied", (e) => handler(e.payload));
   },
 
   async writeTextFile(path: string, content: string): Promise<void> {

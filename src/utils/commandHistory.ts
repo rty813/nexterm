@@ -75,7 +75,17 @@ class CommandHistoryStore {
     }
   }
 
-  configure(settings: HistorySettings): void {
+  /** Read the file again (an import or sync replaced it). */
+  async reload(): Promise<void> {
+    window.clearTimeout(this.saveTimer);
+    this.saveTimer = 0;
+    this.loaded = false;
+    this.entries = [];
+    await this.load();
+    this.emit();
+  }
+
+    configure(settings: HistorySettings): void {
     this.settings = settings;
     if (this.prune()) {
       this.emit();

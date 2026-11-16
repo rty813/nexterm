@@ -72,7 +72,8 @@ import { ConfirmDialog, PasteDialog, type ConfirmAnswer, type ConfirmRequest } f
 import { SenderPanel } from "./components/SenderPanel";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { commandHistory, historyKeyOf } from "./utils/commandHistory";
-import { historyOf, modemOf, remoteOf, sftpOf } from "./utils/settingsDefaults";
+import { autoSyncInterval, syncErrorKey, syncReady } from "./utils/configSync";
+import { historyOf, modemOf, remoteOf, sftpOf, syncOf } from "./utils/settingsDefaults";
 import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem } from "./types/domain";
 import { AiRequestDialog } from "./components/AiRequestDialog";
 import { PortForwardPanel, type ForwardTarget } from "./components/PortForwardPanel";
@@ -817,6 +818,58 @@ export const App: React.FC = () => {
     });
     return () => void un.then((f) => f());
   }, []);
+
+  // An import or sync rewrote data files: reload what this window keeps in memory.
+  useEffect(() => {
+    const un = backend.onConfigApplied((categories) => {
+      void backend.loadInitialState().then((snap) => {
+        if (categories.includes("quickCommands")) setQuickCommands(snap.quickCommands);
+        if (categories.includes("themes")) setCustomThemes(snap.customThemes);
+        if (categories.includes("settings")) commandHistory.configure(historyOf(snap.settings));
+      });
+      if (categories.includes("senders")) {
+        void backend.loadDataFile<SenderItem[]>("senders").then((list) => setSenders(Array.isArray(list) ? list : []));
+      }
+      if (categories.includes("history")) {
+        void commandHistory.reload();
+        void backend.loadDataFile<string[]>("quick_connect_history").then((list) => setQuickHistory(Array.isArray(list) ? list : []));
+      }
+    });
+    return () => void un.then((f) => f());
+  }, []);
+
+  // Automatic config sync (main window only): at startup, then every intervalMin minutes.
+  const syncSettings = syncOf(settings);
+  const syncKey = JSON.stringify(syncSettings);
+  const syncLoaded = initialSnapshot !== null;
+  useEffect(() => {
+    if (!isMainWindow || !syncLoaded) return;
+    const cfg = syncOf(settings);
+    if (!cfg.autoSync || !syncReady(cfg)) return;
+    let lastNote = "";
+    const tick = () => {
+      void backend
+        .syncRun(cfg, "auto")
+        .then((out) => {
+          const note = out.result === "downloaded" || out.result === "conflict" ? `cfgSync.auto.${out.result}` : "";
+          if (note && note !== lastNote) setToast(t(note));
+          lastNote = note;
+        })
+        .catch((e) => {
+          const key = syncErrorKey(e);
+          // "busy": a sync from the settings dialog is running.
+          if (String(e) === "busy") return;
+          const note = t("cfgSync.auto.failed", { error: key ? t(key) : String(e) });
+          if (note !== lastNote) setToast(note);
+          lastNote = note;
+        });
+    };
+    tick();
+    const every = autoSyncInterval(cfg);
+    const timer = every ? window.setInterval(tick, every) : 0;
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMainWindow, syncLoaded, syncKey]);
 
   const saveSettings = useCallback((next: AppSettings) => {
     setSettings(next);
@@ -2583,6 +2636,13 @@ export const App: React.FC = () => {
           onSave={(next) => {
             saveSettings(next);
             setSettingsModalOpen(false);
+          }}
+          onConfigApplied={(categories) => {
+            // The dialog's draft is stale now: close it rather than let Save write it back.
+            if (categories.includes("settings")) {
+              setSettingsModalOpen(false);
+              setToast(t("cfgSync.settingsReloaded"));
+            }
           }}
         />
       )}

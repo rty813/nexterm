@@ -3,13 +3,14 @@ import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentH
 import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
 import { X } from "lucide-react";
-import type { AppSettings, SessionConfig, ThemeDefinition } from "../types/domain";
+import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
-export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "highlight" | "keys" | "toolbar";
+export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "highlight" | "keys" | "toolbar";
 import { KeymapEditor, ToolbarEditor } from "./SettingsExtra";
 import { HighlightEditor } from "./HighlightEditor";
 import { RemoteSettingsEditor } from "./SettingsRemote";
+import { SyncSettingsEditor } from "./SettingsSync";
 import { useCloseGuard } from "./useCloseGuard";
 
 interface SettingsModalProps {
@@ -26,6 +27,8 @@ interface SettingsModalProps {
   /** Hook install status on this computer (null: could not be read). */
   localHookStatus: () => Promise<HookStatus | null>;
   onTestNotification: () => void;
+  /** Imported / synced data was written to this computer. */
+  onConfigApplied?: (categories: SyncCategory[]) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -37,6 +40,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onAgentHooksLocal,
   localHookStatus,
   onTestNotification,
+  onConfigApplied,
   sessions = [],
 }) => {
   // Hook install status on this computer (undefined while reading).
@@ -68,7 +72,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {prompt}
 
         <div className="adv-tabs settings-tabs">
-          {(["general", "terminal", "mouse", "logs", "xserver", "remote", "highlight", "keys", "toolbar"] as const).map((id) => (
+          {(["general", "terminal", "mouse", "logs", "xserver", "remote", "sync", "highlight", "keys", "toolbar"] as const).map((id) => (
             <button key={id} type="button" className={`adv-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
               {t(`settingsModal.tab.${id}`)}
             </button>
@@ -90,6 +94,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {tab === "logs" && <LogTransferSettings draft={draft} onChange={setDraft} />}
           {tab === "xserver" && <XServerSettingsEditor draft={draft} onChange={setDraft} />}
           {tab === "remote" && <RemoteSettingsEditor draft={draft} onChange={setDraft} saved={settings} />}
+          {tab === "sync" && (
+            <SyncSettingsEditor
+              draft={draft}
+              onChange={setDraft}
+              saved={settings}
+              onApplied={(categories) => onConfigApplied?.(categories)}
+            />
+          )}
           <div className={tab === "general" ? "settings-general" : "hidden"}>
           <div className="form-grid-2">
             <label className="field">
