@@ -77,6 +77,29 @@
 - **无缝迁移**：支持从 **WindTerm** 导入会话、快捷命令与配色，从 `~/.ssh/config` 导入主机。
 - **个性化**：内置 4 套主题并支持自定义配色、快捷键与工具栏；支持简体中文与英文界面。
 
+## 性能
+
+与 WindTerm 2.7.0 对比，使用 WindTerm 官方的[吞吐测试方法](https://github.com/kingToolbox/WindTerm#terminal-performance)（耗时越短越好）：
+
+| 测试 | Nexterm | WindTerm 2.7.0 |
+| --- | --- | --- |
+| `cat` 100 MB 随机 base64 文本 | **4.43 s** | 4.98 s |
+| `seq 1 1000000` | **1.39 s** | 2.04 s |
+| `seq 1 2000000` | **2.29 s** | 2.97 s |
+| `seq 1 5000000` | 4.92 s | **4.73 s** |
+| `seq 1 10000000` | 9.26 s | **7.54 s** |
+
+内存（整个进程树的专用工作集，含 WebView2）：
+
+| 状态 | Nexterm | WindTerm 2.7.0 |
+| --- | --- | --- |
+| 空闲，打开一个会话 | 186 MB | **43 MB** |
+| 输出 `seq 1 1000000` 后 | 峰值 434 MB，稳定后 284 MB | **75 MB** |
+
+- **内存去向**：约 170 MB 是 WebView2 的固定开销。Nexterm 保留 5 万行回滚，xterm.js 按字符格固定大小存储；WindTerm 压缩回滚区并保留全部行。峰值大部分是 JavaScript 尚未回收的垃圾，输出停止后一分钟内释放。
+- **测试环境**：AMD Ryzen 7 5700G、32 GB 内存、Windows。两个终端都通过 Telnet 连接本机 WSL 中的服务端，窗口大小相同。计时从命令开始，到终端处理完全部输出为止：以光标位置查询（DSR）的回复为准；WindTerm 在 Telnet 下不回复 DSR，改为以程序 CPU 回落到空闲为准。每项先预热一次，再取 3 次平均。
+- **复现**：在被测终端里运行 [`bench/bench.sh`](bench/bench.sh)，并在 Windows 上运行 [`bench/mem.ps1`](bench/mem.ps1) 采样终端进程树的内存。
+
 ## 构建
 
 环境要求：[Node.js](https://nodejs.org) >= 20、[Rust](https://rustup.rs) stable（MSVC）、[Tauri v2 Windows 依赖](https://tauri.app/start/prerequisites/)。

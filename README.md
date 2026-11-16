@@ -77,6 +77,29 @@ Windows 10 / 11 only. Current version: `0.1.0`.
 - **Easy Migration**: Import sessions, quick commands, and color schemes from **WindTerm**, or hosts from `~/.ssh/config`.
 - **Customization**: 4 built-in themes + custom themes, configurable shortcuts and toolbar, in English and Simplified Chinese.
 
+## Performance
+
+Compared with WindTerm 2.7.0 using WindTerm's own [throughput test](https://github.com/kingToolbox/WindTerm#terminal-performance) (lower is better):
+
+| Test | Nexterm | WindTerm 2.7.0 |
+| --- | --- | --- |
+| `cat` 100 MB random base64 text | **4.43 s** | 4.98 s |
+| `seq 1 1000000` | **1.39 s** | 2.04 s |
+| `seq 1 2000000` | **2.29 s** | 2.97 s |
+| `seq 1 5000000` | 4.92 s | **4.73 s** |
+| `seq 1 10000000` | 9.26 s | **7.54 s** |
+
+Memory (private working set of the whole process tree, WebView2 included):
+
+| State | Nexterm | WindTerm 2.7.0 |
+| --- | --- | --- |
+| Idle, one session open | 186 MB | **43 MB** |
+| After `seq 1 1000000` | 434 MB peak, 284 MB once settled | **75 MB** |
+
+- **Where the memory goes:** about 170 MB is the fixed cost of WebView2. Nexterm keeps 50,000 lines of scrollback, stored by xterm.js at a fixed size per character cell. WindTerm compresses its scrollback and keeps every line. Most of the peak is JavaScript garbage, freed within a minute of the output stopping.
+- **Setup:** AMD Ryzen 7 5700G, 32 GB RAM, Windows. Both terminals connect over Telnet to a server in WSL on the same machine, with the same window size. Each time runs from starting the command until the terminal has processed all output. That moment is the reply to a cursor-position query (DSR), or the point where the app's CPU goes idle, since WindTerm does not answer DSR over Telnet. Each test is one warm-up run followed by the average of 3 runs.
+- **Reproduce:** run [`bench/bench.sh`](bench/bench.sh) inside the terminal under test, and [`bench/mem.ps1`](bench/mem.ps1) on Windows to sample the memory of the terminal's process tree.
+
 ## Building
 
 Prerequisites: [Node.js](https://nodejs.org) >= 20, [Rust](https://rustup.rs) stable (MSVC), and [Tauri v2 Windows prerequisites](https://tauri.app/start/prerequisites/).
