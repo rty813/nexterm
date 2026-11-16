@@ -4,6 +4,7 @@ import { Copy, RefreshCw, Smartphone, X } from "lucide-react";
 import type { AppSettings } from "../types/domain";
 import { backend, type RemotePairing, type RemoteStatus } from "../services/backend";
 import { remoteOf } from "../utils/settingsDefaults";
+import { confirmAsk } from "../utils/confirm";
 
 type Props = { draft: AppSettings; onChange: (next: AppSettings) => void; saved: AppSettings };
 
@@ -94,7 +95,9 @@ export const RemoteSettingsEditor: React.FC<Props> = ({ draft, onChange, saved }
                 className="btn-secondary btn-sm"
                 title={t("remote.resetTip")}
                 onClick={() => {
-                  if (window.confirm(t("remote.resetConfirm"))) void backend.remotePairing(true).then(setPairing);
+                  void confirmAsk(t("remote.resetConfirm")).then(async (ok) => {
+                    if (ok) setPairing(await backend.remotePairing(true));
+                  });
                 }}
               >
                 <RefreshCw size={12} /> {t("remote.reset")}

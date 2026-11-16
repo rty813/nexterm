@@ -5,6 +5,7 @@ import type { AppSettings, ConfigBundleInfo, SyncCategory, SyncOutcome, SyncSett
 import { backend } from "../services/backend";
 import { SYNC_CATEGORIES, syncOf } from "../utils/settingsDefaults";
 import { exportFileName, syncErrorKey, syncReady } from "../utils/configSync";
+import { confirmAsk } from "../utils/confirm";
 
 type Props = {
   draft: AppSettings;
@@ -96,7 +97,7 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
 
   const syncNow = (action: "auto" | "push" | "pull" | "merge") =>
     run(action, async () => {
-      if ((action === "push" || action === "pull") && !window.confirm(t(`cfgSync.confirm.${action}`))) return;
+      if ((action === "push" || action === "pull") && !(await confirmAsk(t(`cfgSync.confirm.${action}`)))) return;
       await persistTarget();
       const out = await backend.syncRun(s, action);
       setState(await backend.syncState());
@@ -448,7 +449,7 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
               disabled={disabled || !importCats.length}
               onClick={() =>
                 void run("import", async () => {
-                  if (importMode === "replace" && !window.confirm(t("cfgSync.confirm.replace"))) return;
+                  if (importMode === "replace" && !(await confirmAsk(t("cfgSync.confirm.replace")))) return;
                   const applied = await backend.configImport(importPath, importPassword, importCats, importMode);
                   setNotice({ kind: "ok", text: t("cfgSync.imported", { list: applied.map((c) => t(`cfgSync.cat.${c}`)).join(", ") || "-" }) });
                   if (applied.length) onApplied(applied);

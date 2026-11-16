@@ -5,6 +5,7 @@ import type { AppSettings, ClipboardPermission, MouseSettings, SessionConfig, Ta
 import { backend, type XServerStatus } from "../services/backend";
 import { autoCompleteOf, historyOf, modemOf, mouseOf, sftpOf, xserverOf } from "../utils/settingsDefaults";
 import { commandHistory } from "../utils/commandHistory";
+import { confirmAsk } from "../utils/confirm";
 
 type Props = { draft: AppSettings; onChange: (next: AppSettings) => void };
 
@@ -75,7 +76,7 @@ export const TerminalSettings: React.FC<Props & { sessions: SessionConfig[] }> =
       />
       <div className="settings-inline">
         <span className="adv-hint">{t("st.historyCount", { count: commandHistory.all().length })}</span>
-        <button type="button" className="btn-ghost btn-sm" onClick={() => window.confirm(t("history.clearConfirm")) && commandHistory.clear()}>
+        <button type="button" className="btn-ghost btn-sm" onClick={() => void confirmAsk(t("history.clearConfirm")).then((ok) => ok && commandHistory.clear())}>
           {t("history.clear")}
         </button>
       </div>

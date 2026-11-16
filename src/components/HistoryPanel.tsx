@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Copy, History, Play, Trash2, X } from "lucide-react";
 import { commandHistory } from "../utils/commandHistory";
 import { backend } from "../services/backend";
+import { confirmAsk } from "../utils/confirm";
 
 /** Docked list of the command history (WindTerm History pane): search, send, copy, delete. */
 export const HistoryPanel: React.FC<{
@@ -91,7 +92,7 @@ export const HistoryPanel: React.FC<{
             type="button"
             className="btn-ghost btn-sm danger-hover"
             disabled={!commandHistory.all().length}
-            onClick={() => window.confirm(t("history.clearConfirm")) && commandHistory.clear()}
+            onClick={() => void confirmAsk(t("history.clearConfirm")).then((ok) => ok && commandHistory.clear())}
           >
             <Trash2 size={12} /> {t("history.clear")}
           </button>
