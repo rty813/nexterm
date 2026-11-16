@@ -18,6 +18,14 @@ export type MenuItem =
       clearLabel: string;
     }
   | {
+      /** A label followed by a row of small toggle buttons (sync channels A–D). */
+      type: "choices";
+      label: string;
+      options: MenuChoice[];
+      disabled?: boolean;
+      onPick: (value: string) => void;
+    }
+  | {
       type?: "item";
       label: string;
       icon?: React.ReactNode;
@@ -31,6 +39,14 @@ export type MenuItem =
       /** Opens a submenu on hover. */
       children?: MenuItem[];
     };
+
+export interface MenuChoice {
+  value: string;
+  label: string;
+  checked?: boolean;
+  /** Tooltip. */
+  title?: string;
+}
 
 interface MenuState {
   x: number;
@@ -201,6 +217,35 @@ const MenuPanel: React.FC<{
               </button>
             )}
           </div>
+        ) : item.type === "choices" ? (
+          <div
+            key={i}
+            className={`context-menu-choices ${item.disabled ? "disabled" : ""}`}
+            onMouseEnter={() => {
+              window.clearTimeout(timer.current);
+              timer.current = window.setTimeout(() => setOpenSub(null), 150);
+            }}
+          >
+            <span className="context-menu-icon" />
+            <span className="context-menu-label">{item.label}</span>
+            <span className="menu-choices">
+            {item.options.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                disabled={item.disabled}
+                className={`menu-choice ${o.checked ? "on" : ""}`}
+                title={o.title}
+                onClick={() => {
+                  onClose();
+                  item.onPick(o.value);
+                }}
+              >
+                {o.label}
+              </button>
+            ))}
+            </span>
+          </div>
         ) : (
           <button
             key={i}
@@ -237,7 +282,7 @@ const MenuPanel: React.FC<{
       )}
       {openSub && (() => {
         const parent = items[openSub.index];
-        if (!parent || parent.type === "separator" || parent.type === "colors" || !parent.children) return null;
+        if (!parent || parent.type === "separator" || parent.type === "colors" || parent.type === "choices" || !parent.children) return null;
         return (
           <MenuPanel
             items={parent.children}
@@ -282,6 +327,12 @@ type WireItem =
       clearLabel: string;
     }
   | {
+      type: "choices";
+      label: string;
+      options: MenuChoice[];
+      disabled?: boolean;
+    }
+  | {
       type: "item";
       label: string;
       shortcut?: string;
@@ -310,6 +361,8 @@ interface PopupAction {
   path: number[];
   op?: "pick" | "clear";
   color?: string;
+  /** Picked option of a choices row. */
+  value?: string;
 }
 
 function toWire(items: MenuItem[]): WireItem[] {
@@ -318,6 +371,7 @@ function toWire(items: MenuItem[]): WireItem[] {
     if (it.type === "colors") {
       return { type: "colors", colors: it.colors, current: it.current, disabled: it.disabled, clearLabel: it.clearLabel };
     }
+    if (it.type === "choices") return { type: "choices", label: it.label, options: it.options, disabled: it.disabled };
     return {
       type: "item",
       label: it.label,
@@ -344,7 +398,7 @@ function runPopupAction(a: PopupAction) {
     item = list[a.path[i]];
     if (!item) return;
     if (i < a.path.length - 1) {
-      if (item.type === "separator" || item.type === "colors" || !item.children) return;
+      if (item.type === "separator" || item.type === "colors" || item.type === "choices" || !item.children) return;
       list = item.children;
     }
   }
@@ -352,6 +406,10 @@ function runPopupAction(a: PopupAction) {
   if (item.type === "colors") {
     if (a.op === "pick" && a.color) item.onPick(a.color);
     else if (a.op === "clear") item.onClear();
+    return;
+  }
+  if (item.type === "choices") {
+    if (a.value !== undefined) item.onPick(a.value);
     return;
   }
   item.onClick?.();
@@ -481,8 +539,8 @@ export const MenuHost: React.FC = () => {
   }, [menu]);
 
   if (!menu) return null;
-  const send = (path: number[], op?: "pick" | "clear", color?: string) => {
-    const action: PopupAction = { id: menu.id, path, op, color };
+  const send = (path: number[], op?: "pick" | "clear", color?: string, value?: string) => {
+    const action: PopupAction = { id: menu.id, path, op, color, value };
     void emitTo(menu.from, "ctx-menu-action", action);
   };
   const fromWire = (list: WireItem[], path: number[]): MenuItem[] =>
@@ -490,6 +548,7 @@ export const MenuHost: React.FC = () => {
       const p = [...path, i];
       if (it.type === "separator") return it;
       if (it.type === "colors") return { ...it, onPick: (c: string) => send(p, "pick", c), onClear: () => send(p, "clear") };
+      if (it.type === "choices") return { ...it, onPick: (v: string) => send(p, "pick", undefined, v) };
       return {
         ...it,
         onClick: it.children ? undefined : () => send(p),

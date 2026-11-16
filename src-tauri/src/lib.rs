@@ -587,8 +587,9 @@ async fn ssh_exec(ctx: State<'_, AppContext>, instance_id: String, command: Stri
     rx.await.map_err(|_| "SSH 连接已断开".to_string())?
 }
 
-/// Execute the hook installer in the default WSL distribution and user, matching
-/// the application's WSL session launcher (wsl.exe with no distro/user override).
+/// Run a POSIX sh command in the default WSL distribution and user (agent hook installer,
+/// tmux panel), matching the application's WSL session launcher (wsl.exe with no
+/// distro/user override).
 #[tauri::command]
 async fn wsl_agent_exec(ctx: State<'_, AppContext>, instance_id: String, command: String) -> Result<String, String> {
     let runtime = ctx.connections.pane_runtime(&instance_id).ok_or("该窗格没有活动的连接")?;

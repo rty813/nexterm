@@ -138,6 +138,7 @@ export const TOOLBAR_ITEMS = [
   "portForward",
   "sender",
   "history",
+  "tmux",
   "files",
   "remote",
   "settings",

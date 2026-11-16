@@ -23,6 +23,7 @@ import {
   Pause,
   Play,
   Square,
+  LogOut,
 } from "lucide-react";
 
 import { buildXtermTheme } from "../constants/themes";
@@ -37,6 +38,7 @@ import {
   type AppSettings,
   type SplitDirection,
   type SyncChannel,
+  type SyncInputScope,
   type TerminalLeafNode,
   type TerminalOptions,
   type ThemeDefinition,
@@ -92,30 +94,27 @@ export interface PaneExtras {
   syncPaused: boolean;
   /** Panes paused one by one (they neither send nor receive synced input). */
   syncPausedPanes: Record<string, boolean>;
+  /** How typing is broadcast (the sync bar shows channel or whole-workspace sync). */
+  syncScope: SyncInputScope;
+  /** Sync bar "关闭": a channel removes every pane from it; without one, sync input turns off. */
+  onCloseSync: (channel?: SyncChannel) => void;
   logPaths: Record<string, string>;
   onSetSyncChannel: (paneId: string, channel: SyncChannel | null) => void;
   onToggleSyncPause: () => void;
   onToggleSyncPausePane: (paneId: string) => void;
-  onMoveToNewGroup: (paneId: string, direction: SplitDirection) => void;
-  /** Number of tabs in the pane's group (moving needs at least two). */
-  groupTabCount: (paneId: string) => number;
   onToggleLog: (leaf: TerminalLeafNode) => void;
   onLogStarted: (paneId: string, path: string) => void;
   onRevealLog: (paneId: string) => void;
-  onDuplicateInNewTab: (leaf: TerminalLeafNode) => void;
+  /** Duplicate shortcut. reuse: true = new channel on the live SSH connection, false = new connection, omitted = per settings. */
+  onDuplicateInNewTab: (leaf: TerminalLeafNode, reuse?: boolean) => void;
   onDisconnect: (paneId: string) => void;
-  /** Tab color, rename and window moves, shown in the pane menu too. */
-  onSetTabColor: (paneId: string, color: string | null) => void;
-  onMoveToNewWindow: (paneId: string) => void;
-  moveToWindowTargets: () => Promise<{ label: string; title: string }[]>;
-  onMoveToWindow: (paneId: string, windowLabel: string) => void;
   /** Zoom (maximize) the pane's group inside the window. */
   onToggleZoom: (paneId: string) => void;
   isZoomed: boolean;
   /** Effective shortcuts, for menu hints. */
   keymap: Record<string, string>;
-  /** Run a tmux command on the pane's SSH connection. */
-  onTmux: (leaf: TerminalLeafNode) => Promise<MenuItem[]>;
+  /** Open the tmux sessions panel on this pane (SSH / WSL). */
+  onTmux: (leaf: TerminalLeafNode) => void;
   /** True for key events bound to an app action; xterm then ignores them. */
   isAppShortcut: (ev: KeyboardEvent) => boolean;
   /** Add a permanent text highlight (from the selection or the search bar). */
@@ -125,8 +124,6 @@ export interface PaneExtras {
   onClearHighlights: () => void;
   /** Open Settings on the Highlight tab. */
   onManageHighlights: () => void;
-  /** Open the port forwarding panel for this pane. */
-  onOpenPortForward: (paneId: string) => void;
   /** Lock / unlock the session: a locked session cannot be closed or disconnected. */
   onToggleLock: (paneId: string) => void;
   /** Short message at the bottom of the window. */
@@ -174,10 +171,6 @@ export interface PaneExtras {
   onModemTransfer: (leaf: TerminalLeafNode, protocol: "xmodem" | "ymodem" | "zmodem", send: boolean) => void;
   /** Open the SFTP file browser on this SSH pane (at its current directory when known). */
   onOpenFileBrowser: (paneId: string) => void;
-  /** Duplicate this SSH tab on its existing connection (no new login). */
-  onDuplicateReuse: (leaf: TerminalLeafNode) => void;
-  /** Open the Sender panel aimed at this pane. */
-  onOpenSender: (paneId: string) => void;
   /** Quick commands, for auto completion. */
   quickCommands: QuickCommand[];
 }
@@ -285,7 +278,6 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     visibleRef.current = visible;
     quietUntil.current = Date.now() + 1500;
   }, [visible]);
-  const [tmuxItems, setTmuxItems] = useState<MenuItem[] | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const trackerRef = useRef<CommandTracker | null>(null);
@@ -966,6 +958,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const channel = extras.syncChannels[leaf.paneId];
   const pausedOnItsOwn = Boolean(extras.syncPausedPanes[leaf.paneId]);
   const syncPausedHere = Boolean(syncBadge) && (extras.syncPaused || pausedOnItsOwn);
+  const inChannel = extras.syncScope === "channels" && Boolean(channel);
 
   const showPaneMenu = async (e: React.MouseEvent) => {
     const term = xtermRef.current;
@@ -1006,11 +999,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     };
     const modemOk = leaf.status === "connected" && leaf.session.protocol !== "powershell" && leaf.session.protocol !== "cmd" && leaf.session.protocol !== "wsl" && leaf.session.protocol !== "custom";
     const k = extras.keymap;
-    const [windows, shellStatus] = await Promise.all([
-      extras.moveToWindowTargets(),
-      backend.shellIntegrationStatus(leaf.paneId).catch(() => null),
-    ]);
-    const tmux = leaf.session.protocol === "ssh" && leaf.status === "connected";
+    const shellStatus = await backend.shellIntegrationStatus(leaf.paneId).catch(() => null);
+    const tmux = (leaf.session.protocol === "ssh" || leaf.session.protocol === "wsl") && leaf.status === "connected";
     // Hook status of this host (cached after the first look; waits briefly for it).
     const hooks = leaf.status === "connected" && (leaf.session.protocol === "ssh" || leaf.session.protocol === "wsl")
       ? await Promise.race([extras.agentHookStatus(leaf), new Promise<null>((r) => window.setTimeout(() => r(null), 1500))])
@@ -1091,7 +1081,6 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
             { label: t("fold.unfoldAll"), shortcut: k["terminal.unfoldAll"], disabled: !folder?.hasFolds(), onClick: () => folder?.unfoldAll() },
           ],
         },
-        { label: t("sender.open"), shortcut: k["view.sender"], onClick: () => extras.onOpenSender(leaf.paneId) },
         {
           label: t("maint.menu"),
           children: [
@@ -1120,46 +1109,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           onClick: () => setShowTimestamps((v) => !v),
         },
         { type: "separator" },
-        { label: t("pane.splitRight"), onClick: () => onSplit(leaf.paneId, "horizontal") },
-        { label: t("pane.splitDown"), onClick: () => onSplit(leaf.paneId, "vertical") },
-        {
-          label: t("menu.moveRight"),
-          disabled: extras.groupTabCount(leaf.paneId) < 2,
-          onClick: () => extras.onMoveToNewGroup(leaf.paneId, "horizontal"),
-        },
-        {
-          label: t("menu.moveDown"),
-          disabled: extras.groupTabCount(leaf.paneId) < 2,
-          onClick: () => extras.onMoveToNewGroup(leaf.paneId, "vertical"),
-        },
         { label: extras.isZoomed ? t("menu.unzoom") : t("menu.zoom"), shortcut: k["split.zoom"], onClick: () => extras.onToggleZoom(leaf.paneId) },
-        { label: t("menu.duplicateTab"), shortcut: k["tab.duplicate"], onClick: () => extras.onDuplicateInNewTab(leaf) },
-        leaf.session.protocol === "ssh" && {
-          label: t("menu.duplicateReuse"),
-          disabled: leaf.status !== "connected",
-          onClick: () => extras.onDuplicateReuse(leaf),
-        },
-        {
-          label: t("menu.moveToWindow"),
-          children: [
-            { label: t("menu.moveToNewWindow"), onClick: () => extras.onMoveToNewWindow(leaf.paneId) },
-            ...(windows.length ? [{ type: "separator" as const }] : []),
-            ...windows.map((w) => ({ label: w.title || w.label, onClick: () => extras.onMoveToWindow(leaf.paneId, w.label) })),
-          ],
-        },
-        {
-          label: t("menu.tabColor"),
-          children: [
-            { label: t("menu.noColor"), checked: !leaf.color, onClick: () => extras.onSetTabColor(leaf.paneId, null) },
-            ...TAB_COLORS.map((c) => ({ label: c, swatch: c, checked: leaf.color === c, onClick: () => extras.onSetTabColor(leaf.paneId, c) })),
-          ],
-        },
-        leaf.session.protocol === "ssh" && {
-          label: t("menu.portForward"),
-          shortcut: k["view.portForward"],
-          disabled: leaf.status !== "connected",
-          onClick: () => extras.onOpenPortForward(leaf.paneId),
-        },
         {
           label: armedAt ? t("cmdNotify.cancel") : t("cmdNotify.arm"),
           shortcut: k["terminal.notifyWhenDone"],
@@ -1223,7 +1173,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
             Boolean(shellStatus?.loading) || !canInjectShellIntegration(leaf.session.protocol, leaf.status) || xtermRef.current?.buffer.active.type === "alternate",
           onClick: () => extras.onInjectShellIntegration(leaf.paneId),
         },
-        tmux && { label: t("menu.tmux"), onClick: () => void extras.onTmux(leaf).then((items) => setTmuxItems(items.length ? items : null)).then(() => undefined) },
+        tmux && { label: t("menu.tmux"), shortcut: k["terminal.tmux"], onClick: () => extras.onTmux(leaf) },
         { type: "separator" },
         {
           label: logPath ? t("menu.stopLog") : t("menu.startLog"),
@@ -1254,15 +1204,17 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           ],
         },
         { type: "separator" },
-        ...(["A", "B", "C", "D"] as SyncChannel[]).map((ch) => ({
-          label: t("menu.joinChannel", { channel: ch }),
-          checked: channel === ch,
-          onClick: () => extras.onSetSyncChannel(leaf.paneId, channel === ch ? null : ch),
-        })),
         {
-          label: t("menu.leaveChannel"),
-          disabled: !channel,
-          onClick: () => extras.onSetSyncChannel(leaf.paneId, null),
+          // One row: clicking the channel it is in leaves it.
+          type: "choices",
+          label: t("menu.syncChannelRow"),
+          options: (["A", "B", "C", "D"] as SyncChannel[]).map((ch) => ({
+            value: ch,
+            label: ch,
+            checked: channel === ch,
+            title: channel === ch ? t("menu.leaveChannel") : t("menu.joinChannel", { channel: ch }),
+          })),
+          onPick: (ch) => extras.onSetSyncChannel(leaf.paneId, channel === ch ? null : (ch as SyncChannel)),
         },
         {
           label: pausedOnItsOwn ? t("sync.resumePane") : t("sync.pausePane"),
@@ -1299,13 +1251,6 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     );
   };
 
-  // tmux submenu opens as its own menu once the session list has loaded.
-  useEffect(() => {
-    if (!tmuxItems) return;
-    const box = containerRef.current?.getBoundingClientRect();
-    openMenu({ clientX: (box?.left ?? 0) + 40, clientY: (box?.top ?? 0) + 40 }, tmuxItems);
-    setTmuxItems(null);
-  }, [tmuxItems, openMenu]);
 
   // Files dragged from Explorer: upload with ZModem (type `rz`, then send them).
   const [fileOver, setFileOver] = useState(false);
@@ -1396,7 +1341,40 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           </button>
         </div>
       )}
-      {(logPath || syncBadge || phoneSize) && (
+      {syncBadge && (
+        // WindTerm-style bar on top of a pane whose typing is broadcast.
+        <div className={`pane-sync-bar ${syncPausedHere ? "sync-bar-paused" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
+          {inChannel && <span className={`pane-sync-dot sync-ch-${channel}`} />}
+          <span className="pane-sync-state">
+            {inChannel ? t("sync.barChannel", { channel }) : t(extras.syncScope === "all" ? "sync.barAll" : "sync.barVisible")}
+            {syncPausedHere && ` · ${extras.syncPaused ? t("sync.barPausedAll") : t("sync.barPaused")}`}
+          </span>
+          <span className="pane-ai-spacer" />
+          {extras.syncPaused ? (
+            <button type="button" onClick={() => extras.onToggleSyncPause()}>
+              <Play size={12} /> {t("sync.resumeAll")}
+            </button>
+          ) : (
+            <button type="button" title={pausedOnItsOwn ? t("sync.resumePane") : t("sync.pausePane")} onClick={() => extras.onToggleSyncPausePane(leaf.paneId)}>
+              {pausedOnItsOwn ? <Play size={12} /> : <Pause size={12} />} {pausedOnItsOwn ? t("sync.barResume") : t("sync.barPause")}
+            </button>
+          )}
+          {inChannel && (
+            <button type="button" onClick={() => extras.onSetSyncChannel(leaf.paneId, null)}>
+              <LogOut size={12} /> {t("sync.barLeave")}
+            </button>
+          )}
+          <button
+            type="button"
+            className="pane-sync-close"
+            title={inChannel ? t("sync.closeChannelTip", { channel }) : t("sync.stopTip")}
+            onClick={() => extras.onCloseSync(inChannel ? channel : undefined)}
+          >
+            <X size={12} /> {inChannel ? t("sync.closeChannel") : t("sync.stop")}
+          </button>
+        </div>
+      )}
+      {(logPath || phoneSize) && (
         <div className="pane-badges">
           {phoneSize && (
             <button
@@ -1422,25 +1400,6 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
               }}
             >
               {extras.pausedLogs[leaf.paneId] ? `❚❚ ${t("pane.recordingPaused")}` : `● ${t("pane.recording")}`}
-            </button>
-          )}
-          {syncBadge && (
-            <button
-              type="button"
-              className={`pane-badge badge-sync ${syncPausedHere ? "paused" : ""}`}
-              title={
-                extras.syncPaused
-                  ? t("sync.pausedAllHint")
-                  : pausedOnItsOwn
-                  ? t("sync.resumePane")
-                  : t("sync.pausePane")
-              }
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!extras.syncPaused) extras.onToggleSyncPausePane(leaf.paneId);
-              }}
-            >
-              {syncPausedHere ? t("pane.syncPausedBadge", { name: syncBadge }) : syncBadge}
             </button>
           )}
         </div>
@@ -1713,6 +1672,7 @@ function paneSliceEqual(a: TerminalPaneProps, b: TerminalPaneProps): boolean {
     x.syncChannels[id] === y.syncChannels[id] &&
     x.syncPaused === y.syncPaused &&
     x.syncPausedPanes[id] === y.syncPausedPanes[id] &&
+    x.syncScope === y.syncScope &&
     x.aiControls[id] === y.aiControls[id] &&
     x.isZoomed === y.isZoomed &&
     x.keymap === y.keymap

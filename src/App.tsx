@@ -28,6 +28,7 @@ import {
   type DropZone,
   type Side,
 } from "./utils/layout";
+import { canReuseSsh, duplicateReusesSsh } from "./utils/duplicate";
 import { dropZoneAt, type DropHint } from "./utils/dropZones";
 import type {
   AppSettings,
@@ -65,12 +66,12 @@ import { titleShowsHost } from "./utils/hostname";
 import { formatDuration, type CommandDone } from "./utils/commandWatch";
 import type { RunningCommand } from "./utils/runningCommand";
 import { useAgentHooks } from "./hooks/useAgentHooks";
-import { buildTmuxMenu } from "./utils/tmuxMenu";
 import { compactMenu, ContextMenuProvider, type MenuItem } from "./components/ContextMenu";
 import { HostKeyDialog, ZmodemDialog } from "./components/TransferDialogs";
 import { ConfirmDialog, PasteDialog, type ConfirmAnswer, type ConfirmRequest } from "./components/ConfirmDialog";
 import { SenderPanel } from "./components/SenderPanel";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { TmuxPanel, type TmuxTarget } from "./components/TmuxPanel";
 import { commandHistory, historyKeyOf } from "./utils/commandHistory";
 import { autoSyncInterval, syncErrorKey, syncReady } from "./utils/configSync";
 import { historyOf, modemOf, remoteOf, sftpOf, syncOf } from "./utils/settingsDefaults";
@@ -212,6 +213,9 @@ export const App: React.FC = () => {
   /** SFTP file browser, the pane it was opened on, and the open file previews. */
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesPaneId, setFilesPaneId] = useState<string | null>(null);
+  /** tmux sessions panel, and the pane it was opened on from the pane menu. */
+  const [tmuxOpen, setTmuxOpen] = useState(false);
+  const [tmuxPaneId, setTmuxPaneId] = useState<string | null>(null);
   const [previews, setPreviews] = useState<PreviewRequest[]>([]);
   const [senders, setSenders] = useState<SenderItem[]>([]);
   /** paneId -> log paused. */
@@ -753,6 +757,16 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [ws.root]
   );
+  const tmuxTargets: TmuxTarget[] = useMemo(
+    () =>
+      allLeaves(ws.root).flatMap((l) =>
+        (l.session.protocol === "ssh" || l.session.protocol === "wsl") && l.status === "connected"
+          ? [{ paneId: l.paneId, title: tabTitle(l), protocol: l.session.protocol }]
+          : []
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ws.root]
+  );
   const openFileBrowser = useCallback((paneId: string | null) => {
     setFilesPaneId(paneId);
     setFilesOpen(true);
@@ -1212,15 +1226,21 @@ export const App: React.FC = () => {
 
   // ---------------------------------------------------------------- tmux
 
-  const tmuxMenu = (leaf: TerminalLeafNode) =>
-    buildTmuxMenu(leaf, {
-      t,
-      send: (cmd) => dispatchTerminalInput(leaf.paneId, `${cmd}\r`),
-      openInNewTab: (startupCommand) => {
-        const group = findGroupOfPane(wsRef.current.root, leaf.paneId);
-        openSessionInNewTab({ ...leaf.session, startupCommand }, group?.id);
-      },
-    });
+  const openTmuxPanel = (paneId: string | null) => {
+    setTmuxPaneId(paneId);
+    setTmuxOpen(true);
+  };
+  /** A tmux line goes to that pane only (not to panes it is synced with). */
+  const typeTmux = (paneId: string, line: string) => {
+    void backend.writeTerminal(paneId, `${line}\r`);
+    paneApis.current.get(paneId)?.focus();
+  };
+  const openTmuxInNewTab = (paneId: string, startupCommand: string) => {
+    const leaf = allLeaves(wsRef.current.root).find((l) => l.paneId === paneId);
+    if (!leaf) return;
+    const group = findGroupOfPane(wsRef.current.root, paneId);
+    openSessionInNewTab({ ...leaf.session, startupCommand }, group?.id);
+  };
 
   // ---------------------------------------------------------------- shortcuts
 
@@ -1286,6 +1306,10 @@ export const App: React.FC = () => {
       case "terminal.toggleLog":
         if (leaf) paneExtrasRef.current.onToggleLog(leaf);
         return Boolean(leaf);
+      case "terminal.tmux":
+        setTmuxPaneId(null);
+        setTmuxOpen((v) => !v);
+        return true;
       case "tab.newShell":
         openQuickShell("powershell");
         return true;
@@ -2004,14 +2028,6 @@ export const App: React.FC = () => {
     },
     onModemTransfer: (leaf, protocol, send) => void modemTransfer(leaf, protocol, send),
     onOpenFileBrowser: (paneId) => openFileBrowser(paneId),
-    onDuplicateReuse: (leaf) => {
-      const group = findGroupOfPane(wsRef.current.root, leaf.paneId);
-      openSessionInNewTab(leaf.session, group?.id, leaf.paneId);
-    },
-    onOpenSender: (paneId) => {
-      setSenderPaneId(paneId);
-      setSenderOpen(true);
-    },
     commandWatches,
     onToggleCommandWatch: toggleCommandWatch,
     onCommandDone,
@@ -2034,6 +2050,16 @@ export const App: React.FC = () => {
     syncChannels,
     syncPaused,
     syncPausedPanes,
+    syncScope,
+    onCloseSync: (channel) => {
+      if (!channel) {
+        changeSyncScope("off");
+        return;
+      }
+      const members = Object.keys(syncChannelsRef.current).filter((id) => syncChannelsRef.current[id] === channel);
+      setSyncChannels((prev) => Object.fromEntries(Object.entries(prev).filter(([, ch]) => ch !== channel)));
+      setSyncPausedPanes((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => !members.includes(id))));
+    },
     logPaths,
     onSetSyncChannel: (paneId, channel) => {
       setSyncChannels((prev) => {
@@ -2047,8 +2073,6 @@ export const App: React.FC = () => {
     },
     onToggleSyncPause: toggleSyncPause,
     onToggleSyncPausePane: toggleSyncPausePane,
-    onMoveToNewGroup: moveTabToNewGroup,
-    groupTabCount: (paneId) => findGroupOfPane(ws.root, paneId)?.tabs.length ?? 0,
     onToggleLog: (leaf) => {
       if (logPaths[leaf.paneId]) {
         void backend.stopSessionLog(leaf.paneId);
@@ -2077,11 +2101,11 @@ export const App: React.FC = () => {
     },
     onLogStarted: (paneId, path) => setLogPaths((prev) => ({ ...prev, [paneId]: path })),
     onRevealLog: (paneId) => void backend.revealLog(logPaths[paneId] ?? null),
-    onDuplicateInNewTab: (leaf) => {
-      const group = findGroupOfPane(ws.root, leaf.paneId);
-      // WindTerm reuses the SSH connection for duplicated tabs when allowed.
-      const reuse = settingsRef.current.reuseSshConnection !== false && leaf.session.protocol === "ssh" && leaf.status === "connected";
-      openSessionInNewTab(leaf.session, group?.id, reuse ? leaf.paneId : undefined);
+    onDuplicateInNewTab: (leaf, reuse) => {
+      const group = findGroupOfPane(wsRef.current.root, leaf.paneId);
+      // Menu items pass reuse explicitly; the shortcut and tab mouse action follow the setting.
+      const useSsh = reuse === undefined ? duplicateReusesSsh(settingsRef.current.reuseSshConnection, leaf) : reuse && canReuseSsh(leaf);
+      openSessionInNewTab(leaf.session, group?.id, useSsh ? leaf.paneId : undefined);
     },
     onDisconnect: (paneId) => {
       if (findLeaf(wsRef.current.root, paneId)?.locked) {
@@ -2120,18 +2144,10 @@ export const App: React.FC = () => {
       setToast(t("highlight.cleared"));
     },
     onManageHighlights: () => void runAction("view.highlights"),
-    onOpenPortForward: (paneId) => {
-      setForwardPaneId(paneId);
-      setPortForwardOpen(true);
-    },
-    onSetTabColor: (paneId, color) => setTabColor(paneId, color),
-    onMoveToNewWindow: (paneId) => void moveTabToNewWindow(paneId),
-    moveToWindowTargets: () => backend.listTerminalWindows(),
-    onMoveToWindow: (paneId, label) => void moveTabToWindow(paneId, label),
     onToggleZoom: (paneId) => toggleZoom(paneId),
     isZoomed: zoomedGroupId !== null,
     keymap,
-    onTmux: (leaf) => tmuxMenu(leaf),
+    onTmux: (leaf) => openTmuxPanel(leaf.paneId),
     isAppShortcut,
     registerTerminal: (paneId, api) => {
       if (api) paneApis.current.set(paneId, api);
@@ -2152,9 +2168,9 @@ export const App: React.FC = () => {
         ...prev,
         root: updateLeaf(prev.root, paneId, (l) => ({ ...l, title: title || undefined })),
       })),
-    onDuplicateTab: (paneId) => {
+    onDuplicateTab: (paneId, reuse) => {
       const leaf = findLeaf(ws.root, paneId);
-      if (leaf) paneExtras.onDuplicateInNewTab(leaf);
+      if (leaf) paneExtras.onDuplicateInNewTab(leaf, reuse);
     },
     onReconnectTab: (paneId) => handleReconnectPane(paneId),
     onInjectShellIntegration: (paneId) => injectShellIntegration(paneId),
@@ -2394,6 +2410,11 @@ export const App: React.FC = () => {
             }}
             historyOpen={historyOpen}
             onToggleHistory={() => setHistoryOpen((v) => !v)}
+            tmuxOpen={tmuxOpen}
+            onToggleTmux={() => {
+              setTmuxPaneId(null);
+              setTmuxOpen((v) => !v);
+            }}
             filesOpen={filesOpen}
             onToggleFiles={() => {
               setFilesPaneId(null);
@@ -2571,6 +2592,19 @@ export const App: React.FC = () => {
             onClose={() => {
               setFilesOpen(false);
               setFilesPaneId(null);
+            }}
+          />
+        )}
+        {tmuxOpen && (
+          <TmuxPanel
+            targets={tmuxTargets}
+            activePaneId={activeLeaf?.paneId ?? null}
+            preferredPaneId={tmuxPaneId}
+            onType={typeTmux}
+            onOpenInNewTab={openTmuxInNewTab}
+            onClose={() => {
+              setTmuxOpen(false);
+              setTmuxPaneId(null);
             }}
           />
         )}

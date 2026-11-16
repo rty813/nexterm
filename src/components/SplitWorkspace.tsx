@@ -106,6 +106,7 @@ export type GroupActions = Omit<
   | "onSplitGroup"
   | "onDropTab"
   | "keymap"
+  | "reuseSshConnection"
   | "tabMouse"
   | "hoverSwitch"
   | "onNewTab"
@@ -330,6 +331,7 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
               onCloseTab={groupActions.onCloseTab}
               onRenameTab={groupActions.onRenameTab}
               onDuplicateTab={groupActions.onDuplicateTab}
+              reuseSshConnection={settings.reuseSshConnection}
               onReconnectTab={groupActions.onReconnectTab}
               onInjectShellIntegration={groupActions.onInjectShellIntegration}
               onCloseOtherTabs={groupActions.onCloseOtherTabs}

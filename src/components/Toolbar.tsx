@@ -4,6 +4,7 @@ import {
   ArrowRightLeft,
   ArrowRight,
   History,
+  Layers,
   HardDrive,
   Send,
   Columns2,
@@ -66,6 +67,8 @@ interface ToolbarProps {
   onToggleSender: () => void;
   historyOpen: boolean;
   onToggleHistory: () => void;
+  tmuxOpen: boolean;
+  onToggleTmux: () => void;
   filesOpen: boolean;
   onToggleFiles: () => void;
   remoteEnabled: boolean;
@@ -109,6 +112,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleSender,
   historyOpen,
   onToggleHistory,
+  tmuxOpen,
+  onToggleTmux,
   filesOpen,
   onToggleFiles,
   remoteEnabled,
@@ -189,6 +194,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     portForward: { label: t("forward.title"), shortcut: keymap["view.portForward"], checked: portForwardOpen, onClick: onTogglePortForward },
     sender: { label: t("sender.title"), shortcut: keymap["view.sender"], checked: senderOpen, onClick: onToggleSender },
     history: { label: t("history.title"), shortcut: keymap["view.history"], checked: historyOpen, onClick: onToggleHistory },
+    tmux: { label: t("tmux.title"), shortcut: keymap["terminal.tmux"], checked: tmuxOpen, onClick: onToggleTmux },
     files: { label: t("sftp.title"), shortcut: keymap["view.files"], checked: filesOpen, onClick: onToggleFiles },
     remote: { label: t("remote.enabled"), checked: remoteEnabled, onClick: onToggleRemote },
     settings: { label: t("toolbar.settings"), shortcut: keymap["view.settings"], onClick: onOpenSettings },
@@ -392,6 +398,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             title={tip(t("history.title"), "view.history")}
           >
             <History size={15} />
+          </button>
+        )}
+        {show("tmux") && (
+          <button
+            type="button"
+            className={`icon-btn ${tmuxOpen ? "active" : ""}`}
+            onClick={onToggleTmux}
+            title={tip(t("tmux.title"), "terminal.tmux")}
+          >
+            <Layers size={15} />
           </button>
         )}
         {show("files") && (

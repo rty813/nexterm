@@ -4,6 +4,7 @@ import { Bell, BellRing, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Ci
 import { backend } from "../services/backend";
 import { agentDisplayName, type AgentStatus } from "../utils/agentStatus";
 import { tabTitle } from "../utils/layout";
+import { canReuseSsh, duplicateReusesSsh } from "../utils/duplicate";
 import { titleShowsHost } from "../utils/hostname";
 import { formatDuration } from "../utils/commandWatch";
 import { canInjectShellIntegration, type RunningCommand } from "../utils/runningCommand";
@@ -32,7 +33,10 @@ export interface GroupTabBarProps {
   onSelectTab: (paneId: string) => void;
   onCloseTab: (paneId: string) => void;
   onRenameTab: (paneId: string, title: string) => void;
-  onDuplicateTab: (paneId: string) => void;
+  /** reuse: true = new channel on the live SSH connection, false = new connection, omitted = per settings. */
+  onDuplicateTab: (paneId: string, reuse?: boolean) => void;
+  /** settings.reuseSshConnection: what the duplicate shortcut / tab mouse action does. */
+  reuseSshConnection?: boolean;
   onReconnectTab: (paneId: string) => void;
   /** Install shell integration for the tab's current user and load it now. */
   onInjectShellIntegration: (paneId: string) => void;
@@ -80,6 +84,7 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
   onCloseTab,
   onRenameTab,
   onDuplicateTab,
+  reuseSshConnection,
   onReconnectTab,
   onInjectShellIntegration,
   onCloseOtherTabs,
@@ -202,6 +207,8 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
     const point = { clientX: e.clientX, clientY: e.clientY };
     onSelectTab(leaf.paneId);
     const single = group.tabs.length < 2;
+    // The duplicate shortcut is shown on the item it triggers.
+    const reuseByShortcut = duplicateReusesSsh(reuseSshConnection, leaf);
     const [windows, shellStatus] = await Promise.all([
       moveToWindowTargets(),
       backend.shellIntegrationStatus(leaf.paneId).catch(() => null),
@@ -226,7 +233,17 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
           checked: Boolean(commandWatches[leaf.paneId]),
           onClick: () => onToggleCommandWatch(leaf.paneId),
         },
-        { label: t("menu.duplicateTab"), shortcut: keymap["tab.duplicate"], onClick: () => onDuplicateTab(leaf.paneId) },
+        {
+          label: t("menu.duplicateTab"),
+          shortcut: reuseByShortcut ? undefined : keymap["tab.duplicate"],
+          onClick: () => onDuplicateTab(leaf.paneId, false),
+        },
+        leaf.session.protocol === "ssh" && {
+          label: t("menu.duplicateReuse"),
+          shortcut: reuseByShortcut ? keymap["tab.duplicate"] : undefined,
+          disabled: !canReuseSsh(leaf),
+          onClick: () => onDuplicateTab(leaf.paneId, true),
+        },
         { label: t("pane.reconnect"), shortcut: keymap["tab.reconnect"], onClick: () => onReconnectTab(leaf.paneId) },
         {
           label: t(shellStatus?.loading ? "si.menuLoading" : shellStatus?.detected ? "si.menuDetected" : shellStatus ? "si.menuNotDetected" : "si.menu"),
