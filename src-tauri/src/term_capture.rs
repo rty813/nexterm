@@ -15,6 +15,8 @@ use std::time::Instant;
 const CAPTURE_LIMIT: usize = 2 * 1024 * 1024;
 /// OSC payloads longer than this are not ours (images, clipboard): skip them.
 const OSC_LIMIT: usize = 4096;
+/// Output kept from before a command's C (its echo, a syntax error, a continuation prompt).
+const PRE_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureMode {
@@ -30,10 +32,15 @@ pub struct Capture {
     /// Collecting (always for Watch; after the C for Command).
     pub started: bool,
     pub raw: Vec<u8>,
+    /// Command mode, before the C: what the shell printed after the command was typed. When
+    /// it never starts the command (syntax error, waiting for more input) this explains why.
+    pub pre: Vec<u8>,
     /// Bytes dropped from the front once `raw` hit [`CAPTURE_LIMIT`].
     pub dropped: usize,
     /// Set by OSC 133 D: `Some(exit)` (None when the shell gave no code).
     pub finished: Option<Option<i32>>,
+    /// The D said the shell rejected the line (`err=syntax`, fish): nothing was run.
+    pub syntax_error: bool,
     pub armed_at: Instant,
     pub last_output: Option<Instant>,
     /// Stream offset (counting dropped bytes) already handed to the agent: a later call
@@ -47,8 +54,10 @@ impl Capture {
             mode,
             started: mode == CaptureMode::Watch,
             raw: Vec::new(),
+            pre: Vec::new(),
             dropped: 0,
             finished: None,
+            syntax_error: false,
             armed_at: now,
             last_output: None,
             reported: 0,
@@ -74,6 +83,13 @@ impl Capture {
             self.dropped += cut;
         }
         self.raw.push(b);
+    }
+
+    /// What the shell printed for a command it did not start, without the echo of the
+    /// typed line (everything up to the first newline).
+    pub fn pre_text(&self) -> String {
+        let after = self.pre.iter().position(|&b| b == b'\n').map_or(&[][..], |i| &self.pre[i + 1..]);
+        plain_text(after)
     }
 
     /// How long no output arrived (counted from arming when nothing came yet).
@@ -122,8 +138,15 @@ impl ShellTracker {
         }
         for &b in data {
             if let Some(c) = cap.as_mut() {
-                if c.started && c.finished.is_none() {
-                    c.push(b);
+                if c.finished.is_none() {
+                    if c.started {
+                        c.push(b);
+                    } else if c.mode == CaptureMode::Command {
+                        if c.pre.len() >= PRE_LIMIT {
+                            c.pre.drain(..PRE_LIMIT / 4);
+                        }
+                        c.pre.push(b);
+                    }
                 }
             }
             match self.scan {
@@ -194,6 +217,7 @@ impl ShellTracker {
                 self.integrated = true;
                 let was_running = std::mem::replace(&mut self.running, false);
                 let exit = parts.next().and_then(|s| s.trim().parse::<i32>().ok());
+                let syntax_error = parts.any(|p| p == "err=syntax");
                 if let Some(c) = cap {
                     // An empty line gives a D without a C: the command is over either way.
                     let ours = match c.mode {
@@ -202,6 +226,7 @@ impl ShellTracker {
                     };
                     if ours && c.finished.is_none() {
                         c.finished = Some(exit);
+                        c.syntax_error = syntax_error && !c.started;
                     }
                 }
             }
@@ -370,6 +395,29 @@ mod tests {
         let (mut t, cap) = tracker_with(CaptureMode::Command);
         t.feed(b"\r\n\x1b]133;D\x1b\\\x1b]133;A\x1b\\$ ", Instant::now());
         assert_eq!(cap.lock().unwrap().finished, Some(None));
+    }
+
+    #[test]
+    fn fish_syntax_error_finishes_with_the_message() {
+        // As fish 3.7 prints it: no C, the error, then the posterror handler's D.
+        let (mut t, cap) = tracker_with(CaptureMode::Command);
+        t.feed(b"true \r\x1b[45C&\r\x1b[46C&\r\x1b[47C S=sudo;\r\x1b[61C\r\n", Instant::now());
+        t.feed(b"fish: Unsupported use of '='. In fish, please use 'set S sudo'.\r\n", Instant::now());
+        t.feed(b"true && S=sudo\r\n        ^~~~~^\r\n\x1b]133;D;;err=syntax\x07\x1b]133;A\x07me> true && S=sudo", Instant::now());
+        let c = cap.lock().unwrap();
+        assert_eq!(c.finished, Some(None));
+        assert!(c.syntax_error && !c.started && c.raw.is_empty());
+        assert_eq!(c.pre_text(), "fish: Unsupported use of '='. In fish, please use 'set S sudo'.\ntrue && S=sudo\n        ^~~~~^");
+    }
+
+    #[test]
+    fn bash_syntax_error_keeps_the_message() {
+        let (mut t, cap) = tracker_with(CaptureMode::Command);
+        t.feed(b"if then\r\nbash: syntax error near unexpected token `then'\r\n\x1b]133;D;2\x07\x1b]133;A\x07$ ", Instant::now());
+        let c = cap.lock().unwrap();
+        assert_eq!(c.finished, Some(Some(2)));
+        assert!(!c.syntax_error);
+        assert_eq!(c.pre_text(), "bash: syntax error near unexpected token `then'");
     }
 
     #[test]

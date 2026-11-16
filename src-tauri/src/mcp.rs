@@ -32,6 +32,8 @@ const ENDPOINT_FILE: &str = "mcp-endpoint.json";
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_PROTOCOL: &str = "2025-06-18";
 const POLL: Duration = Duration::from_millis(50);
+/// run_command: no OSC 133 C and no output for this long = the shell did not start it.
+const NOT_STARTED_QUIET: Duration = Duration::from_secs(3);
 const SCREEN_TIMEOUT: Duration = Duration::from_secs(3);
 /// Output returned to the model: head + tail characters.
 const OUT_HEAD: usize = 4_000;
@@ -609,7 +611,7 @@ fn debug_method(app: &AppHandle, msg: &Value) -> Option<Value> {
     let id = msg.get("id")?;
     let ctx = app.try_state::<crate::AppContext>()?;
     match msg.get("method").and_then(Value::as_str)? {
-        "windterm/debugPanes" => {
+        "nexterm/debugPanes" => {
             let panes: Vec<Value> = ctx
                 .connections
                 .instance_ids()
@@ -621,7 +623,7 @@ fn debug_method(app: &AppHandle, msg: &Value) -> Option<Value> {
                 .collect();
             Some(rpc_result(id, json!({ "panes": panes, "controls": controls() })))
         }
-        "windterm/debugControl" => {
+        "nexterm/debugControl" => {
             let pane = msg.pointer("/params/pane").and_then(Value::as_str)?;
             let mode = msg.pointer("/params/mode").cloned().and_then(|m| serde_json::from_value::<ControlMode>(m).ok());
             set_control(pane, mode, "debug");
@@ -1128,25 +1130,38 @@ fn run_integrated(conns: &crate::manager::ConnectionManager, pane: &str, command
     let cap = conns.arm_capture(pane, CaptureMode::Command).map_err(|e| e.to_string())?;
     let started = Instant::now();
     conns.write(pane, format!("{command}\r").as_bytes()).map_err(|e| e.to_string())?;
-    let outcome = poll(pane, &cap, timeout, |c, _| c.finished.is_some());
-    // Timed out: keep collecting for a following wait_for.
-    if outcome != Ok(false) {
+    // The C comes as soon as the shell starts the command; output going quiet without it
+    // means the shell is not going to (waiting for more input, or a syntax error the
+    // integration script could not report).
+    let outcome = poll(pane, &cap, timeout, |c, now| c.finished.is_some() || (!c.started && c.quiet_for(now) >= NOT_STARTED_QUIET));
+    let mut c = lock(&cap);
+    let (finished, started_cmd, syntax_error) = (c.finished, c.started, c.syntax_error);
+    // Not over: keep collecting for a following wait_for.
+    if outcome.is_err() || finished.is_some() {
         conns.disarm_capture(pane, &cap);
     }
-    let mut c = lock(&cap);
-    let (finished, started_cmd) = (c.finished, c.started);
-    let out = clip(&plain_text(c.take_unreported()), OUT_HEAD, OUT_TAIL);
+    let out = if started_cmd { plain_text(c.take_unreported()) } else { c.pre_text() };
+    let out = clip(&out, OUT_HEAD, OUT_TAIL);
+    drop(c);
     let secs = started.elapsed().as_secs_f32();
     match (outcome, finished) {
         (Err(e), _) => Err(format!("{e}\n--- 已收到的输出 ---\n{out}")),
+        (Ok(_), Some(_)) if syntax_error => {
+            // fish keeps the rejected line for editing: the next command would be appended to it.
+            let cleared = conns.write(pane, b"\x03").is_ok();
+            Ok(format!(
+                "语法错误，命令没有执行（注意该 shell 的语法，例如 fish 不是 bash）。{}\n--- 输出 ---\n{out}",
+                if cleared { "已发送 Ctrl-C 清空命令行。" } else { "命令行中可能仍留着这条命令，请先用 send_keys 发送 <C-c> 清空。" }
+            ))
+        }
         (Ok(_), Some(exit)) => Ok(format!(
             "退出码: {}  耗时: {secs:.1}s\n--- 输出 ---\n{out}",
             exit.map(|e| e.to_string()).unwrap_or_else(|| "未知".into())
         )),
         (Ok(_), None) if !started_cmd => Ok(format!(
-            "shell 在 {} 秒内没有开始执行这条命令：可能语法不完整（shell 在等待续行，注意该 shell 的语法，例如 fish 不是 bash），或者在等待输入。\
-请先用 read_screen 查看；需要取消时用 send_keys 发送 <C-c>。\n--- 已收到的输出 ---\n{out}",
-            timeout.as_secs()
+            "shell 没有开始执行这条命令（{:.0} 秒内没有开始，且已无新输出）：可能有语法错误，或语法不完整（shell 在等待续行，注意该 shell 的语法，例如 fish 不是 bash），或者在等待输入。\
+请先用 read_screen 查看；需要取消时用 send_keys 发送 <C-c>。若命令其实已开始，可用 wait_for 继续等待。\n--- 已收到的输出 ---\n{out}",
+            secs
         )),
         (Ok(_), None) => Ok(format!(
             "命令在 {} 秒内没有结束，仍在运行。可用 wait_for 继续等待（不会丢失期间的输出），或 send_keys 发送 <C-c> 中断。\n--- 已收到的输出 ---\n{out}",
@@ -1390,10 +1405,10 @@ fn serve(app: &AppHandle, stream: TcpStream, token: &str) -> std::io::Result<()>
 /// and the CLI then rejects the server's own flag. The bare `mcp` argument needs none.
 pub fn client_command(client: &str, exe: &str) -> String {
     match client {
-        "codex" => format!("codex mcp add windterm \"{exe}\" mcp"),
+        "codex" => format!("codex mcp add nexterm \"{exe}\" mcp"),
         // Gemini CLI's default scope is the project in the current directory.
-        "gemini" => format!("gemini mcp add --scope user windterm \"{exe}\" mcp"),
-        _ => format!("claude mcp add --scope user windterm \"{exe}\" mcp"),
+        "gemini" => format!("gemini mcp add --scope user nexterm \"{exe}\" mcp"),
+        _ => format!("claude mcp add --scope user nexterm \"{exe}\" mcp"),
     }
 }
 
@@ -1586,9 +1601,9 @@ mod tests {
     #[test]
     fn client_commands_need_no_double_dash() {
         let exe = r"C:\Program Files\Nexterm\nexterm.exe";
-        assert_eq!(client_command("claude", exe), format!("claude mcp add --scope user windterm \"{exe}\" mcp"));
-        assert_eq!(client_command("codex", exe), format!("codex mcp add windterm \"{exe}\" mcp"));
-        assert_eq!(client_command("gemini", exe), format!("gemini mcp add --scope user windterm \"{exe}\" mcp"));
+        assert_eq!(client_command("claude", exe), format!("claude mcp add --scope user nexterm \"{exe}\" mcp"));
+        assert_eq!(client_command("codex", exe), format!("codex mcp add nexterm \"{exe}\" mcp"));
+        assert_eq!(client_command("gemini", exe), format!("gemini mcp add --scope user nexterm \"{exe}\" mcp"));
         assert!(!client_command("codex", exe).contains(" -- "));
         assert!(!client_command("gemini", exe).contains(" -- "));
     }
