@@ -12,6 +12,7 @@ import {
   type X11Config,
   metaKeyOf,
   type MetaKeyMapping,
+  type AmbiguousWidth,
 } from "../types/domain";
 import { TAB_COLORS } from "./TerminalPane";
 
@@ -393,6 +394,18 @@ export const SessionAdvanced: React.FC<{
               </select>
             </label>
           </div>
+          <label className="field" title={t("adv.ambiguousWidthTip")}>
+            <span>{t("adv.ambiguousWidth")}</span>
+            <select
+              className="text-input"
+              value={v.termOptions.ambiguousWidth ?? "auto"}
+              onChange={(e) => setOpt({ ambiguousWidth: e.target.value as AmbiguousWidth })}
+            >
+              <option value="auto">{t("adv.ambiguousAuto")}</option>
+              <option value="narrow">{t("adv.ambiguousNarrow")}</option>
+              <option value="wide">{t("adv.ambiguousWide")}</option>
+            </select>
+          </label>
           <div className="field">
             <span>{t("adv.tabColor")}</span>
             <div className="swatch-row">

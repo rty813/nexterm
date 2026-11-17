@@ -1,5 +1,6 @@
 import type { IDisposable, Terminal } from "@xterm/xterm";
 import { backend, type HistoryQuery } from "./backend";
+import { registerUnicodeWidths } from "./unicodeWidth";
 import { lineKey, linesToAnsi, liveNumber, type HistoryInfo, type HistoryPage } from "../utils/historyView";
 
 /**
@@ -574,6 +575,10 @@ export class HistoryScroll implements IDisposable {
       this.scratch = null;
       const ctor = this.term.constructor as new (o: object) => Terminal;
       this.scratch = new ctor({ cols, rows: 1, scrollback: 0, allowProposedApi: true });
+      registerUnicodeWidths(this.scratch);
+    }
+    // Same widths as the pane (the ambiguous-width option can change while it is open).
+    if (this.scratch.unicode.activeVersion !== this.term.unicode.activeVersion) {
       try {
         this.scratch.unicode.activeVersion = this.term.unicode.activeVersion;
       } catch {

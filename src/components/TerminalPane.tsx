@@ -78,6 +78,8 @@ import { mixColor } from "../utils/screenOverlay";
 import { compileTriggers, triggersOf } from "../utils/triggers";
 import { installTriggerLinks } from "../utils/triggerLinks";
 import { runTriggerScript } from "../services/triggerScript";
+import { ambiguousIsWide, WIDE_AMBIGUOUS_VERSION } from "../utils/ambiguousWidth";
+import { registerUnicodeWidths } from "../services/unicodeWidth";
 import type { QuickCommand } from "../types/domain";
 
 /** Serializers of mounted terminals, used to carry scrollback when a tab moves to another window. */
@@ -440,7 +442,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       else if (term.cols !== held.cols || term.rows !== held.rows) term.resize(held.cols, held.rows);
     };
     fitRef.current = fit;
-    term.unicode.activeVersion = "11";
+    registerUnicodeWidths(term);
+    term.unicode.activeVersion = ambiguousIsWide(termOptions, leaf.session.charset) ? WIDE_AMBIGUOUS_VERSION : "11";
 
     term.open(el);
     // Triggers (Settings > Triggers): hyperlinks, converters, unarchiver and the user's own.
@@ -1076,6 +1079,16 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theme, settings, isRemote, scheme, termOptions.altIsMeta]);
+
+  // Ambiguous-width characters: applies to text written from now on (a BBS redraws on its own,
+  // anything else on the next screen refresh).
+  const wideAmbiguous = ambiguousIsWide(termOptions, leaf.session.charset);
+  useEffect(() => {
+    const term = xtermRef.current;
+    if (!term) return;
+    const version = wideAmbiguous ? WIDE_AMBIGUOUS_VERSION : "11";
+    if (term.unicode.activeVersion !== version) term.unicode.activeVersion = version;
+  }, [wideAmbiguous]);
 
   useEffect(() => {
     if (isActive && !awaitingPassword && !searchOpen) {

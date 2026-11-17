@@ -664,6 +664,12 @@ export const extraResources = {
       metaRightAlt: "仅右 Alt",
       metaWin: "Windows 键",
       metaNone: "不映射（Alt 直接输入字符）",
+      ambiguousWidth: "模糊宽度字符（● ─ │ ■ ★ 等）",
+      ambiguousAuto: "自动（GBK / Big5 等字符集按双宽）",
+      ambiguousNarrow: "单宽",
+      ambiguousWide: "双宽（BBS、中文菜单画）",
+      ambiguousWidthTip:
+        "这些字符在 GBK、Big5 等字符集中占两列。水木等 BBS 和中文菜单画按两列排版，按单宽显示会错位、留下残影；普通 UTF-8 Linux 程序按单宽。",
     },
     autocomplete: {
       kind: { history: "历史命令", quick: "快捷命令", command: "命令", option: "命令选项" },
@@ -1163,6 +1169,12 @@ export const extraResources = {
       metaRightAlt: "Right Alt only",
       metaWin: "Windows key",
       metaNone: "None (Alt types characters)",
+      ambiguousWidth: "Ambiguous-width characters (● ─ │ ■ ★ ...)",
+      ambiguousAuto: "Auto (double width with GBK / Big5 ...)",
+      ambiguousNarrow: "Single width",
+      ambiguousWide: "Double width (BBS, CJK menu art)",
+      ambiguousWidthTip:
+        "These characters take two columns in GBK, Big5 and similar charsets. BBS such as newsmth and CJK menu art lay them out that way; shown single width they shift and leave stale text. Ordinary UTF-8 Linux programs use single width.",
     },
     autocomplete: {
       kind: { history: "History", quick: "Quick command", command: "Command", option: "Option" },

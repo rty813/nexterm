@@ -153,7 +153,14 @@ export interface TerminalOptions {
    * both Alt keys, only the left / right one (keeps AltGr for typing), the Windows key, or none.
    */
   metaKey?: MetaKeyMapping;
+  /**
+   * Columns for East Asian Ambiguous characters (● ─ │ ■ ★ ...): "auto" makes them two wide
+   * with a CJK charset (GBK, Big5, ...), like the BBS / menus written for those charsets expect.
+   */
+  ambiguousWidth?: AmbiguousWidth;
 }
+
+export type AmbiguousWidth = "auto" | "narrow" | "wide";
 
 export type MetaKeyMapping = "alt" | "leftAlt" | "rightAlt" | "win" | "none";
 
