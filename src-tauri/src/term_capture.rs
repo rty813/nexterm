@@ -106,7 +106,12 @@ enum Scan {
     Esc,
     Osc,
     OscEsc,
+    /// After `ESC [`: collecting parameters up to the final byte.
+    Csi,
 }
+
+/// CSI parameters longer than this are not a mode switch: stop collecting.
+const CSI_LIMIT: usize = 32;
 
 /// OSC 133 state of one connection, fed with every output chunk (already UTF-8).
 #[derive(Debug)]
@@ -118,12 +123,24 @@ pub struct ShellTracker {
     pub integrated: bool,
     /// Between an OSC 133 C and its D.
     pub running: bool,
+    /// A full-screen program switched to the alternate screen (DECSET 1049 / 1047 / 47).
+    pub alt_screen: bool,
+    csi: Vec<u8>,
     pub capture: Option<SharedCapture>,
 }
 
 impl Default for ShellTracker {
     fn default() -> Self {
-        Self { scan: Scan::Normal, osc: Vec::new(), osc_overflow: false, integrated: false, running: false, capture: None }
+        Self {
+            scan: Scan::Normal,
+            osc: Vec::new(),
+            osc_overflow: false,
+            integrated: false,
+            running: false,
+            alt_screen: false,
+            csi: Vec::new(),
+            capture: None,
+        }
     }
 }
 
@@ -160,10 +177,25 @@ impl ShellTracker {
                         self.scan = Scan::Osc;
                         self.osc.clear();
                         self.osc_overflow = false;
+                    } else if b == b'[' {
+                        self.scan = Scan::Csi;
+                        self.csi.clear();
                     } else {
                         self.scan = if b == 0x1b { Scan::Esc } else { Scan::Normal };
                     }
                 }
+                Scan::Csi => match b {
+                    0x40..=0x7e => {
+                        self.scan = Scan::Normal;
+                        self.csi_done(b);
+                    }
+                    0x1b => self.scan = Scan::Esc,
+                    _ => {
+                        if self.csi.len() < CSI_LIMIT {
+                            self.csi.push(b);
+                        }
+                    }
+                },
                 Scan::Osc => match b {
                     0x07 => {
                         self.scan = Scan::Normal;
@@ -190,6 +222,17 @@ impl ShellTracker {
                     }
                 }
             }
+        }
+    }
+
+    /// DECSET / DECRST of the alternate screen (`ESC [ ? 1049 h`, also in a list: `?1;1049h`).
+    fn csi_done(&mut self, final_byte: u8) {
+        if !matches!(final_byte, b'h' | b'l') || self.csi.len() >= CSI_LIMIT {
+            return;
+        }
+        let Some(params) = self.csi.strip_prefix(b"?") else { return };
+        if params.split(|&b| b == b';').any(|p| matches!(p, b"1049" | b"1047" | b"47")) {
+            self.alt_screen = final_byte == b'h';
         }
     }
 
@@ -429,6 +472,25 @@ mod tests {
         t.capture = Some(Arc::clone(&cap));
         t.feed(b"\x1b]133;D;0\x07", Instant::now());
         assert_eq!(cap.lock().unwrap().finished, None);
+    }
+
+    #[test]
+    fn follows_the_alternate_screen() {
+        let mut t = ShellTracker::default();
+        let now = Instant::now();
+        t.feed(b"\x1b[1;1H\x1b[?25l\x1b[?10", now);
+        assert!(!t.alt_screen);
+        t.feed(b"49h\x1b[H", now);
+        assert!(t.alt_screen);
+        t.feed(b"\x1b[?1;47l", now);
+        assert!(!t.alt_screen);
+        t.feed(b"\x1b[?1047h", now);
+        assert!(t.alt_screen);
+        // A CSI cut off by another escape does not count; neither does one without `?`.
+        t.feed(b"\x1b[?10\x1b[?1049l", now);
+        assert!(!t.alt_screen);
+        t.feed(b"\x1b[1049h", now);
+        assert!(!t.alt_screen);
     }
 
     #[test]

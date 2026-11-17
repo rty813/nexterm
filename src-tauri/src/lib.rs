@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod anti_idle;
 pub mod app_paths;
 pub mod charset;
 pub mod commands;

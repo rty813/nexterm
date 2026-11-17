@@ -83,6 +83,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   });
   const [dataType, setDataType] = useState<DataType>(initial?.dataType === "binary" ? "binary" : "text");
   const [autoLog, setAutoLog] = useState<boolean>(initial?.autoLog ?? false);
+  const [antiIdleSecs, setAntiIdleSecs] = useState<number>(initial?.antiIdleSecs ?? 0);
+  const [antiIdleString, setAntiIdleString] = useState(initial?.antiIdleString ?? "");
   const [advanced, setAdvanced] = useState(() => initialAdvanced(initial));
   const [serialPorts, setSerialPorts] = useState<string[]>([]);
 
@@ -166,6 +168,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       serial: protocol === "serial" ? serialCfg : null,
       dataType: hasDataType(protocol) && dataType === "binary" ? "binary" : undefined,
       autoLog,
+      antiIdleSecs: Number(antiIdleSecs) > 0 ? Number(antiIdleSecs) : undefined,
+      antiIdleString: Number(antiIdleSecs) > 0 && antiIdleString ? antiIdleString : undefined,
       ...advancedToSession(advanced, protocol),
     };
   };
@@ -178,7 +182,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   // Options most sessions never touch stay folded, unless this session uses them.
   const [moreOpen, setMoreOpen] = useState(
     () =>
-      Boolean(initial?.jumpHost?.enabled || initial?.startupCommand || initial?.autoLog) ||
+      Boolean(initial?.jumpHost?.enabled || initial?.startupCommand || initial?.autoLog || initial?.antiIdleSecs) ||
       (initial?.term ?? "xterm-256color") !== "xterm-256color"
   );
 
@@ -582,6 +586,31 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     />
                   </label>
                 </div>
+
+                <div className="form-grid-2">
+                  <label className="field">
+                    <span>{t("sessionModal.antiIdle")}</span>
+                    <input
+                      type="number"
+                      className="text-input"
+                      value={antiIdleSecs}
+                      min={0}
+                      onChange={(e) => setAntiIdleSecs(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{t("sessionModal.antiIdleString")}</span>
+                    <input
+                      type="text"
+                      className="text-input"
+                      placeholder="\0"
+                      disabled={!(antiIdleSecs > 0)}
+                      value={antiIdleString}
+                      onChange={(e) => setAntiIdleString(e.target.value)}
+                    />
+                  </label>
+                </div>
+                {antiIdleSecs > 0 && <p className="adv-hint field-hint-inline">{t("sessionModal.antiIdleTip")}</p>}
 
                 <SessionAdvanced protocol={protocol} value={advanced} onChange={setAdvanced} />
 

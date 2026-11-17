@@ -57,6 +57,10 @@ export interface SessionConfig {
   charset?: string;
   /** Serial / TCP: "binary" shows received bytes as a hex dump and sends bytes as is (WindTerm session.dataType). */
   dataType?: DataType;
+  /** Anti-idle: seconds without input before `antiIdleString` is sent; 0 / missing = off (Rust `anti_idle.rs`). */
+  antiIdleSecs?: number;
+  /** Anti-idle string with escapes (\0 \n \r \t \b \e \\ \xHH); empty = \0. */
+  antiIdleString?: string;
   /** Highlight scheme ("" = auto). */
   system?: HighlightSystem | "";
   /** Accept any SSH host key without asking. */

@@ -469,6 +469,10 @@ export const resources = {
         startupCmd: "连接后自动执行命令 (选填)",
         startupPlaceholder: "登录成功后自动运行的命令",
         autoLog: "连接后自动记录会话日志",
+        antiIdle: "防空闲断开 (秒，0 = 关闭)",
+        antiIdleString: "防空闲发送内容",
+        antiIdleTip:
+          "超过设定秒数没有输入时自动发送一段内容，防止服务器因无操作注销（TMOUT、autologout、exec-timeout）。全屏程序（vim、top 等）运行时或命令执行中不发送。支持转义：\\0 \\n \\r \\t \\b \\e \\\\ \\xHH；留空发送 \\0（NUL，在 shell 中无可见效果）。最短 5 秒。",
         cancel: "取消",
         saveOnly: "仅保存",
         saveAndConnect: "保存并立即连接",
@@ -1080,6 +1084,10 @@ export const resources = {
         startupCmd: "Startup Command",
         startupPlaceholder: "Optional auto-run command",
         autoLog: "Start session log on connect",
+        antiIdle: "Anti-idle (sec, 0 = off)",
+        antiIdleString: "Anti-idle string",
+        antiIdleTip:
+          "When nothing has been typed for this many seconds, send a string so the server does not log you out for inactivity (TMOUT, autologout, exec-timeout). Not sent while a full-screen program (vim, top ...) or a command is running. Escapes: \\0 \\n \\r \\t \\b \\e \\\\ \\xHH; empty sends \\0 (NUL, invisible in shells). Minimum 5 seconds.",
         cancel: "Cancel",
         saveOnly: "Save Only",
         saveAndConnect: "Save & Connect",

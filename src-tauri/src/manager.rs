@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::anti_idle::{AntiIdle, PaneState};
 use crate::charset::Codec;
 use crate::hexdump::HexDump;
 use crate::local_pty::spawn_local_pty;
@@ -231,6 +232,8 @@ struct ScopedSink {
     binary: Option<Mutex<HexDump>>,
     /// Pane width, for the hex dump's bytes per row.
     cols: AtomicU16,
+    /// Last time anything was sent to the remote (keys, paste, agent, anti-idle).
+    last_input: Mutex<Instant>,
 }
 
 struct ManualInject {
@@ -507,7 +510,9 @@ impl ConnectionManager {
             history: crate::history::get(&instance_id),
             binary: binary.then(|| Mutex::new(HexDump::default())),
             cols: AtomicU16::new(cols),
+            last_input: Mutex::new(Instant::now()),
         });
+        let anti_idle = AntiIdle::from_config(&config);
         let protocol = serde_json::to_value(&config.protocol)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
@@ -580,23 +585,16 @@ impl ConnectionManager {
             }
         };
 
+        if let Some(anti_idle) = anti_idle {
+            spawn_anti_idle(anti_idle, Arc::clone(&scoped), control.clone(), Arc::clone(&cancelled));
+        }
         lock(&self.sessions)
             .insert(instance_id, ActiveEntry { control, cancelled, log, sink: scoped, ssh: ssh_slot, label, protocol, target });
         Ok(())
     }
 
     fn write_entry(entry: &ActiveEntry, data: &[u8]) {
-        // Keystrokes must not corrupt a running ZModem transfer.
-        if entry.sink.transfer_busy() {
-            return;
-        }
-        // Binary data type: the bytes go out exactly as given (hex sender, keystrokes).
-        if entry.sink.binary.is_some() {
-            entry.control.send_write(data);
-            return;
-        }
-        let encoded = lock(&entry.sink.codec).encode(data);
-        entry.control.send_write(&encoded);
+        send_input(&entry.sink, &entry.control, data);
     }
 
     pub fn write(&self, instance_id: &str, data: &[u8]) -> Result<()> {
@@ -1036,6 +1034,44 @@ impl ConnectionManager {
         }
         crate::output::forget_detached(instance_id);
     }
+}
+
+/// Bytes typed into a pane, on their way to the remote.
+fn send_input(sink: &ScopedSink, control: &RuntimeControl, data: &[u8]) {
+    // Keystrokes must not corrupt a running ZModem transfer.
+    if sink.transfer_busy() {
+        return;
+    }
+    *lock(&sink.last_input) = Instant::now();
+    // Binary data type: the bytes go out exactly as given (hex sender, keystrokes).
+    if sink.binary.is_some() {
+        control.send_write(data);
+        return;
+    }
+    let encoded = lock(&sink.codec).encode(data);
+    control.send_write(&encoded);
+}
+
+/// One timer thread per connection with anti-idle on; it ends with the connection.
+fn spawn_anti_idle(anti_idle: AntiIdle, sink: Arc<ScopedSink>, control: RuntimeControl, cancelled: Arc<AtomicBool>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        // One lock at a time: the output path takes these in its own order.
+        let shell_busy = {
+            let tracker = lock(&sink.tracker);
+            tracker.alt_screen || tracker.running
+        };
+        let injecting = lock(&sink.inject).is_some();
+        let connected = *lock(&sink.status) == "connected";
+        let pane = PaneState { connected, busy: shell_busy || injecting || sink.transfer_busy() };
+        let last_input = *lock(&sink.last_input);
+        if anti_idle.due(Instant::now(), last_input, pane) {
+            send_input(&sink, &control, &anti_idle.bytes);
+        }
+    });
 }
 
 fn default_download_dir() -> PathBuf {
