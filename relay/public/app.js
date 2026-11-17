@@ -2,6 +2,7 @@
 // (crypto.js). Per computer: mirror and type into its tabs, manage its saved sessions,
 // browse the files of its SSH tabs (download to the phone, upload from it).
 import { b64urlDecode, b64urlEncode, roomId, Session, HELLO, ACCEPT, concat } from "./crypto.js";
+import { installWidths, setWideAmbiguous } from "./ambiguous.js";
 import { deviceName } from "./device.js";
 
 const P_JSON = 1;
@@ -1215,8 +1216,7 @@ const term = new window.Terminal({
   cursorBlink: false,
   theme: { background: "#1b1d23", foreground: "#d6d6d6", cursor: "#f0f0f0", selectionBackground: "#3a4a63" },
 });
-term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
-term.unicode.activeVersion = "11";
+installWidths(term, window.Unicode11Addon.Unicode11Addon);
 term.open($("term-host"));
 
 /** The computer's size; the page scales the font so the columns fit the screen. */
@@ -1224,6 +1224,8 @@ let remoteCols = 80;
 let remoteRows = 24;
 
 function onTermMessage(msg) {
+  // Ambiguous-width characters as the tab lays them out (before the screen that follows).
+  setWideAmbiguous(term, Boolean(msg.wide));
   if (msg.t === "reset") {
     term.reset();
     resizeTerm(msg.cols, msg.rows);

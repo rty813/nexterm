@@ -34,6 +34,15 @@ pub(crate) const F_SNAPSHOT_ALL: u8 = 4;
 pub(crate) const F_SCREEN: u8 = 5;
 pub(crate) const F_SCREEN_ALL: u8 = 6;
 
+/// Size at the start of F_SIZE / snapshot payloads: cols u16 LE, rows u16 LE. The top bit of
+/// cols says the pane draws East Asian Ambiguous characters two columns wide (GBK / Big5
+/// sessions, see src/services/remoteMirror.ts); the pages switch their width table on it.
+pub(crate) fn read_size(payload: &[u8]) -> (u16, u16, bool) {
+    let cols = u16::from_le_bytes([payload[0], payload[1]]);
+    let rows = u16::from_le_bytes([payload[2], payload[3]]);
+    (cols & 0x7fff, rows, cols & 0x8000 != 0)
+}
+
 pub(crate) const OUTPUT_CHUNK: usize = 128 * 1024;
 /// Waiting to go out to the relay; beyond this, phones skip output and get a fresh screen.
 pub(crate) const QUEUE_LIMIT: usize = 16 * 1024 * 1024;
@@ -496,16 +505,14 @@ pub fn feed(pane: &str, body: &[u8]) {
                 }
             }
             F_SIZE if len >= 4 => {
-                let cols = u16::from_le_bytes([payload[0], payload[1]]);
-                let rows = u16::from_le_bytes([payload[2], payload[3]]);
-                let msg = serde_json::json!({ "t": "size", "id": pane, "cols": cols, "rows": rows });
+                let (cols, rows, wide) = read_size(payload);
+                let msg = serde_json::json!({ "t": "size", "id": pane, "cols": cols, "rows": rows, "wide": wide });
                 for id in watcher_ids(&inner, pane) {
                     send_json(r, &mut inner, id, &msg);
                 }
             }
             F_SNAPSHOT | F_SNAPSHOT_ALL if len >= 4 && !over => {
-                let cols = u16::from_le_bytes([payload[0], payload[1]]);
-                let rows = u16::from_le_bytes([payload[2], payload[3]]);
+                let (cols, rows, wide) = read_size(payload);
                 let screen = &payload[4..];
                 let ids: Vec<u32> = inner
                     .phones
@@ -516,7 +523,7 @@ pub fn feed(pane: &str, body: &[u8]) {
                 let owner = inner.takeovers.get(pane).map(|(o, _, _)| *o);
                 for id in ids {
                     let msg = serde_json::json!({
-                        "t": "reset", "id": pane, "cols": cols, "rows": rows, "takenBy": owner.map(|o| if o == id { "me" } else { "other" }),
+                        "t": "reset", "id": pane, "cols": cols, "rows": rows, "wide": wide, "takenBy": owner.map(|o| if o == id { "me" } else { "other" }),
                     });
                     send_json(r, &mut inner, id, &msg);
                     for chunk in screen.chunks(OUTPUT_CHUNK) {
@@ -950,6 +957,12 @@ async fn session(r: &'static Remote, ws: link::Ws, generation: &mut watch::Recei
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn size_carries_the_wide_ambiguous_flag() {
+        assert_eq!(read_size(&[180, 0, 42, 0]), (180, 42, false));
+        assert_eq!(read_size(&[180, 0x80, 42, 0]), (180, 42, true));
+    }
 
     #[test]
     fn login_and_host_key_messages() {

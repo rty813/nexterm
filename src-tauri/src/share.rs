@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, watch};
 
 use crate::relay_link::{self as link, envelope, percent_encode, R_DATA, R_JOIN, R_KICK, R_LEAVE};
-use crate::remote::{F_OUTPUT, F_SCREEN, F_SCREEN_ALL, F_SIZE, F_SNAPSHOT, F_SNAPSHOT_ALL, OUTPUT_CHUNK, P_JSON, P_OUTPUT};
+use crate::remote::{read_size, F_OUTPUT, F_SCREEN, F_SCREEN_ALL, F_SIZE, F_SNAPSHOT, F_SNAPSHOT_ALL, OUTPUT_CHUNK, P_JSON, P_OUTPUT};
 use crate::remote_crypto::{self as rc, Session};
 
 const MAX_SHARES: usize = 4;
@@ -474,16 +474,14 @@ fn feed_share(sh: &mut Share, body: &[u8]) {
                 }
             }
             F_SIZE if len >= 4 => {
-                let cols = u16::from_le_bytes([payload[0], payload[1]]);
-                let rows = u16::from_le_bytes([payload[2], payload[3]]);
-                let msg = serde_json::json!({ "t": "size", "cols": cols, "rows": rows });
+                let (cols, rows, wide) = read_size(payload);
+                let msg = serde_json::json!({ "t": "size", "cols": cols, "rows": rows, "wide": wide });
                 for v in in_sync_ids(sh) {
                     send_json(sh, v, &msg);
                 }
             }
             k if (k == snap || k == snap_all) && len >= 4 && !over => {
-                let cols = u16::from_le_bytes([payload[0], payload[1]]);
-                let rows = u16::from_le_bytes([payload[2], payload[3]]);
+                let (cols, rows, wide) = read_size(payload);
                 let screen = &payload[4..];
                 let ids: Vec<u32> = sh
                     .viewers
@@ -491,7 +489,7 @@ fn feed_share(sh: &mut Share, body: &[u8]) {
                     .filter(|(_, v)| v.admitted && (k == snap_all || v.awaiting))
                     .map(|(id, _)| *id)
                     .collect();
-                let msg = serde_json::json!({ "t": "reset", "cols": cols, "rows": rows });
+                let msg = serde_json::json!({ "t": "reset", "cols": cols, "rows": rows, "wide": wide });
                 for v in ids {
                     send_json(sh, v, &msg);
                     for chunk in screen.chunks(OUTPUT_CHUNK) {

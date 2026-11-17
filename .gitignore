@@ -8,3 +8,5 @@ src-tauri/src-tauri
 .env
 .env.*
 !.env.example
+
+CLAUDE.local.md

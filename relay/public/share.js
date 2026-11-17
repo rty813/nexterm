@@ -3,6 +3,7 @@
 // relay only sees the room derived from it. Read-only until the computer grants control;
 // the viewer with control may also fit the terminal to its window ("take over size").
 import { b64urlDecode, roomId, Session, HELLO, ACCEPT, concat } from "./crypto.js";
+import { installWidths, setWideAmbiguous } from "./ambiguous.js";
 import { deviceName } from "./device.js";
 
 const P_JSON = 1;
@@ -144,8 +145,7 @@ const term = new window.Terminal({
   disableStdin: true,
   theme: { background: "#1b1d23", foreground: "#d6d6d6", cursor: "#f0f0f0", selectionBackground: "#3a4a63" },
 });
-term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
-term.unicode.activeVersion = "11";
+installWidths(term, window.Unicode11Addon.Unicode11Addon);
 term.open($("term-host"));
 
 let cols = 80;
@@ -494,6 +494,7 @@ function onMessage(msg) {
       showGate({ title: msg.title || tabTitle, text: T.waiting, note: T.e2e });
       break;
     case "reset":
+      setWideAmbiguous(term, Boolean(msg.wide));
       term.reset();
       resizeTerm(msg.cols, msg.rows);
       setCover("");
@@ -501,6 +502,7 @@ function onMessage(msg) {
       scrolledAt = 0;
       break;
     case "size":
+      setWideAmbiguous(term, Boolean(msg.wide));
       resizeTerm(msg.cols, msg.rows);
       renderBar();
       break;

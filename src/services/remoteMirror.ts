@@ -24,6 +24,8 @@ export interface MirrorPane {
   /** Screen (+ scrollback) as VT sequences. */
   serialize: (scrollback: boolean) => string;
   size: () => { cols: number; rows: number };
+  /** East Asian Ambiguous characters take two columns (GBK / Big5 sessions). */
+  wideAmbiguous: () => boolean;
   /** A phone took over the size (null: given back). */
   setSizeOverride: (size: { cols: number; rows: number } | null) => void;
   /** A phone answered the login form, or asked to reconnect (no credentials). */
@@ -52,10 +54,11 @@ function record(kind: number, payload: Uint8Array): Uint8Array {
   return out;
 }
 
-function sizeBytes(cols: number, rows: number): Uint8Array {
+/** The top bit of cols carries `wide` (ambiguous characters two columns), see remote.rs `read_size`. */
+function sizeBytes(cols: number, rows: number, wide: boolean): Uint8Array {
   const b = new Uint8Array(4);
   const v = new DataView(b.buffer);
-  v.setUint16(0, cols, true);
+  v.setUint16(0, (cols & 0x7fff) | (wide ? 0x8000 : 0), true);
   v.setUint16(2, rows, true);
   return b;
 }
@@ -102,7 +105,7 @@ function snapshotRecord(pane: MirrorPane, paneId: string, scrollback: boolean, k
   const screen = enc.encode(pane.serialize(scrollback));
   const rest = unparsed.get(paneId) ?? [];
   const payload = new Uint8Array(4 + screen.length + rest.reduce((n, c) => n + c.length, 0));
-  payload.set(sizeBytes(cols, rows));
+  payload.set(sizeBytes(cols, rows, pane.wideAmbiguous()));
   payload.set(screen, 4);
   let at = 4 + screen.length;
   for (const c of rest) {
@@ -184,7 +187,7 @@ export const remoteMirror = {
   },
 
   resized(paneId: string, cols: number, rows: number) {
-    if (watched.has(paneId)) queue(paneId, record(F_SIZE, sizeBytes(cols, rows)));
+    if (watched.has(paneId)) queue(paneId, record(F_SIZE, sizeBytes(cols, rows, panes.get(paneId)?.wideAmbiguous() ?? false)));
   },
 
   /** The desktop changed the screen without output (clear, reset, fold): resend it. */

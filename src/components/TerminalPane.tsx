@@ -871,6 +871,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const unmirror = remoteMirror.register(leaf.paneId, {
       serialize: (scrollback) => serializeAddon.serialize({ scrollback: scrollback ? 1000 : 0 }),
       size: () => ({ cols: term.cols, rows: term.rows }),
+      wideAmbiguous: () => term.unicode.activeVersion === WIDE_AMBIGUOUS_VERSION,
       // A phone took / gave back the size. Applied right here, not after a render or the
       // debounce timer: both stall while this window is minimized, which is when phones are used.
       login: (p) => remoteLoginRef.current(p),
@@ -1087,7 +1088,11 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const term = xtermRef.current;
     if (!term) return;
     const version = wideAmbiguous ? WIDE_AMBIGUOUS_VERSION : "11";
-    if (term.unicode.activeVersion !== version) term.unicode.activeVersion = version;
+    if (term.unicode.activeVersion === version) return;
+    term.unicode.activeVersion = version;
+    // Phones and share viewers switch their widths with the new screen.
+    remoteMirror.refresh(leaf.paneId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wideAmbiguous]);
 
   useEffect(() => {

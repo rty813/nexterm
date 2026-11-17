@@ -53,3 +53,12 @@ describe("ambiguous width", () => {
     expect(caught[0].wcwidth(cp("●"))).toBe(1);
   });
 });
+
+describe("relay pages' ambiguous table", () => {
+  it("matches the desktop one", async () => {
+    // @ts-expect-error plain JS module served to the phone and share pages
+    const relay = (await import("../../relay/public/ambiguous.js")) as { isAmbiguous: (cp: number) => boolean };
+    for (let c = 0; c < 0x30000; c++) if (relay.isAmbiguous(c) !== isAmbiguous(c)) expect(c.toString(16)).toBe("same");
+    expect(relay.isAmbiguous(0xe0100)).toBe(isAmbiguous(0xe0100));
+  });
+});
