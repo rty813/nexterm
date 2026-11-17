@@ -3,7 +3,7 @@ import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentH
 import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
 import { X } from "lucide-react";
-import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition } from "../types/domain";
+import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
 export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "highlight" | "keys" | "toolbar";
@@ -419,6 +419,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <span>{t("settingsModal.closeToTray")}</span>
           </label>
 
+          <h4 className="section-heading">{t("update.section")}</h4>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={draft.checkUpdates !== false}
+              onChange={(e) => setDraft({ ...draft, checkUpdates: e.target.checked })}
+            />
+            <span>{t("update.checkAtStartup")}</span>
+          </label>
+          <UpdateCheckRow />
+
 
           <label className="field">
             <span>{t("settingsModal.lockPasscode")}</span>
@@ -468,6 +479,40 @@ const AgentHookStatusLine: React.FC<{ status: HookStatus | null | undefined }> =
       {item("Codex", status.codex)}
       {item("Gemini CLI", status.gemini)}
       {status.outdated && <span className="hook-state hook-outdated">{t("agent.outdatedHint")}</span>}
+    </div>
+  );
+};
+
+/** "Check now" with the result inline: up to date, a newer release (with a download link) or the error. */
+const UpdateCheckRow: React.FC = () => {
+  const { t } = useTranslation();
+  const [state, setState] = useState<
+    { kind: "idle" } | { kind: "checking" } | { kind: "done"; info: UpdateInfo } | { kind: "failed"; error: string }
+  >({ kind: "idle" });
+  const check = () => {
+    setState({ kind: "checking" });
+    backend
+      .checkUpdate()
+      .then((info) => setState({ kind: "done", info }))
+      .catch((e) => setState({ kind: "failed", error: String(e) }));
+  };
+  return (
+    <div className="agent-hooks-row">
+      <button type="button" className="btn-secondary" disabled={state.kind === "checking"} onClick={check}>
+        {state.kind === "checking" ? t("update.checking") : t("update.checkNow")}
+      </button>
+      {state.kind === "done" && !state.info.available && (
+        <span className="adv-hint">{t("update.upToDate", { version: state.info.current })}</span>
+      )}
+      {state.kind === "done" && state.info.available && (
+        <>
+          <span className="adv-hint">{t("update.message", { current: state.info.current, latest: state.info.latest })}</span>
+          <button type="button" className="btn-primary" onClick={() => void backend.openExternal(state.info.url)}>
+            {t("update.download")}
+          </button>
+        </>
+      )}
+      {state.kind === "failed" && <span className="adv-hint">{t("update.failed", { error: state.error })}</span>}
     </div>
   );
 };

@@ -89,6 +89,7 @@ import { CommandPalette, type PaletteTab } from "./components/CommandPalette";
 import { ProtocolBadge } from "./components/ProtocolBadge";
 import { ACTIONS, DEFAULT_TOOLBAR_HIDDEN, TOOLBAR_LAYOUT_VERSION } from "./utils/actions";
 import { restoreWorkspace, snapshotWorkspace, type WorkspaceSnapshot } from "./utils/workspaceSnapshot";
+import { UPDATE_CHECK_DELAY_MS, releaseNotesPreview, shouldPromptUpdate, updateCheckEnabled } from "./utils/updateCheck";
 
 function sameDropHint(a: DropHint | null, b: DropHint | null): boolean {
   if (!a || !b) return a === b;
@@ -1438,6 +1439,36 @@ export const App: React.FC = () => {
   const activeLeafRef = useRef<TerminalLeafNode | null>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+
+  // Update check (main window only): once per start, a few seconds in. Offline stays silent.
+  useEffect(() => {
+    if (!isMainWindow || !syncLoaded || !isTauriRuntime()) return;
+    if (!updateCheckEnabled(settingsRef.current)) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void backend
+        .checkUpdate()
+        .then(async (info) => {
+          if (cancelled || !shouldPromptUpdate(info, settingsRef.current)) return;
+          const answer = await ask({
+            title: t("update.title", { version: info.latest }),
+            message: t("update.message", { current: info.current, latest: info.latest }),
+            detail: releaseNotesPreview(info.notes) || undefined,
+            okLabel: t("update.download"),
+            cancelLabel: t("update.later"),
+            checkboxLabel: t("update.skip"),
+          });
+          if (answer.ok) void backend.openExternal(info.url).catch((e) => setToast(String(e)));
+          else if (answer.checked) saveSettings({ ...settingsRef.current, skippedUpdateVersion: info.latest });
+        })
+        .catch(() => undefined);
+    }, UPDATE_CHECK_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMainWindow, syncLoaded]);
 
   const isAppShortcut = useCallback((ev: KeyboardEvent) => {
     const combo = comboFromEvent(ev);

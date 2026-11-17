@@ -265,6 +265,10 @@ export interface AppSettings {
   agentScreenDetect?: boolean;
   /** Windows notification when an agent finishes, needs approval or fails (default on). */
   agentNotify?: boolean;
+  /** Check GitHub for a newer release at startup (default on). */
+  checkUpdates?: boolean;
+  /** A release the user chose to skip: no startup prompt for it (a newer one prompts again). */
+  skippedUpdateVersion?: string;
 
   // ---- WindTerm parity (see utils/settingsDefaults.ts for the defaults) ----
 
@@ -673,3 +677,13 @@ export type SyncChannel = "A" | "B" | "C" | "D";
  * terminal; channels: panes that joined the same channel (A-D) via the pane menu.
  */
 export type SyncInputScope = "off" | "visible" | "all" | "channels";
+
+/** Result of the update check (Rust `update::UpdateInfo`). */
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  available: boolean;
+  url: string;
+  notes: string;
+  publishedAt?: string | null;
+}

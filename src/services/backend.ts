@@ -27,6 +27,7 @@ import type {
   SyncOutcome,
   SyncSettings,
   SyncStateInfo,
+  UpdateInfo,
 } from "../types/domain";
 import type { HistoryInfo, HistoryPage } from "../utils/historyView";
 
@@ -1316,6 +1317,12 @@ export const backend = {
       return;
     }
     await invoke("open_external", { url });
+  },
+
+  /** Compare this build with the newest GitHub release (throws when offline / outside Tauri). */
+  async checkUpdate(): Promise<UpdateInfo> {
+    if (!isTauriRuntime()) throw new Error("not in Tauri");
+    return invoke<UpdateInfo>("check_update");
   },
 
   /** Command names for completion, from WindTerm's terminal/commands (empty when absent). */

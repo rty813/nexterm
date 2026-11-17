@@ -27,6 +27,7 @@ pub mod tcp_conn;
 pub mod telnet_conn;
 pub mod term_capture;
 pub mod transfer;
+pub mod update;
 pub mod xserver;
 pub mod xymodem;
 pub mod zmodem;
@@ -584,6 +585,12 @@ fn open_external(url: String) -> Result<(), String> {
         let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
         std::process::Command::new(opener).arg(&url).spawn().map(|_| ()).map_err(|e| e.to_string())
     }
+}
+
+/// Newest GitHub release compared with this build.
+#[tauri::command]
+async fn check_update() -> Result<crate::update::UpdateInfo, String> {
+    crate::update::check().await
 }
 
 /// Command names + descriptions for auto completion (WindTerm terminal/commands).
@@ -1607,6 +1614,7 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            check_update,
             config_export,
             config_inspect,
             config_import,
