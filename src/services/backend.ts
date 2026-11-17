@@ -28,6 +28,7 @@ import type {
   SyncOutcome,
   SyncSettings,
   SyncStateInfo,
+  SystemFont,
   UpdateInfo,
 } from "../types/domain";
 import type { HistoryInfo, HistoryPage } from "../utils/historyView";
@@ -899,6 +900,12 @@ export const backend = {
   async listCharsets(): Promise<string[]> {
     if (!isTauriRuntime()) return ["UTF-8", "GBK", "GB18030", "Big5", "Shift_JIS", "EUC-KR", "ISO-8859-1"];
     return invoke<string[]>("list_charsets");
+  },
+
+  /** Font families installed on this computer (empty outside Tauri or when unreadable). */
+  async listSystemFonts(): Promise<SystemFont[]> {
+    if (!isTauriRuntime()) return [];
+    return invoke<SystemFont[]>("list_system_fonts").catch(() => []);
   },
 
   async setWindowOpacity(opacity: number): Promise<void> {

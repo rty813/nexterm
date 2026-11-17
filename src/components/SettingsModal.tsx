@@ -13,6 +13,7 @@ import { TriggerEditor } from "./TriggerEditor";
 import { RemoteSettingsEditor } from "./SettingsRemote";
 import { SyncSettingsEditor } from "./SettingsSync";
 import { useCloseGuard } from "./useCloseGuard";
+import { FontFamilyField } from "./FontFamilyField";
 
 interface SettingsModalProps {
   settings: AppSettings;
@@ -138,17 +139,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </label>
           </div>
 
-          <label className="field">
-            <span>{t("settingsModal.fontFamily")}</span>
-            <input
-              type="text"
-              className="text-input"
-              value={draft.fontFamily}
-              onChange={(e) =>
-                setDraft({ ...draft, fontFamily: e.target.value })
-              }
-            />
-          </label>
+          <FontFamilyField
+            value={draft.fontFamily}
+            onChange={(fontFamily) => setDraft({ ...draft, fontFamily })}
+          />
 
           <div className="form-grid-3">
             <label className="field">

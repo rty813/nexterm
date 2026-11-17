@@ -235,6 +235,12 @@ export interface ThemeDefinition {
   ];
 }
 
+/** A font family installed on this computer (Rust `fonts::SystemFont`). */
+export interface SystemFont {
+  name: string;
+  monospace: boolean;
+}
+
 export interface AppSettings {
   language: "zh-CN" | "en-US" | string;
   themeId: string;

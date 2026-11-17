@@ -2,6 +2,7 @@ pub mod agent;
 pub mod app_paths;
 pub mod charset;
 pub mod commands;
+pub mod fonts;
 pub mod hexdump;
 pub mod history;
 pub mod importer;
@@ -594,6 +595,14 @@ fn open_external(url: String) -> Result<(), String> {
 #[tauri::command]
 async fn check_update() -> Result<crate::update::UpdateInfo, String> {
     crate::update::check().await
+}
+
+/// Font families installed on this computer, for the terminal font picker.
+#[tauri::command]
+async fn list_system_fonts() -> Vec<crate::fonts::SystemFont> {
+    tauri::async_runtime::spawn_blocking(crate::fonts::list)
+        .await
+        .unwrap_or_default()
 }
 
 /// Command names + descriptions for auto completion (WindTerm terminal/commands).
@@ -1710,6 +1719,7 @@ pub fn run() {
             zmodem_stage_chunk,
             zmodem_unstage,
             list_charsets,
+            list_system_fonts,
             set_window_opacity,
             stash_pane_transfer,
             take_pane_transfer,

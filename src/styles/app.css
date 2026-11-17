@@ -4889,3 +4889,35 @@ html.ctxmenu-host #root {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Terminal font picker (settings → general) */
+.font-family-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.font-family-pick {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 12px;
+}
+.font-family-pick .checkbox-row {
+  height: 30px;
+  white-space: nowrap;
+}
+.font-family-loading {
+  font-style: normal;
+  font-weight: 400;
+  opacity: 0.8;
+}
+.font-family-preview {
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  border: 1px dashed var(--border-subtle);
+  color: var(--fg-strong);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
