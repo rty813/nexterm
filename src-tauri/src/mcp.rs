@@ -42,7 +42,7 @@ const OUT_TAIL: usize = 26_000;
 const INSTRUCTIONS: &str = "Nexterm 终端控制。先用 list_panes 查看窗格；操作某个窗格前用 request_control 申请，\
 用户在 Nexterm 中确认后才能读屏和输入（control 为 active 的窗格可以直接操作）。\
 普通 shell 命令用 run_command（有 Shell 集成时返回输出和退出码）；vim、top、REPL、密码提示等交互程序用 send_keys + read_screen；\
-长时间运行的命令用 wait_for 继续等待；更早的输出（已滚出屏幕和回滚区）用 search_history 搜索、read_history 读取。完成后用 release_control 把窗格还给用户。\
+长时间运行的命令用 wait_for 继续等待；更早的输出（已滚出屏幕和回滚区）用 search_history 搜索、read_history 读取。SSH 窗格可以用 list_files 浏览服务器目录，用 upload_file / download_file 在本机和服务器之间传输文件或文件夹（SFTP，不支持时用 SCP），不要用 cat、base64 或 heredoc 经终端传文件。完成后用 release_control 把窗格还给用户。\
 需要连接新的机器或开新的本地终端时，用 list_sessions 找已保存的会话，再用 open_session 打开（用户确认后新窗格直接归你控制）；\
 自己打开的窗格用完可以用 close_pane 关闭。\
 用户可以随时暂停或收回控制，此时工具会返回错误，请停止操作并等待用户。用户拒绝申请后不要反复申请。\
@@ -417,7 +417,7 @@ fn tool_text(text: String, is_error: bool) -> Value {
 
 fn tool_defs() -> Value {
     let pane = json!({ "type": "string", "description": "窗格 id（来自 list_panes）" });
-    json!([
+    let mut tools = json!([
         {
             "name": "list_panes",
             "description": "列出 Nexterm 中打开的终端窗格：id、标题、协议、目标主机、连接状态、control（none 未授权 / active 你在控制 / paused 用户暂停）、是否有待确认的申请、是否有 Shell 集成、是否有命令正在运行。",
@@ -558,7 +558,11 @@ fn tool_defs() -> Value {
             },
             "annotations": { "readOnlyHint": true }
         }
-    ])
+    ]);
+    if let Some(list) = tools.as_array_mut() {
+        list.extend(crate::mcp_files::tool_defs(&pane));
+    }
+    tools
 }
 
 /// Requests answered without the running app (the bridge uses this too).
@@ -671,6 +675,13 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 
 fn arg_u64(args: &Value, key: &str, default: u64, max: u64) -> u64 {
     args.get(key).and_then(Value::as_u64).unwrap_or(default).min(max)
+}
+
+/// Last component of a local or remote path, for the pane banner.
+fn file_name_of(path: &str) -> String {
+    let p = path.trim().trim_end_matches(['/', '\\']);
+    let name = p.rsplit(['/', '\\']).next().unwrap_or(p);
+    name.chars().take(40).collect()
 }
 
 fn history_of(pane: &str) -> Result<std::sync::Arc<crate::history::Recorder>, String> {
@@ -808,6 +819,10 @@ fn call_tool(app: &AppHandle, name: &str, args: &Value, caller: &Caller) -> Resu
         return open_session(app, &ctx, args, &reason, caller, wait);
     }
 
+    if name == "transfer_status" {
+        return crate::mcp_files::transfer_status(args);
+    }
+
     let pane = arg_str(args, "pane").ok_or("缺少参数 pane")?.to_string();
     if Some(pane.as_str()) == own {
         return Err("不能操作 agent 自己所在的窗格".into());
@@ -835,6 +850,15 @@ fn call_tool(app: &AppHandle, name: &str, args: &Value, caller: &Caller) -> Resu
         "read_history" => return read_history(&pane, args),
         "search_history" => return search_history(&pane, args),
         _ => {}
+    }
+    if crate::mcp_files::TOOL_NAMES.contains(&name) {
+        let activity = match name {
+            "upload_file" => Some(format!("⇡ 上传 {}", file_name_of(arg_str(args, "local_path").unwrap_or("")))),
+            "download_file" => Some(format!("⇣ 下载 {}", file_name_of(arg_str(args, "remote_path").unwrap_or("")))),
+            _ => None,
+        };
+        let _busy = Busy::take(&pane, activity)?;
+        return crate::mcp_files::call(app, name, &pane, args);
     }
     let rt = conns.pane_runtime(&pane).ok_or("该窗格没有活动的连接")?;
 
@@ -1724,7 +1748,7 @@ mod tests {
         let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}});
         assert_eq!(local_response(&init).unwrap().unwrap()["result"]["protocolVersion"], DEFAULT_PROTOCOL);
         let list = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
-        assert_eq!(local_response(&list).unwrap().unwrap()["result"]["tools"].as_array().unwrap().len(), 12);
+        assert_eq!(local_response(&list).unwrap().unwrap()["result"]["tools"].as_array().unwrap().len(), 16);
         assert!(local_response(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).unwrap().is_none());
         assert!(local_response(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call"})).is_none());
         assert_eq!(local_response(&json!({"jsonrpc":"2.0","id":4,"method":"x"})).unwrap().unwrap()["error"]["code"], -32601);

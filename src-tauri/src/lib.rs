@@ -7,6 +7,7 @@ pub mod importer;
 pub mod local_pty;
 pub mod manager;
 pub mod mcp;
+pub mod mcp_files;
 pub mod models;
 pub mod net;
 pub mod notify;

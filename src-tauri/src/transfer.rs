@@ -595,6 +595,10 @@ impl Hub {
         lock(&self.jobs).iter().map(|j| j.info.clone()).collect()
     }
 
+    pub fn get(&self, id: &str) -> Option<TransferInfo> {
+        lock(&self.jobs).iter().find(|j| j.info.id == id).map(|j| j.info.clone())
+    }
+
     pub fn set_limit(&'static self, n: usize) {
         self.limit.store(n.clamp(1, 16), Ordering::Relaxed);
         self.schedule();
