@@ -1,7 +1,8 @@
-// Phone page: any number of paired computers, each on its own end-to-end encrypted link
+// Remote access page (phone or desktop browser): any number of paired computers, each on its own end-to-end encrypted link
 // (crypto.js). Per computer: mirror and type into its tabs, manage its saved sessions,
 // browse the files of its SSH tabs (download to the phone, upload from it).
 import { b64urlDecode, b64urlEncode, roomId, Session, HELLO, ACCEPT, concat } from "./crypto.js";
+import { deviceName } from "./device.js";
 
 const P_JSON = 1;
 const P_OUTPUT = 2;
@@ -338,7 +339,7 @@ class Computer {
         break;
       }
       case "error":
-        if (msg.code === "too-many") this.setState("error", "连接的手机太多了");
+        if (msg.code === "too-many") this.setState("error", "连接的设备太多了");
         break;
     }
   }
@@ -380,7 +381,7 @@ class Computer {
           total = info.size;
           if (total > DOWN_LIMIT) {
             t.cancel();
-            reject(new Error("文件太大（手机端最多下载 1 GB）"));
+            reject(new Error("文件太大（最多下载 1 GB）"));
           }
           d.progress(d.got);
         },
@@ -440,16 +441,6 @@ class Computer {
   }
 }
 
-function deviceName() {
-  const ua = navigator.userAgent;
-  if (/iPhone/.test(ua)) return "iPhone";
-  if (/iPad/.test(ua)) return "iPad";
-  const m = ua.match(/Android [\d.]+; ([^;)]+)/);
-  if (m) return m[1].replace(/ Build.*$/, "").trim();
-  if (/Android/.test(ua)) return "Android";
-  return "Browser";
-}
-
 function stateText(c) {
   switch (c.state) {
     case "online":
@@ -458,11 +449,11 @@ function stateText(c) {
     case "idle":
       return "正在连接…";
     case "offline":
-      return "不在线（请确认 Nexterm 已开启手机远程）";
+      return "不在线（请确认 Nexterm 已开启远程访问）";
     case "kicked":
       return "已被电脑断开";
     case "badkey":
-      return "配对已失效，请重新扫码";
+      return "配对已失效，请重新配对";
     default:
       return c.note || "连接失败";
   }
@@ -512,7 +503,7 @@ function resetNav() {
   while (stack.length > 1) leave(stack.pop());
   stack[0] = computers.length ? "home" : "gate";
   if (stack[0] === "home") renderHome();
-  else gate("这台手机还没有配对电脑。");
+  else gate("这个浏览器还没有配对电脑。");
   show(stack[0]);
   if (extra <= 0) return Promise.resolve();
   return new Promise((resolve) => {
@@ -1074,7 +1065,7 @@ function joinPath(dir, name) {
 function fileMenu(e) {
   const items = [];
   if (isDir(e)) items.push({ label: "打开", run: () => void listDir(e.path) });
-  else items.push({ label: "下载到手机", run: () => void downloadFile(e) });
+  else items.push({ label: "下载到本设备", run: () => void downloadFile(e) });
   if (!cur.readOnly) {
     items.push({
       label: "重命名",
@@ -1118,7 +1109,7 @@ $("files-path").onkeydown = (ev) => {
 $("files-menu").onclick = () => {
   const items = [];
   if (!cur.readOnly) {
-    items.push({ label: "从手机上传文件", run: () => $("upload-input").click() });
+    items.push({ label: "从本设备上传文件", run: () => $("upload-input").click() });
     items.push({
       label: "新建文件夹",
       run: async () => {

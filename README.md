@@ -10,7 +10,7 @@ It keeps WindTerm's familiar workflow (session tree, nested split panes, quick c
 
 - **Remote File Workflow**: Side-by-side SFTP browser (with automatic SCP fallback), parallel transfer queue, instant previews, and **local edit with auto-upload on save**.
 - **AI Agent Awareness & Control**: Live tab badges for **Claude Code / Codex / Gemini CLI**; desktop notifications when an agent **finishes, needs permission approval, or errors out** (click to jump straight to the pane); plus a built-in MCP server for human-approved terminal delegation.
-- **E2EE Phone Access**: Scan a QR code to view and control desktop terminals from your mobile browser, adapt terminal dimensions to your phone screen, manage sessions, and transfer files with zero-knowledge encryption.
+- **E2EE Remote Access & Session Sharing**: Scan a QR code or open a link to view and control desktop terminals from any browser (phone or computer), adapt terminal dimensions to a phone screen, manage sessions, transfer files, or share a single session through a one-off link (read-only until you grant control), all with zero-knowledge encryption.
 - **Full Scrollback History**: Every line a pane ever printed stays available, compressed in the background. Scroll, search and export all of it, back to the start of the session.
 
 Windows 10 / 11 only. Current version: `0.1.3`.
@@ -71,12 +71,14 @@ Windows 10 / 11 only. Current version: `0.1.3`.
   <sub>Claude Code opens a WSL pane through Nexterm's MCP server, checks disk usage, and closes it again (2.5× speed; click for the full video).</sub>
 </p>
 
-### Phone Access
+### Remote Access & Session Sharing
 
-- **Self-Hosted Zero-Knowledge E2EE**: Uses a lightweight self-hosted relay (see [relay/README.md](relay/README.md); Docker included) with a one-click toolbar toggle. Pair via QR code—keys stay in the URL `#` fragment and never reach the relay, which sees only AES-256-GCM ciphertext.
-- **Mobile PWA & Adaptive Sizing**: Add to your home screen, use the touch bar (`Esc`, `Tab`, `Ctrl`, `Alt`, arrows), and connect one phone to multiple PCs at once; **"Take over size"** resizes the terminal to fit your phone screen and restores desktop dimensions when you leave.
-- **Direct Mobile Login & Reconnect**: Enter **SSH usernames / passwords** and confirm **host keys** directly from your phone when opening sessions (dismissing the desktop prompt automatically), plus reconnect or re-enter passwords on failed/closed tabs.
-- **Sessions, Files & Read-Only Mode**: Browse, create, edit, or launch saved PC sessions (saved passwords never leave your PC), upload/download remote files up to **1 GB**, or enable **"View only"** mode (up to 8 phones connected at once).
+- **Self-Hosted Zero-Knowledge E2EE**: Uses a lightweight self-hosted relay (see [relay/README.md](relay/README.md); Docker included) with a one-click toolbar toggle. Pair via QR code or link from a phone or any desktop browser—keys stay in the URL `#` fragment and never reach the relay, which sees only AES-256-GCM ciphertext.
+- **PWA & Adaptive Sizing**: Add to your phone's home screen or open it in a desktop browser, use the touch bar (`Esc`, `Tab`, `Ctrl`, `Alt`, arrows), and connect one device to multiple PCs at once; **"Take over size"** resizes the terminal to fit the remote screen and restores desktop dimensions when you leave.
+- **Remote Login & Reconnect**: Enter **SSH usernames / passwords** and confirm **host keys** directly from the remote device when opening sessions (dismissing the desktop prompt automatically), plus reconnect or re-enter passwords on failed/closed tabs.
+- **Sessions, Files & Read-Only Mode**: Browse, create, edit, or launch saved PC sessions (saved passwords never leave your PC), upload/download remote files up to **1 GB**, or enable **"View only"** mode (up to 8 devices connected at once). Settings → **Remote Access** lists the connected devices and active shares.
+- **One-Off Session Sharing**: Needs only a relay address (remote access can stay off). Right-click a tab or pane → **Share This Session…** to get a link and QR code for just that terminal: its own key, kept in memory only, so the link stops working for good when you stop sharing, close the tab, it expires (1 / 4 / 24 hours or never) or Nexterm exits. Viewers see nothing else on your PC, open it in any browser without installing anything, and only watch by default.
+- **Control on Request**: A viewer can ask for control; you allow it from a banner over the pane or from the share dialog. One viewer types at a time (your keyboard keeps working) and may **take over the size**, which goes back to the desktop as soon as control ends. Optionally ask before each viewer joins, limit the link to a single viewer, or include the scrollback (otherwise only the current screen is sent). A badge on the pane shows who is watching or typing.
 
 <p align="center">
   <a href="docs/media/phone-remote.mp4"><img src="docs/media/phone-remote.gif" alt="Phone access demo: controlling a desktop SSH session from a phone" width="860" /></a>
@@ -87,7 +89,7 @@ Windows 10 / 11 only. Current version: `0.1.3`.
 ### Config Sync & Backup
 
 - **Cloud Sync Across PCs**: Under **Settings → Sync & Backup**, sync sessions, quick commands, custom themes, settings, senders, and command history to **S3-compatible storage** (AWS S3, Cloudflare R2, MinIO, Aliyun OSS, Tencent COS, ...), **WebDAV** (Nextcloud, Synology, Jianguoyun, ...), a **GitHub Gist** (secret, with revision history), or a **local / network folder** (OneDrive, Dropbox, SMB shares, ...). Optional auto sync at startup and on an interval.
-- **Conflict Handling & Machine-Local Settings**: Detects whether to upload or download; when both sides changed, choose to merge (by ID), keep local, or keep remote. Each PC keeps its own sync target, log folder, X server, and phone remote settings.
+- **Conflict Handling & Machine-Local Settings**: Detects whether to upload or download; when both sides changed, choose to merge (by ID), keep local, or keep remote. Each PC keeps its own sync target, log folder, X server, and remote access settings.
 - **Encrypted Export / Import**: Export selected categories to a single JSON file, optionally password-protected (PBKDF2 + AES-256-GCM), and import by merging or replacing. The current config is backed up to `backups/` in the data folder before every import or download (last 10 kept).
 
 ### Other
@@ -158,8 +160,8 @@ cd relay; npm test                                       # relay & E2EE protocol
 | Path | Contents |
 | --- | --- |
 | `src/` | Front end (React + TypeScript); `utils/` holds UI-independent logic and core unit tests |
-| `src-tauri/` | Rust backend: connections, protocols, SFTP / SCP, shell integration, full scrollback history, MCP, phone access |
-| `relay/` | Self-hosted relay server and mobile PWA (Node.js) |
+| `src-tauri/` | Rust backend: connections, protocols, SFTP / SCP, shell integration, full scrollback history, MCP, remote access, session sharing |
+| `relay/` | Self-hosted relay server, remote access PWA and session share page (Node.js) |
 | `bench/` | Throughput and memory benchmark scripts |
 
 ## Contributing

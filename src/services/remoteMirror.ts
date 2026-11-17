@@ -1,7 +1,7 @@
-import { backend, type RemoteLoginPayload } from "./backend";
+import { backend, type RemoteLoginPayload, type WatchState } from "./backend";
 
 /**
- * Forwards what watched panes show to the phone remote (see src-tauri/src/remote.rs).
+ * Forwards what watched panes show to remote access and session shares (see src-tauri/src/remote.rs).
  * The desktop xterm.js is the source of truth: a phone that opens a tab first gets the
  * serialized screen plus the output xterm has not parsed yet, then every chunk that
  * arrives after it, so the two never drift.
@@ -15,11 +15,14 @@ const F_OUTPUT = 1;
 const F_SIZE = 2;
 const F_SNAPSHOT = 3;
 const F_SNAPSHOT_ALL = 4;
+/** Visible screen only, for shares without scrollback (`share.rs`). */
+const F_SCREEN = 5;
+const F_SCREEN_ALL = 6;
 const FLUSH_BYTES = 256 * 1024;
 
 export interface MirrorPane {
-  /** Screen + scrollback as VT sequences. */
-  serialize: () => string;
+  /** Screen (+ scrollback) as VT sequences. */
+  serialize: (scrollback: boolean) => string;
   size: () => { cols: number; rows: number };
   /** A phone took over the size (null: given back). */
   setSizeOverride: (size: { cols: number; rows: number } | null) => void;
@@ -30,6 +33,9 @@ export interface MirrorPane {
 const enc = new TextEncoder();
 const panes = new Map<string, MirrorPane>();
 const watched = new Set<string>();
+/** Watched by someone that gets snapshots with scrollback / of the screen only. */
+const watchFull = new Set<string>();
+const watchScreen = new Set<string>();
 const sizes = new Map<string, { cols: number; rows: number }>();
 const pending = new Map<string, Uint8Array[]>();
 /** Output received and not yet parsed by the pane's xterm, oldest first. */
@@ -82,12 +88,18 @@ function flush() {
   pending.clear();
 }
 
-/** all: every watcher resets (the desktop rewrote the screen); else only phones waiting for one. */
+/** all: every watcher resets (the desktop rewrote the screen); else only the ones waiting for one. */
 function snapshot(paneId: string, all = false) {
   const pane = panes.get(paneId);
   if (!pane || !watched.has(paneId)) return;
+  if (watchFull.has(paneId)) queue(paneId, snapshotRecord(pane, paneId, true, all ? F_SNAPSHOT_ALL : F_SNAPSHOT));
+  if (watchScreen.has(paneId)) queue(paneId, snapshotRecord(pane, paneId, false, all ? F_SCREEN_ALL : F_SCREEN));
+  flush();
+}
+
+function snapshotRecord(pane: MirrorPane, paneId: string, scrollback: boolean, kind: number): Uint8Array {
   const { cols, rows } = pane.size();
-  const screen = enc.encode(pane.serialize());
+  const screen = enc.encode(pane.serialize(scrollback));
   const rest = unparsed.get(paneId) ?? [];
   const payload = new Uint8Array(4 + screen.length + rest.reduce((n, c) => n + c.length, 0));
   payload.set(sizeBytes(cols, rows));
@@ -97,26 +109,36 @@ function snapshot(paneId: string, all = false) {
     payload.set(c, at);
     at += c.length;
   }
-  // Output already queued goes first, to the phones that are in sync.
-  queue(paneId, record(all ? F_SNAPSHOT_ALL : F_SNAPSHOT, payload));
-  flush();
+  // Output already queued goes first, to the watchers that are in sync.
+  return record(kind, payload);
+}
+
+function setWatched(state: WatchState) {
+  watched.clear();
+  watchFull.clear();
+  watchScreen.clear();
+  for (const id of state.full) {
+    watched.add(id);
+    watchFull.add(id);
+  }
+  for (const id of state.screen) {
+    watched.add(id);
+    watchScreen.add(id);
+  }
 }
 
 function start() {
   if (started) return;
   started = true;
   void backend.remoteWatchState().then((s) => {
-    for (const id of s.watched) watched.add(id);
+    setWatched(s.watched);
     for (const sz of s.sizes) {
       sizes.set(sz.paneId, { cols: sz.cols, rows: sz.rows });
       panes.get(sz.paneId)?.setSizeOverride({ cols: sz.cols, rows: sz.rows });
     }
-    for (const id of s.watched) snapshot(id);
+    for (const id of watched) snapshot(id);
   });
-  void backend.onRemoteWatch((list) => {
-    watched.clear();
-    for (const id of list) watched.add(id);
-  });
+  void backend.onRemoteWatch(setWatched);
   void backend.onRemoteSnapshot((paneId) => snapshot(paneId));
   // Every window hears it; only the one showing the pane has it registered.
   void backend.onRemoteLogin((p) => panes.get(p.paneId)?.login(p));

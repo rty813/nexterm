@@ -595,3 +595,16 @@ button {
   flex-direction: column;
   gap: 6px;
 }
+
+/* Desktop browsers: list screens stay readable instead of spanning the whole window. */
+@media (min-width: 1000px) {
+  #home > *,
+  #computer > *,
+  #session-form > *,
+  #files > * {
+    width: 100%;
+    max-width: 960px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}

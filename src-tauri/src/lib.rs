@@ -13,11 +13,13 @@ pub mod models;
 pub mod net;
 pub mod notify;
 pub mod output;
+pub mod relay_link;
 pub mod remote;
 pub mod remote_crypto;
 pub mod remote_ops;
 pub mod scp;
 pub mod serial_conn;
+pub mod share;
 pub mod session_log;
 pub mod sftp;
 pub mod shell_integration;
@@ -560,7 +562,7 @@ fn write_text_file(path: String, content: String) -> Result<(), String> {
 fn open_external(url: String) -> Result<(), String> {
     let url = url.trim().to_string();
     let lower = url.to_ascii_lowercase();
-    if !["http://", "https://", "ftp://", "mailto:"].iter().any(|p| lower.starts_with(p)) {
+    if !["http://", "https://", "ftp://", "ftps://", "mailto:"].iter().any(|p| lower.starts_with(p)) {
         return Err(format!("不支持打开这种链接：{}", url));
     }
     if url.chars().any(|c| c.is_control()) {
@@ -1356,13 +1358,15 @@ fn remote_kick(phone: u32) {
 #[tauri::command]
 fn remote_report_tabs(window: tauri::WebviewWindow, tabs: Vec<crate::remote::RemoteTab>) {
     crate::remote::report_tabs(window.label(), tabs);
+    crate::share::tabs_changed();
 }
 
-/// What phones watch and which sizes they hold, for a pane that mounts later.
+/// What remote devices and shares watch and which sizes devices hold, for a pane that mounts later.
 #[tauri::command]
 fn remote_watch_state() -> serde_json::Value {
     let sizes: Vec<serde_json::Value> = crate::remote::takeovers()
         .into_iter()
+        .chain(crate::share::takeovers())
         .map(|(pane, cols, rows)| serde_json::json!({ "paneId": pane, "cols": cols, "rows": rows }))
         .collect();
     serde_json::json!({ "watched": crate::remote::watched(), "sizes": sizes })
@@ -1371,6 +1375,7 @@ fn remote_watch_state() -> serde_json::Value {
 #[tauri::command]
 fn remote_release(pane_id: String) {
     crate::remote::release(&pane_id);
+    crate::share::release_pane(&pane_id);
 }
 
 /// Output, size changes and screen snapshots of a watched pane (raw body, see `remote.rs`).
@@ -1381,7 +1386,44 @@ fn remote_feed(request: tauri::ipc::Request<'_>) -> Result<(), String> {
         return Err("expected raw bytes".into());
     };
     crate::remote::feed(&pane, bytes);
+    crate::share::feed(&pane, bytes);
     Ok(())
+}
+
+/// Share a pane through the relay (or get its share when it has one).
+#[tauri::command]
+async fn share_start(pane_id: String, options: crate::share::ShareOptions) -> Result<crate::share::ShareInfo, String> {
+    crate::share::start(pane_id, options).await
+}
+
+#[tauri::command]
+fn share_stop(id: String) {
+    crate::share::stop(&id);
+}
+
+#[tauri::command]
+fn share_update(id: String, options: crate::share::ShareOptions) {
+    crate::share::update(&id, options);
+}
+
+#[tauri::command]
+fn share_grant(id: String, viewer: u32, on: bool) {
+    crate::share::grant(&id, viewer, on);
+}
+
+#[tauri::command]
+fn share_approve(id: String, viewer: u32, allow: bool) {
+    crate::share::approve(&id, viewer, allow);
+}
+
+#[tauri::command]
+fn share_kick(id: String, viewer: u32) {
+    crate::share::kick(&id, viewer);
+}
+
+#[tauri::command]
+fn share_list() -> Vec<crate::share::ShareInfo> {
+    crate::share::list()
 }
 
 #[tauri::command]
@@ -1518,6 +1560,7 @@ pub fn run() {
             agent::start(app.handle().clone());
             mcp::start(app.handle().clone());
             crate::remote::init(app.handle().clone(), remote_config(&settings));
+            crate::share::init(app.handle().clone());
             crate::transfer::init(app.handle().clone());
             if let Some(hub) = crate::transfer::hub() {
                 hub.set_limit(sftp_concurrency(&settings));
@@ -1606,6 +1649,7 @@ pub fn run() {
                     m.remove(window.label());
                 }
                 crate::remote::forget_window(window.label());
+                crate::share::tabs_changed();
                 // Secondary windows and the hidden menu host belong to the main window.
                 if window.label() == "main" {
                     crate::xserver::stop();
@@ -1690,6 +1734,13 @@ pub fn run() {
             remote_watch_state,
             remote_release,
             remote_feed,
+            share_start,
+            share_stop,
+            share_update,
+            share_grant,
+            share_approve,
+            share_kick,
+            share_list,
             sftp_home,
             sftp_list,
             sftp_stat,

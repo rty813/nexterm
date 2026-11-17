@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Copy, RefreshCw, Smartphone, X } from "lucide-react";
+import { Copy, RefreshCw, MonitorSmartphone, Share2, X } from "lucide-react";
 import type { AppSettings } from "../types/domain";
 import { backend, type RemotePairing, type RemoteStatus } from "../services/backend";
 import { remoteOf } from "../utils/settingsDefaults";
 import { confirmAsk } from "../utils/confirm";
+import { useShareStore } from "../services/shares";
+import { summarizeShare } from "../utils/share";
 
 type Props = { draft: AppSettings; onChange: (next: AppSettings) => void; saved: AppSettings };
 
-/** Phone remote: relay address, pairing QR code, connected phones. */
+/** Remote access: relay address, pairing QR code, connected devices. */
 export const RemoteSettingsEditor: React.FC<Props> = ({ draft, onChange, saved }) => {
   const { t } = useTranslation();
   const r = remoteOf(draft);
@@ -16,6 +18,7 @@ export const RemoteSettingsEditor: React.FC<Props> = ({ draft, onChange, saved }
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [pairing, setPairing] = useState<RemotePairing | null>(null);
   const [copied, setCopied] = useState(false);
+  const { shares } = useShareStore();
   // The QR code points at the saved relay address (what the computer connects to).
   const savedUrl = remoteOf(saved).relayUrl;
   const dirty = JSON.stringify(remoteOf(saved)) !== JSON.stringify(r);
@@ -33,7 +36,7 @@ export const RemoteSettingsEditor: React.FC<Props> = ({ draft, onChange, saved }
   return (
     <div className="settings-general">
       <div className={`xserver-status ${state === "online" ? "on" : ""}`}>
-        <Smartphone size={16} />
+        <MonitorSmartphone size={16} />
         <div>
           <b>{t(`remote.state.${state}`)}</b>
           {status?.message && <div className="lock-err">{status.message}</div>}
@@ -115,7 +118,7 @@ export const RemoteSettingsEditor: React.FC<Props> = ({ draft, onChange, saved }
           <ul className="remote-phones">
             {status.phones.map((p) => (
               <li key={p.id}>
-                <Smartphone size={13} />
+                <MonitorSmartphone size={13} />
                 <span className="remote-phone-name">{p.name || t("remote.phone")}</span>
                 <span className="adv-hint">{p.watching ? t("remote.watching") : t("remote.idle")}</span>
                 <button type="button" className="icon-btn" title={t("remote.kick")} onClick={() => void backend.remoteKick(p.id)}>
@@ -126,6 +129,33 @@ export const RemoteSettingsEditor: React.FC<Props> = ({ draft, onChange, saved }
           </ul>
         ) : (
           <div className="adv-hint">{t("remote.noPhones")}</div>
+        )}
+      </div>
+
+      <div className="field">
+        <span>{t("share.active")}</span>
+        {shares.length ? (
+          <ul className="remote-phones share-active-list">
+            {shares.map((s) => {
+              const sum = summarizeShare(s);
+              return (
+                <li key={s.id}>
+                  <Share2 size={13} />
+                  <span className="remote-phone-name">{s.title}</span>
+                  <span className="adv-hint">
+                    {sum.controller
+                      ? t("share.badgeControl", { name: sum.controller.name || t("share.guest") })
+                      : t("share.badge", { count: sum.watching })}
+                  </span>
+                  <button type="button" className="icon-btn" title={t("share.stop")} onClick={() => void backend.shareStop(s.id)}>
+                    <X size={13} />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <div className="adv-hint">{t("share.noActive")}</div>
         )}
       </div>
     </div>

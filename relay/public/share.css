@@ -1,0 +1,30 @@
+/* Session share page (share.html): builds on app.css. */
+
+.share-gate {
+  text-align: center;
+}
+.share-join {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#term-cover {
+  align-items: center;
+}
+#term-cover .gate-card {
+  text-align: center;
+}
+#ro-badge.typing {
+  background: #1f4d2b;
+  color: #7ee2a0;
+}
+#control.asking {
+  border-color: #f5a623;
+  color: #f5a623;
+}
+/* The keyboard bar only matters on touch screens; desktop browsers type into the terminal. */
+@media (hover: hover) and (pointer: fine) {
+  #keys {
+    display: none !important;
+  }
+}

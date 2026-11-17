@@ -21,7 +21,7 @@ import {
   RotateCw,
   Rows2,
   Settings,
-  Smartphone,
+  MonitorSmartphone,
   Zap,
 } from "lucide-react";
 import type { SplitDirection, SyncInputScope } from "../types/domain";
@@ -442,7 +442,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             }}
             title={remoteTip}
           >
-            <Smartphone size={15} />
+            <MonitorSmartphone size={15} />
             {remoteEnabled && <span className={`remote-dot remote-dot-${remoteState}`} />}
           </button>
         )}

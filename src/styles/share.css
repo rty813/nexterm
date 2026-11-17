@@ -1,0 +1,146 @@
+/* Session shares: dialog, pane badge and request banner, tab mark (ShareDialog.tsx, TerminalPane.tsx). */
+
+.modal-panel.share-panel {
+  width: 560px;
+}
+.share-panel .modal-header h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.share-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.share-online .share-dot {
+  background: #22c55e;
+}
+.share-connecting .share-dot {
+  background: #f59e0b;
+}
+.share-error .share-dot {
+  background: #ef4444;
+}
+.share-url {
+  font-size: 11px;
+  word-break: break-all;
+  padding: 6px 8px;
+  border-radius: var(--r-sm, 4px);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  max-height: 64px;
+  overflow: auto;
+  user-select: all;
+}
+.share-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.share-expiry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.share-expiry select {
+  width: auto;
+  min-width: 140px;
+}
+.share-viewers li.is-control {
+  border-color: rgba(245, 158, 11, 0.7);
+}
+.share-asking {
+  color: #f59e0b;
+  font-weight: 600;
+}
+.share-viewer-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.share-viewers .share-viewer-actions .icon-btn {
+  margin-left: 0;
+}
+
+/* Pane badge while shared: blue when only watched, amber while a viewer may type. */
+.badge-share {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(79, 163, 255, 0.9);
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+}
+.badge-share.share-typing {
+  background: rgba(245, 158, 11, 0.95);
+}
+.badge-share:hover {
+  opacity: 1;
+}
+
+/* Join / control requests above the terminal. */
+.pane-share-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 6px 0 8px;
+  font-size: 11px;
+  color: #fff;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.95), rgba(29, 78, 216, 0.9));
+  user-select: none;
+  z-index: 6;
+}
+.pane-share-banner .pane-share-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-share-banner .pane-share-spacer {
+  flex: 1;
+}
+.pane-share-banner button {
+  flex: none;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+  border: none;
+  border-radius: var(--r-xs);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.pane-share-banner button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+.pane-share-banner .pane-share-more {
+  opacity: 0.8;
+}
+
+.tab-share-icon {
+  flex: none;
+  color: #4fa3ff;
+}
+.tab-share-icon.share-typing {
+  color: #f59e0b;
+}
+
+/* Active shares on the remote access settings page. */
+.share-active-list li {
+  gap: 8px;
+}

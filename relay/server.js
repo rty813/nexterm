@@ -1,8 +1,9 @@
 // Nexterm relay: forwards end-to-end encrypted frames between one computer (host)
-// and its phones (clients), and serves the phone page. It never sees terminal content:
+// and its browsers (clients), and serves the remote access and session share pages. It never sees terminal content:
 // rooms are named by a hash of the pairing secret, and the secret stays on the two ends.
 //
-//   GET  /                   phone page (public/)
+//   GET  /                   remote access page (public/)
+//   GET  /s                  session share page (public/share.html)
 //   WS   /ws?role=host&room=<id>[&token=<HOST_TOKEN>]
 //   WS   /ws?role=client&room=<id>
 //
@@ -25,7 +26,7 @@ export const KICK = 4;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAX_FRAME = 4 * 1024 * 1024;
-/** A phone that cannot keep up is dropped (it reconnects and gets a fresh screen). */
+/** A browser that cannot keep up is dropped (it reconnects and gets a fresh screen). */
 const CLIENT_BUFFER_LIMIT = 8 * 1024 * 1024;
 const MAX_CLIENTS_PER_ROOM = 16;
 const ROOM_RE = /^[0-9a-f]{32}$/;
@@ -47,6 +48,7 @@ function staticFiles() {
     "/vendor/xterm.js": vendor("@xterm/xterm", "lib/xterm.js"),
     "/vendor/xterm.css": vendor("@xterm/xterm", "css/xterm.css"),
     "/vendor/addon-unicode11.js": vendor("@xterm/addon-unicode11", "lib/addon-unicode11.js"),
+    "/s": path.join(HERE, "public", "share.html"),
   };
 }
 

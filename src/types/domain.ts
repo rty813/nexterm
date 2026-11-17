@@ -338,7 +338,7 @@ export interface AppSettings {
   /** Built-in X server (xserver.*). */
   xserver?: XServerSettings;
 
-  /** Phone remote through a self-hosted relay (remote.*). */
+  /** Remote access through a self-hosted relay (remote.*). */
   remote?: RemoteSettings;
 
   /** Config sync to S3 / WebDAV / a folder. Stays on this computer (never synced itself). */

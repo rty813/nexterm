@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#1b1d23" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Nexterm</title>
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="vendor/xterm.css" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="share.css" />
+  </head>
+  <body>
+    <!-- Join / waiting / ended: one card, filled by share.js -->
+    <section id="gate" class="screen">
+      <div class="gate-card share-gate">
+        <img src="icon.svg" alt="" class="gate-logo" />
+        <h1 id="gate-title">Nexterm</h1>
+        <p id="gate-text" class="muted"></p>
+        <form id="join-form" class="share-join hidden" autocomplete="off">
+          <label class="paste">
+            <span id="name-label" class="muted"></span>
+            <input id="name-input" type="text" maxlength="40" spellcheck="false" autocapitalize="off" />
+          </label>
+          <button id="join-go" class="btn" type="submit"></button>
+        </form>
+        <p id="gate-note" class="muted small"></p>
+      </div>
+    </section>
+
+    <section id="term" class="screen hidden">
+      <header class="bar">
+        <div class="bar-title">
+          <b id="term-title"></b>
+          <span id="term-state" class="muted small"></span>
+        </div>
+        <span id="ro-badge" class="badge"></span>
+        <button id="font-down" class="icon" aria-label="A-">A-</button>
+        <button id="font-up" class="icon" aria-label="A+">A+</button>
+        <button id="take" class="chip hidden"></button>
+        <button id="control" class="chip"></button>
+      </header>
+      <div id="term-body">
+        <div id="term-wrap"><div id="term-host"></div></div>
+        <div id="term-cover" class="term-gate hidden"><div class="gate-card"><p id="cover-text" class="muted"></p></div></div>
+      </div>
+      <div id="keys" class="hidden">
+        <button data-key="esc">Esc</button>
+        <button data-key="tab">Tab</button>
+        <button data-mod="ctrl" class="mod">Ctrl</button>
+        <button data-mod="alt" class="mod">Alt</button>
+        <button data-key="up">↑</button>
+        <button data-key="down">↓</button>
+        <button data-key="left">←</button>
+        <button data-key="right">→</button>
+        <button data-key="pgup">PgUp</button>
+        <button data-key="pgdn">PgDn</button>
+        <button data-key="ctrl-c">^C</button>
+        <button data-key="ctrl-d">^D</button>
+        <button data-key="kbd" class="kbd">⌨</button>
+      </div>
+    </section>
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/addon-unicode11.js"></script>
+    <script type="module" src="share.js"></script>
+  </body>
+</html>

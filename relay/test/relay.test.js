@@ -128,6 +128,26 @@ test("serves the phone page and the vendored xterm.js", async () => {
   assert.equal((await fetch(`${http}/nope.js`)).status, 404);
 });
 
+test("serves the session share page at /s (Nexterm probes it with HEAD)", async () => {
+  const http = base.replace("ws://", "http://").replace(/\/ws$/, "");
+  const page = await fetch(`${http}/s`);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("content-type"), /text\/html/);
+  assert.match(await page.text(), /share\.js/);
+  assert.equal((await fetch(`${http}/s`, { method: "HEAD" })).status, 200);
+  for (const f of ["share.js", "share.css", "device.js"]) assert.equal((await fetch(`${http}/${f}`)).status, 200);
+});
+
+test("device names for phones and desktop browsers", async () => {
+  const { deviceName } = await import("../public/device.js");
+  assert.equal(deviceName("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1"), "iPhone");
+  assert.equal(deviceName("Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP1A) Chrome/120 Mobile"), "Pixel 8");
+  assert.equal(deviceName("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"), "Chrome · Windows");
+  assert.equal(deviceName("Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/120 Safari/537.36 Edg/120"), "Edge · Windows");
+  assert.equal(deviceName("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605 Version/17 Safari/605"), "Safari · Mac");
+  assert.equal(deviceName("Mozilla/5.0 (X11; Linux x86_64; rv:120) Gecko Firefox/120"), "Firefox · Linux");
+});
+
 test("static files revalidate with an ETag", async () => {
   const http = base.replace("ws://", "http://").replace(/\/ws$/, "");
   const first = await fetch(`${http}/app.js`);

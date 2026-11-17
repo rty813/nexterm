@@ -1,5 +1,5 @@
-//! Phone remote: view and type into this computer's tabs from a phone, through a
-//! self-hosted relay (`relay/`). Everything past the relay is end-to-end encrypted
+//! Remote access: view and type into this computer's tabs from a browser (phone or
+//! computer), through a self-hosted relay (`relay/`). Everything past the relay is end-to-end encrypted
 //! (`remote_crypto.rs`); the relay only sees room ids and ciphertext.
 //!
 //! The desktop xterm.js of a watched pane is the source of truth: when a phone opens a
@@ -10,36 +10,33 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, watch};
-use tokio_tungstenite::tungstenite::Message;
 
+use crate::relay_link::{self as link, computer_name, envelope, percent_encode, R_DATA, R_JOIN, R_KICK, R_LEAVE};
 use crate::remote_crypto::{self as rc, Session};
 
-/// Relay envelope kinds (see `relay/server.js`).
-const R_JOIN: u8 = 1;
-const R_LEAVE: u8 = 2;
-const R_DATA: u8 = 3;
-const R_KICK: u8 = 4;
 /// Plaintext kinds inside the encrypted frames.
-const P_JSON: u8 = 1;
-const P_OUTPUT: u8 = 2;
+pub(crate) const P_JSON: u8 = 1;
+pub(crate) const P_OUTPUT: u8 = 2;
 /// `[P_FILE][transfer id u32 BE][bytes]`: file contents, both ways (`remote_ops.rs`).
 const P_FILE: u8 = 3;
-/// Feed records from the desktop panes (`remote_feed`).
-const F_OUTPUT: u8 = 1;
-const F_SIZE: u8 = 2;
-const F_SNAPSHOT: u8 = 3;
-const F_SNAPSHOT_ALL: u8 = 4;
+/// Feed records from the desktop panes (`remote_feed`): output, size, and screen snapshots
+/// with scrollback (for watchers waiting for one / for all) or without (shares).
+pub(crate) const F_OUTPUT: u8 = 1;
+pub(crate) const F_SIZE: u8 = 2;
+pub(crate) const F_SNAPSHOT: u8 = 3;
+pub(crate) const F_SNAPSHOT_ALL: u8 = 4;
+pub(crate) const F_SCREEN: u8 = 5;
+pub(crate) const F_SCREEN_ALL: u8 = 6;
 
-const OUTPUT_CHUNK: usize = 128 * 1024;
+pub(crate) const OUTPUT_CHUNK: usize = 128 * 1024;
 /// Waiting to go out to the relay; beyond this, phones skip output and get a fresh screen.
-const QUEUE_LIMIT: usize = 16 * 1024 * 1024;
+pub(crate) const QUEUE_LIMIT: usize = 16 * 1024 * 1024;
 const MAX_PHONES: usize = 8;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -244,39 +241,6 @@ fn save_secret(secret: &[u8; rc::SECRET_LEN]) {
     let _ = std::fs::write(secret_path(), body);
 }
 
-/// `https://host/path` -> (`wss://host/path/ws`, `https://host/path/`). Plain http / ws for LAN tests.
-fn relay_urls(base: &str) -> Option<(String, String)> {
-    let base = base.trim().trim_end_matches('/');
-    let (ws, page) = if let Some(rest) = base.strip_prefix("https://") {
-        (format!("wss://{rest}"), format!("https://{rest}"))
-    } else if let Some(rest) = base.strip_prefix("http://") {
-        (format!("ws://{rest}"), format!("http://{rest}"))
-    } else if let Some(rest) = base.strip_prefix("wss://") {
-        (format!("wss://{rest}"), format!("https://{rest}"))
-    } else if let Some(rest) = base.strip_prefix("ws://") {
-        (format!("ws://{rest}"), format!("http://{rest}"))
-    } else {
-        return None;
-    };
-    if page.split("://").nth(1).is_none_or(|h| h.is_empty()) {
-        return None;
-    }
-    Some((format!("{ws}/ws"), format!("{page}/")))
-}
-
-fn percent_encode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
-}
-
-fn computer_name() -> String {
-    std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "Nexterm".into())
-}
-
 pub fn init(app: AppHandle, config: RemoteConfig) {
     let (generation, rx) = watch::channel(0u64);
     let r = Remote {
@@ -323,20 +287,11 @@ pub fn pairing() -> RemotePairing {
         let secret = *inner.secret.get_or_insert_with(load_or_create_secret);
         (secret, inner.config.relay_url.clone())
     };
-    let Some((_, page)) = relay_urls(&base) else {
+    let Some((_, page)) = link::relay_urls(&base) else {
         return RemotePairing { url: String::new(), qr_svg: String::new() };
     };
     let url = format!("{page}#k={}&n={}", B64U.encode(secret), percent_encode(&computer_name()));
-    let qr_svg = qrcode::QrCode::with_error_correction_level(url.as_bytes(), qrcode::EcLevel::M)
-        .map(|code| {
-            code.render::<qrcode::render::svg::Color>()
-                .min_dimensions(220, 220)
-                .quiet_zone(true)
-                .dark_color(qrcode::render::svg::Color("#000000"))
-                .light_color(qrcode::render::svg::Color("#ffffff"))
-                .build()
-        })
-        .unwrap_or_default();
+    let qr_svg = link::qr_svg(&url);
     RemotePairing { url, qr_svg }
 }
 
@@ -357,6 +312,21 @@ pub fn kick(phone: u32) {
     }
     drop_phone(r, &mut inner, phone);
     publish_status(r, &inner);
+}
+
+/// A tab as its window reported it.
+pub fn tab(id: &str) -> Option<RemoteTab> {
+    let r = remote()?;
+    let inner = lock(&r.inner);
+    let found = inner.tabs.values().flatten().find(|t| t.id == id).cloned();
+    found
+}
+
+/// Every reported tab, by id.
+pub fn tabs() -> HashMap<String, RemoteTab> {
+    let Some(r) = remote() else { return HashMap::new() };
+    let inner = lock(&r.inner);
+    inner.tabs.values().flatten().map(|t| (t.id.clone(), t.clone())).collect()
 }
 
 /// Whether a window still lists the tab, and whether it is locked.
@@ -418,9 +388,60 @@ pub fn host_key_done(request_id: &str) {
     }
 }
 
-/// Panes some phone watches (a pane mounting in a window starts forwarding).
-pub fn watched() -> Vec<String> {
-    remote().map(|r| watched_set(&lock(&r.inner)).into_iter().collect()).unwrap_or_default()
+/// Panes forwarded to remote devices and shares, by the snapshot they need.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct WatchState {
+    /// Snapshots with scrollback (remote access, shares that include it).
+    pub full: Vec<String>,
+    /// Snapshots of the visible screen only (shares without scrollback).
+    pub screen: Vec<String>,
+}
+
+#[derive(Default)]
+struct Watchers {
+    remote: HashSet<String>,
+    share_full: HashSet<String>,
+    share_screen: HashSet<String>,
+}
+
+/// Leaf lock: nothing else is locked while it is held.
+static WATCHERS: LazyLock<Mutex<Watchers>> = LazyLock::new(Default::default);
+
+/// Panes watched (a pane mounting in a window starts forwarding).
+pub fn watched() -> WatchState {
+    let w = lock(&WATCHERS);
+    let mut full: Vec<String> = w.remote.union(&w.share_full).cloned().collect();
+    let mut screen: Vec<String> = w.share_screen.iter().cloned().collect();
+    full.sort();
+    screen.sort();
+    WatchState { full, screen }
+}
+
+fn emit_watch(app: &AppHandle) {
+    let _ = app.emit("remote-watch", watched());
+}
+
+/// Shares changed what they watch (`share.rs`).
+pub(crate) fn set_share_watch(app: &AppHandle, full: HashSet<String>, screen: HashSet<String>) {
+    {
+        let mut w = lock(&WATCHERS);
+        if w.share_full == full && w.share_screen == screen {
+            return;
+        }
+        w.share_full = full;
+        w.share_screen = screen;
+    }
+    emit_watch(app);
+}
+
+/// Relay address and host token, for shares.
+pub(crate) fn relay_config() -> (String, String) {
+    remote()
+        .map(|r| {
+            let inner = lock(&r.inner);
+            (inner.config.relay_url.clone(), inner.config.host_token.clone())
+        })
+        .unwrap_or_default()
 }
 
 /// Sizes taken over by phones.
@@ -525,14 +546,6 @@ fn watcher_ids(inner: &Inner, pane: &str) -> Vec<u32> {
         .collect()
 }
 
-fn envelope(kind: u8, phone: u32, payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(5 + payload.len());
-    out.push(kind);
-    out.extend_from_slice(&phone.to_be_bytes());
-    out.extend_from_slice(payload);
-    out
-}
-
 /// Raw (handshake) frame to a phone.
 fn send_raw(r: &Remote, inner: &Inner, phone: u32, payload: &[u8]) {
     if let Some(out) = &inner.out {
@@ -595,8 +608,15 @@ fn publish_status(r: &Remote, inner: &Inner) {
 }
 
 fn publish_watch(r: &Remote, inner: &Inner) {
-    let list: Vec<String> = watched_set(inner).into_iter().collect();
-    let _ = r.app.emit("remote-watch", list);
+    let set = watched_set(inner);
+    {
+        let mut w = lock(&WATCHERS);
+        if w.remote == set {
+            return;
+        }
+        w.remote = set;
+    }
+    emit_watch(&r.app);
 }
 
 fn needs_snapshot(r: &Remote, pane: &str) {
@@ -871,7 +891,7 @@ async fn run(mut generation: watch::Receiver<u64>) {
     loop {
         generation.borrow_and_update();
         let config = lock(&r.inner).config.clone();
-        let urls = relay_urls(&config.relay_url);
+        let urls = link::relay_urls(&config.relay_url);
         if !config.enabled || urls.is_none() {
             let msg = (config.enabled && urls.is_none()).then(|| "relay address must start with https:// or http://".to_string());
             set_state(r, if msg.is_some() { "error" } else { "off" }, msg);
@@ -883,20 +903,15 @@ async fn run(mut generation: watch::Receiver<u64>) {
             let mut inner = lock(&r.inner);
             rc::room_id(inner.secret.get_or_insert_with(load_or_create_secret))
         };
-        let mut url = format!("{ws_url}?role=host&room={room}");
-        if !config.host_token.is_empty() {
-            url.push_str(&format!("&token={}", percent_encode(&config.host_token)));
-        }
+        let url = link::host_url(&ws_url, &room, &config.host_token);
         set_state(r, "connecting", None);
-        let connect = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(url.as_str()));
         let result = tokio::select! {
-            res = connect => match res {
-                Ok(Ok((ws, _))) => {
+            res = link::connect(&url) => match res {
+                Ok(ws) => {
                     backoff = Duration::from_secs(1);
                     session(r, ws, &mut generation).await
                 }
-                Ok(Err(e)) => Err(describe(&e)),
-                Err(_) => Err("connection timed out".into()),
+                Err(e) => Err(e),
             },
             _ = generation.changed() => Ok(()),
         };
@@ -914,65 +929,20 @@ async fn run(mut generation: watch::Receiver<u64>) {
     }
 }
 
-fn describe(e: &tokio_tungstenite::tungstenite::Error) -> String {
-    use tokio_tungstenite::tungstenite::Error;
-    match e {
-        Error::Http(resp) if resp.status() == 401 => "relay refused the host token".into(),
-        Error::Http(resp) => format!("relay answered HTTP {}", resp.status()),
-        other => other.to_string(),
-    }
-}
-
-type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
 /// One relay connection. `Ok` when the config changed, `Err` when the link failed.
-async fn session(r: &'static Remote, ws: Ws, generation: &mut watch::Receiver<u64>) -> Result<(), String> {
-    let (mut sink, mut stream) = ws.split();
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+async fn session(r: &'static Remote, ws: link::Ws, generation: &mut watch::Receiver<u64>) -> Result<(), String> {
+    let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
     r.queued.store(0, Ordering::Relaxed);
     r.stalled.store(false, Ordering::Relaxed);
     lock(&r.inner).out = Some(tx);
     set_state(r, "online", None);
-    let queued = Arc::clone(&r.queued);
-    let writer = async move {
-        let mut ping = tokio::time::interval(Duration::from_secs(30));
-        ping.tick().await;
-        loop {
-            tokio::select! {
-                frame = rx.recv() => {
-                    let Some(frame) = frame else { return Ok(()) };
-                    let len = frame.len();
-                    let res = sink.send(Message::Binary(frame.into())).await;
-                    let _ = queued.try_update(Ordering::Relaxed, Ordering::Relaxed, |q| Some(q.saturating_sub(len)));
-                    res.map_err(|e| e.to_string())?;
-                    if queued.load(Ordering::Relaxed) < QUEUE_LIMIT / 4 && r.stalled.swap(false, Ordering::Relaxed) {
-                        resync(r);
-                    }
-                }
-                _ = ping.tick() => sink.send(Message::Ping(Vec::new().into())).await.map_err(|e| e.to_string())?,
-            }
-        }
-    };
-    let reader = async {
-        loop {
-            // The relay pings every 25 s; silence means the link is dead.
-            let next = tokio::time::timeout(Duration::from_secs(70), stream.next()).await;
-            match next {
-                Err(_) => return Err("relay stopped answering".to_string()),
-                Ok(None) => return Err("relay closed the connection".to_string()),
-                Ok(Some(Err(e))) => return Err(e.to_string()),
-                Ok(Some(Ok(Message::Binary(b)))) => on_relay_frame(r, &b),
-                Ok(Some(Ok(Message::Close(frame)))) => {
-                    let why = frame.map(|f| f.reason.to_string()).filter(|s| !s.is_empty());
-                    return Err(why.unwrap_or_else(|| "relay closed the connection".into()));
-                }
-                Ok(Some(Ok(_))) => {}
-            }
+    let drained = || {
+        if r.queued.load(Ordering::Relaxed) < QUEUE_LIMIT / 4 && r.stalled.swap(false, Ordering::Relaxed) {
+            resync(r);
         }
     };
     tokio::select! {
-        res = writer => res.and(Err("relay connection lost".into())),
-        res = reader => res,
+        res = link::serve(ws, rx, Arc::clone(&r.queued), |frame| on_relay_frame(r, frame), drained) => res,
         _ = generation.changed() => Ok(()),
     }
 }
@@ -1000,24 +970,5 @@ mod tests {
         let t: RemoteTab =
             serde_json::from_str(r#"{"id":"p","title":"t","status":"connected","cols":80,"rows":24,"active":true}"#).unwrap();
         assert!(t.auth.is_none() && !t.password_auth && !t.locked && t.message.is_empty());
-    }
-
-    #[test]
-    fn relay_addresses() {
-        assert_eq!(
-            relay_urls("https://relay.example.com/"),
-            Some(("wss://relay.example.com/ws".into(), "https://relay.example.com/".into()))
-        );
-        assert_eq!(
-            relay_urls(" http://10.0.0.2:8080/wt "),
-            Some(("ws://10.0.0.2:8080/wt/ws".into(), "http://10.0.0.2:8080/wt/".into()))
-        );
-        assert_eq!(relay_urls("relay.example.com"), None);
-        assert_eq!(relay_urls("https://"), None);
-    }
-
-    #[test]
-    fn encodes_query_values() {
-        assert_eq!(percent_encode("a b&c=d/é"), "a%20b%26c%3Dd%2F%C3%A9");
     }
 }

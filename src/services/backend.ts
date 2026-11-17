@@ -229,6 +229,57 @@ export interface RemoteLoginPayload {
   remember: boolean;
 }
 
+/** Panes forwarded to remote devices and shares, by the snapshot they need (Rust `remote::WatchState`). */
+export interface WatchState {
+  /** Snapshots with scrollback. */
+  full: string[];
+  /** Snapshots of the visible screen only. */
+  screen: string[];
+}
+
+/** Mirrors Rust `share::ShareOptions`. */
+export interface ShareOptions {
+  /** 0: until stopped. */
+  expiresMinutes: number;
+  scrollback: boolean;
+  approve: boolean;
+  single: boolean;
+}
+
+export interface ShareViewer {
+  id: number;
+  name: string;
+  /** Waiting to be let in. */
+  pending: boolean;
+  control: boolean;
+  /** Asked for control. */
+  asking: boolean;
+}
+
+/** Mirrors Rust `share::ShareInfo`. */
+export interface ShareInfo {
+  id: string;
+  paneId: string;
+  title: string;
+  url: string;
+  qrSvg: string;
+  state: "connecting" | "online" | "error";
+  message: string | null;
+  /** Milliseconds since the epoch; null: until stopped. */
+  expiresAt: number | null;
+  options: ShareOptions;
+  viewers: ShareViewer[];
+}
+
+/** A viewer asks to join or for control. */
+export interface SharePrompt {
+  shareId: string;
+  paneId: string;
+  viewer: number;
+  name: string;
+  kind: "join" | "control";
+}
+
 export interface RemoteSizePayload {
   paneId: string;
   /** null: the phone gave the size back. */
@@ -1364,8 +1415,8 @@ export const backend = {
     if (isTauriRuntime()) await invoke("remote_report_tabs", { tabs }).catch(() => undefined);
   },
 
-  async remoteWatchState(): Promise<{ watched: string[]; sizes: { paneId: string; cols: number; rows: number }[] }> {
-    const none = { watched: [], sizes: [] };
+  async remoteWatchState(): Promise<{ watched: WatchState; sizes: { paneId: string; cols: number; rows: number }[] }> {
+    const none = { watched: { full: [], screen: [] }, sizes: [] };
     if (!isTauriRuntime()) return none;
     return invoke<typeof none>("remote_watch_state").catch(() => none);
   },
@@ -1385,9 +1436,55 @@ export const backend = {
     return listen<RemoteStatus>("remote-state", (e) => handler(e.payload));
   },
 
-  async onRemoteWatch(handler: (panes: string[]) => void): Promise<UnlistenFn> {
+  /** Share a pane; errors: "no-relay" | "no-pane" | "too-many" | "old-relay" | a message. */
+  async shareStart(paneId: string, options: ShareOptions): Promise<ShareInfo> {
+    if (!isTauriRuntime()) throw new Error("no-relay");
+    return invoke<ShareInfo>("share_start", { paneId, options });
+  },
+
+  async shareStop(id: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("share_stop", { id }).catch(() => undefined);
+  },
+
+  async shareUpdate(id: string, options: ShareOptions): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("share_update", { id, options }).catch(() => undefined);
+  },
+
+  async shareGrant(id: string, viewer: number, on: boolean): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("share_grant", { id, viewer, on }).catch(() => undefined);
+  },
+
+  async shareApprove(id: string, viewer: number, allow: boolean): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("share_approve", { id, viewer, allow }).catch(() => undefined);
+  },
+
+  async shareKick(id: string, viewer: number): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("share_kick", { id, viewer }).catch(() => undefined);
+  },
+
+  async shareList(): Promise<ShareInfo[]> {
+    if (!isTauriRuntime()) return [];
+    return invoke<ShareInfo[]>("share_list").catch(() => []);
+  },
+
+  async onShareState(handler: (shares: ShareInfo[]) => void): Promise<UnlistenFn> {
     if (!isTauriRuntime()) return () => {};
-    return listen<string[]>("remote-watch", (e) => handler(e.payload));
+    return listen<ShareInfo[]>("share-state", (e) => handler(e.payload));
+  },
+
+  async onSharePrompt(handler: (prompt: SharePrompt) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<SharePrompt>("share-prompt", (e) => handler(e.payload));
+  },
+
+  async onRemoteWatch(handler: (state: WatchState) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<WatchState>("remote-watch", (e) => handler(e.payload));
   },
 
   async onRemoteSnapshot(handler: (paneId: string) => void): Promise<UnlistenFn> {

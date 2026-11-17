@@ -6,6 +6,8 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { remoteMirror } from "../services/remoteMirror";
+import { shareStore, useShareStore } from "../services/shares";
+import { shareOfPane, summarizeShare } from "../utils/share";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -18,7 +20,8 @@ import {
   Search,
   Upload,
   X,
-  Smartphone,
+  MonitorSmartphone,
+  Share2,
   Bot,
   Pause,
   Play,
@@ -353,6 +356,9 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   settingsRef.current = settings;
   const [bellFlash, setBellFlash] = useState(false);
   const aiControl = extras.aiControls[leaf.paneId];
+  const { shares, relayConfigured } = useShareStore();
+  const share = shareOfPane(shares, leaf.paneId);
+  const shareInfo = share ? summarizeShare(share) : null;
   const scheme = resolveScheme(leaf.session.system || undefined, leaf.session.protocol);
   const schemeRef = useRef(scheme);
   schemeRef.current = scheme;
@@ -831,7 +837,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       });
     });
     const unmirror = remoteMirror.register(leaf.paneId, {
-      serialize: () => serializeAddon.serialize({ scrollback: 1000 }),
+      serialize: (scrollback) => serializeAddon.serialize({ scrollback: scrollback ? 1000 : 0 }),
       size: () => ({ cols: term.cols, rows: term.rows }),
       // A phone took / gave back the size. Applied right here, not after a render or the
       // debounce timer: both stall while this window is minimized, which is when phones are used.
@@ -1362,6 +1368,12 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           onClick: () => extras.onOpenFileBrowser(leaf.paneId),
         },
         {
+          label: relayConfigured || share ? t("share.menu") : t("share.menuNoRelay"),
+          checked: Boolean(share),
+          disabled: !relayConfigured && !share,
+          onClick: () => shareStore.openDialog(leaf.paneId),
+        },
+        {
           label: t("modem.menu"),
           disabled: !modemOk,
           children: [
@@ -1492,6 +1504,37 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           </div>
         </div>
       )}
+      {share && shareInfo && shareInfo.requests.length > 0 && (
+        <div className="pane-share-banner" onMouseDown={(e) => e.stopPropagation()}>
+          <Share2 size={13} />
+          <span className="pane-share-text">
+            {t(shareInfo.requests[0].pending ? "share.reqJoin" : "share.reqControl", { name: shareInfo.requests[0].name || t("share.guest") })}
+          </span>
+          {shareInfo.requests.length > 1 && <span className="pane-share-more">{t("share.more", { count: shareInfo.requests.length - 1 })}</span>}
+          <span className="pane-share-spacer" />
+          <button
+            type="button"
+            onClick={() => {
+              const v = shareInfo.requests[0];
+              void (v.pending ? backend.shareApprove(share.id, v.id, true) : backend.shareGrant(share.id, v.id, true));
+            }}
+          >
+            {t("share.allow")}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const v = shareInfo.requests[0];
+              void (v.pending ? backend.shareApprove(share.id, v.id, false) : backend.shareGrant(share.id, v.id, false));
+            }}
+          >
+            {t("share.deny")}
+          </button>
+          <button type="button" onClick={() => shareStore.openDialog(leaf.paneId)}>
+            {t("share.manage")}
+          </button>
+        </div>
+      )}
       {aiControl && (
         <div className={`pane-ai-banner ${aiControl.mode === "paused" ? "ai-paused" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
           <Bot size={13} />
@@ -1545,8 +1588,24 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           </button>
         </div>
       )}
-      {(logPath || phoneSize) && (
+      {(logPath || phoneSize || share) && (
         <div className="pane-badges">
+          {share && shareInfo && (
+            <button
+              type="button"
+              className={`pane-badge badge-share ${shareInfo.controller ? "share-typing" : ""}`}
+              title={t("share.badgeTip")}
+              onClick={(e) => {
+                e.stopPropagation();
+                shareStore.openDialog(leaf.paneId);
+              }}
+            >
+              <Share2 size={11} />{" "}
+              {shareInfo.controller
+                ? t("share.badgeControl", { name: shareInfo.controller.name || t("share.guest") })
+                : t("share.badge", { count: shareInfo.watching })}
+            </button>
+          )}
           {phoneSize && (
             <button
               type="button"
@@ -1557,7 +1616,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
                 remoteMirror.release(leaf.paneId);
               }}
             >
-              <Smartphone size={11} /> {t("remote.paneHeld", { cols: phoneSize.cols, rows: phoneSize.rows })}
+              <MonitorSmartphone size={11} /> {t("remote.paneHeld", { cols: phoneSize.cols, rows: phoneSize.rows })}
             </button>
           )}
           {logPath && (

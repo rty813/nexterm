@@ -69,6 +69,8 @@ import { useAgentHooks } from "./hooks/useAgentHooks";
 import { compactMenu, ContextMenuProvider, type MenuItem } from "./components/ContextMenu";
 import { HostKeyDialog, ZmodemDialog } from "./components/TransferDialogs";
 import { ConfirmDialog, PasteDialog, type ConfirmAnswer, type ConfirmRequest } from "./components/ConfirmDialog";
+import { ShareDialog } from "./components/ShareDialog";
+import { shareStore, useShareStore } from "./services/shares";
 import { SenderPanel } from "./components/SenderPanel";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { TmuxPanel, type TmuxTarget } from "./components/TmuxPanel";
@@ -609,6 +611,26 @@ export const App: React.FC = () => {
     return () => void un.then((f) => f());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A share viewer asks to join or for control: the window that shows the pane says so.
+  useEffect(() => {
+    const un = backend.onSharePrompt((p) => {
+      const leaf = findLeaf(wsRef.current.root, p.paneId);
+      if (!leaf) return;
+      const name = p.name || t("share.guest");
+      setToast(t(p.kind === "join" ? "share.toastJoin" : "share.toastControl", { title: tabTitle(leaf), name }));
+    });
+    return () => void un.then((f) => f());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const relayConfigured = Boolean(remoteOf(settings).relayUrl.trim());
+  useEffect(() => shareStore.setRelayConfigured(relayConfigured), [relayConfigured]);
+  const { dialogPane: shareDialogPane } = useShareStore();
+  const shareDialogLeaf = shareDialogPane ? findLeaf(ws.root, shareDialogPane) : null;
+  // The pane closed or moved to another window while its dialog was open.
+  useEffect(() => {
+    if (shareDialogPane && !shareDialogLeaf) shareStore.closeDialog();
+  }, [shareDialogPane, shareDialogLeaf]);
 
   // A phone opens a saved session here (it may have saved it a moment ago: read the file).
   useEffect(() => {
@@ -1898,7 +1920,7 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // The phone remote lists every window's tabs; each window reports its own.
+  // Remote access lists every window's tabs; each window reports its own.
   const remoteTabsJson = JSON.stringify(
     allGroups(ws.root).flatMap((g) =>
       g.tabs.map((l) => ({
@@ -2862,6 +2884,8 @@ export const App: React.FC = () => {
       )}
 
       {toast && <div className="app-toast">{toast}</div>}
+
+      {shareDialogLeaf && <ShareDialog paneId={shareDialogLeaf.paneId} title={tabTitle(shareDialogLeaf)} />}
 
       {pasteRequest && (
         <PasteDialog

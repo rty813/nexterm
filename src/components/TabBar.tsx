@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bell, BellRing, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, CircleCheck, CircleX, Columns2, LoaderCircle, Lock, Plus, Rows2, X } from "lucide-react";
+import { Bell, BellRing, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, CircleCheck, CircleX, Columns2, LoaderCircle, Lock, Plus, Rows2, Share2, X } from "lucide-react";
 import { backend } from "../services/backend";
+import { shareStore, useShareStore } from "../services/shares";
+import { shareOfPane, summarizeShare } from "../utils/share";
 import { agentDisplayName, type AgentStatus } from "../utils/agentStatus";
 import { tabTitle } from "../utils/layout";
 import { canReuseSsh, duplicateReusesSsh } from "../utils/duplicate";
@@ -108,6 +110,7 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
 }) => {
   const { t } = useTranslation();
   const openMenu = useContextMenu();
+  const { shares, relayConfigured } = useShareStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -253,6 +256,12 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
           onClick: () => onInjectShellIntegration(leaf.paneId),
         },
         {
+          label: relayConfigured || shareOfPane(shares, leaf.paneId) ? t("share.menu") : t("share.menuNoRelay"),
+          checked: Boolean(shareOfPane(shares, leaf.paneId)),
+          disabled: !relayConfigured && !shareOfPane(shares, leaf.paneId),
+          onClick: () => shareStore.openDialog(leaf.paneId),
+        },
+        {
           label: t("menu.moveToWindow"),
           children: [
             { label: t("menu.moveToNewWindow"), shortcut: keymap["tab.moveToNewWindow"], onClick: () => onMoveToNewWindow(leaf.paneId) },
@@ -321,6 +330,8 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
           const runTip = running
             ? ` · ${t("tabbar.running")}: ${running.command} (${t("tabbar.runningFor", { d: formatDuration(Date.now() - running.startedAt) })})`
             : "";
+          const share = shareOfPane(shares, leaf.paneId);
+          const shareTyping = Boolean(share && summarizeShare(share).controller);
           const agentTip = agent ? `${agentName(agent.app)}: ${t(`agent.state.${agent.state}`)}${agent.kind ? ` (${t(`agent.kind.${agent.kind}`, agent.kind)})` : ""}` : "";
           return (
             <div
@@ -394,6 +405,11 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
                 >
                   <BellRing size={11} />
                 </button>
+              )}
+              {share && (
+                <span title={t("share.tabTip")} className={`tab-share-icon ${shareTyping ? "share-typing" : ""}`}>
+                  <Share2 size={11} />
+                </span>
               )}
               {mark?.bell && <Bell size={11} className="tab-bell-icon" />}
               {mark?.activity && !mark.bell && <span className="tab-activity-dot" />}
