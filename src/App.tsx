@@ -2110,6 +2110,10 @@ export const App: React.FC = () => {
 
   const paneExtras: PaneExtras = {
     quickCommands,
+    onQuickConnect: (target) => {
+      const parsed = parseQuickConnectInput(target);
+      if (parsed) openSessionInNewTab(parsed);
+    },
     pausedLogs,
     onPauseLog: (paneId, paused) => {
       void backend

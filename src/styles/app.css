@@ -2787,6 +2787,90 @@ html.ctxmenu-host #root {
   align-self: flex-start;
 }
 
+/* ---------- Triggers ---------- */
+.trigger-name {
+  flex: 0 0 auto;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.trigger-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: var(--r-xs);
+  background: var(--border-subtle);
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+.trigger-summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trigger-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 0 22px;
+}
+.trigger-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.trigger-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+.trigger-script {
+  resize: vertical;
+  min-height: 52px;
+}
+.trigger-buttons {
+  display: flex;
+  gap: 8px;
+}
+/* Underlines under trigger matches (utils/triggerLinks.ts), above the text. */
+.trigger-underlines {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+/* Tooltip over terminal text (positioned inside .xterm by utils/triggerLinks.ts). */
+.trigger-tip {
+  position: absolute;
+  z-index: 20;
+  max-width: 480px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  color: var(--fg-strong);
+  box-shadow: var(--shadow-pop);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-all;
+  pointer-events: none;
+}
+.trigger-tip-hint {
+  color: var(--fg-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+.trigger-tip-body + .trigger-tip-hint {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* Search bar: keep the input usable in narrow panes; wrap the buttons instead. */
 .terminal-search-wrap .terminal-search-bar {
   flex-wrap: wrap;

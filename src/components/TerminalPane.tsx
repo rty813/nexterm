@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal, type IMarker } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { remoteMirror } from "../services/remoteMirror";
@@ -76,6 +75,9 @@ import { historyKeyOf } from "../utils/commandHistory";
 import { AutoCompletePopup } from "./AutoCompletePopup";
 import { HistoryScroll } from "../services/historyScroll";
 import { mixColor } from "../utils/screenOverlay";
+import { compileTriggers, triggersOf } from "../utils/triggers";
+import { installTriggerLinks } from "../utils/triggerLinks";
+import { runTriggerScript } from "../services/triggerScript";
 import type { QuickCommand } from "../types/domain";
 
 /** Serializers of mounted terminals, used to carry scrollback when a tab moves to another window. */
@@ -183,6 +185,8 @@ export interface PaneExtras {
   onOpenFileBrowser: (paneId: string) => void;
   /** Quick commands, for auto completion. */
   quickCommands: QuickCommand[];
+  /** Open a session from quick connect input (an ssh:// / telnet:// link a trigger found). */
+  onQuickConnect: (target: string) => void;
 }
 
 export interface TabMark {
@@ -364,6 +368,13 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   schemeRef.current = scheme;
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const compiledTriggers = useMemo(() => compileTriggers(triggersOf(settings)), [settings.triggers]);
+  const triggersRef = useRef(compiledTriggers);
+  triggersRef.current = compiledTriggers;
+  const triggerLinksRef = useRef<ReturnType<typeof installTriggerLinks> | null>(null);
+  useEffect(() => {
+    triggerLinksRef.current?.refresh();
+  }, [compiledTriggers, settings.triggerUnderline, theme]);
   const featuresRef = useRef<TerminalFeatures | null>(null);
   const foldGutterRef = useRef<HTMLDivElement | null>(null);
   const [suggestions, setSuggestions] = useState<SuggestionState | null>(null);
@@ -390,27 +401,10 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     });
 
     const fitAddon = new FitAddon();
-    // Ctrl+click opens a link in the system browser (window.open does nothing in the app);
-    // a plain click stays a click (selection, the program's own mouse handling).
-    const openLink = (event: MouseEvent, uri: string) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      event.preventDefault();
-      void backend.openExternal(uri).catch((err) => extrasRef.current.onToast(String(err)));
-    };
-    const webLinksAddon = new WebLinksAddon(openLink, {
-      hover: (event) => (event.target as HTMLElement | null)?.setAttribute("title", t("pane.linkHint")),
-      leave: (event) => (event.target as HTMLElement | null)?.removeAttribute("title"),
-    });
-    // OSC 8 hyperlinks (ls --hyperlink, gcc, systemd ...) open the same way.
-    term.options.linkHandler = {
-      activate: openLink,
-      allowNonHttpProtocols: false,
-    };
     const unicode11Addon = new Unicode11Addon();
     const serializeAddon = new SerializeAddon();
 
     term.loadAddon(fitAddon);
-    term.loadAddon(webLinksAddon);
     term.loadAddon(unicode11Addon);
     term.loadAddon(serializeAddon);
     const wideFix = installWideCursorFix(term);
@@ -449,6 +443,41 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     term.unicode.activeVersion = "11";
 
     term.open(el);
+    // Triggers (Settings > Triggers): hyperlinks, converters, unarchiver and the user's own.
+    // Clicks only act with the trigger's modifier (Ctrl by default), so a plain click stays
+    // a click (selection, the program's own mouse handling).
+    const triggerLinks = installTriggerLinks(term, {
+      triggers: () => triggersRef.current,
+      context: () => ({ t: (key, o) => String(o ? t(key, o) : t(key)), scheme: schemeRef.current }),
+      runScript: runTriggerScript,
+      underline: () => settingsRef.current.triggerUnderline !== false,
+      underlineColor: () => mixColor(themeRef.current.termBg, themeRef.current.termFg, 0.6),
+      run: (effect) => {
+        const fail = (err: unknown) => extrasRef.current.onToast(String(err));
+        switch (effect.kind) {
+          case "open":
+            void backend.openExternal(effect.url).catch(fail);
+            break;
+          case "reveal":
+            void backend.revealPath(effect.path).catch(fail);
+            break;
+          case "connect":
+            extrasRef.current.onQuickConnect(effect.target);
+            break;
+          case "send":
+            if (extrasRef.current.aiControls[leaf.paneId]?.mode === "active") {
+              extrasRef.current.onToast(t("ai.keyboardLocked"));
+              break;
+            }
+            onUserInputRef.current(leaf.paneId, translateInput(effect.text, termOptionsRef.current));
+            term.focus();
+            break;
+        }
+      },
+    });
+    // OSC 8 hyperlinks (ls --hyperlink, gcc, systemd ...) follow the Hyperlink trigger.
+    term.options.linkHandler = triggerLinks.oscLinkHandler;
+    triggerLinksRef.current = triggerLinks;
     const compositionBounds = installCompositionBounds(term);
     // GPU renderer: several times faster than the DOM renderer on large output.
     // Falls back to the DOM renderer when WebGL2 is unavailable or the context is lost.
@@ -911,6 +940,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       tracker.dispose();
       if (trackerRef.current === tracker) trackerRef.current = null;
       compositionBounds.dispose();
+      triggerLinks.dispose();
+      triggerLinksRef.current = null;
       wideFix.dispose();
       rulerMarks.dispose();
       rulerMarksRef.current = null;

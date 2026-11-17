@@ -41,6 +41,17 @@ Windows 10 / 11 only. Current version: `0.1.3`.
 - **Quick-Connect Bar**: Connect instantly with `ssh user@host:22`, `ssh -p 2222 -i key user@host`, `powershell`, or `wsl`.
 - **Command Alerts & Readability**: One-shot **"Notify When Command Finishes"** alerts (with duration and exit code), output folding, highlight rules, Focus Mode (`F11`), and workspace lock.
 
+### Triggers
+
+Patterns recognized in terminal output, like WindTerm's triggers. Every match on screen is underlined: solid when clicking it does something, dotted when hovering shows a tooltip. Manage them under **Settings → Triggers**: turn them on or off, reorder (higher wins where matches overlap), edit, or add your own.
+
+- **Hyperlink**: http(s), ftp(s), sftp, scp, ssh, telnet and file links, `www.` addresses, email addresses, and OSC 8 links programs print. `Ctrl`+click opens web, ftp and mail links in the default program, connects ssh / sftp / scp / telnet links in a new tab, and shows file links in Explorer.
+- **Hexadecimal Converter**: Hover `0x…` to see it in decimal and octal (exact for any width).
+- **Timestamp Converter**: Hover a 10-digit (seconds) or 13-digit (milliseconds) Unix timestamp to see local and UTC time in ISO 8601.
+- **Unarchiver**: `Ctrl`+click an archive name (`.tar.gz`, `.tgz`, `.tar.bz2`, `.tar.xz`, `.zip`, `.rar`, `.7z`, `.gz`, `.xz`, `.zst`, `.Z` …) to type its extract command (`tar -xvzf`, `unzip`, `unrar x`, `7z x` …) without pressing Enter. Off in PowerShell / CMD.
+- **Python Error** and **Calculator** (examples of custom triggers): `Ctrl`+click a `File "x.py", line 42` traceback line to type `vim x.py +42`; hover `1+2*3=` to see the result.
+- **Custom Triggers**: A regular expression with named groups `(?<name>…)`, a tooltip (text with `${name}` and a few HTML tags, or a script `(captures) => string`), and a click action (send text or open a link). Captured text is shell-quoted when it is typed. Tooltip scripts run in an isolated worker with no network or app access and a 0.5 s time limit.
+
 ### Serial & Binary Data
 
 - **Binary Data Type**: Set a serial or raw TCP session's **Data Type** to **Binary (Hex)** (WindTerm's `session.dataType`, imported too). Received bytes are shown as a hex dump with offset, hex and ASCII columns; narrow panes get 8 or 4 bytes per row. Keystrokes and sent data go out exactly as given, with no charset conversion, and ZMODEM detection is off so stray bytes never open a transfer.

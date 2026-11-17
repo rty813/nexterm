@@ -84,6 +84,33 @@ export interface HighlightRule {
 
 export type HighlightSystem = "linux" | "powershell" | "cmd" | "macos" | "routeros" | "none";
 
+/** Triggers whose matching and actions are built in (WindTerm's built-in triggers). */
+export type BuiltinTrigger = "hyperlink" | "hexConverter" | "timestampConverter" | "unarchiver";
+
+/**
+ * A pattern recognized in terminal output (Settings > Triggers, WindTerm triggers):
+ * hovering a match shows its tooltip, clicking it runs its action.
+ */
+export interface TriggerRule {
+  id: string;
+  /** Shown in Settings (built-ins show their translated name instead). */
+  name: string;
+  enabled: boolean;
+  /** Built-in trigger: pattern, tooltip and action come from the app (utils/triggers.ts). */
+  builtin?: BuiltinTrigger;
+  /** JavaScript regular expression; named groups become ${name} in the tooltip and action. */
+  pattern: string;
+  caseSensitive: boolean;
+  /** Text with ${name} placeholders (simple HTML allowed), or a JavaScript function `(captures) => string`. */
+  tooltip?: string;
+  /** What clicking a match does. */
+  action?: "none" | "sendText" | "openLink";
+  /** Text to type (\n = Enter) or link to open, with ${name} placeholders. */
+  actionText?: string;
+  /** Plain click, or Ctrl + click (default). */
+  activation?: "click" | "ctrlClick";
+}
+
 export interface ProxyConfig {
   kind: "none" | "socks5" | "socks4" | "http";
   host: string;
@@ -253,6 +280,10 @@ export interface AppSettings {
   /** Background bands on the cursor's line and on the line last clicked (default on). */
   highlightCurrentLine?: boolean;
   highlightRules?: HighlightRule[];
+  /** Triggers (missing = the defaults, see utils/triggers.ts). */
+  triggers?: TriggerRule[];
+  /** Underline trigger matches on screen (default on). */
+  triggerUnderline?: boolean;
   /** Lines scrolled per mouse wheel notch (WindTerm default 3). */
   wheelScrollLines?: number;
   /** Mark background tabs that print output (default on). */

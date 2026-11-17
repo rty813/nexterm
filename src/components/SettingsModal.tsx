@@ -6,9 +6,10 @@ import { X } from "lucide-react";
 import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
-export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "highlight" | "keys" | "toolbar";
+export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "highlight" | "triggers" | "keys" | "toolbar";
 import { KeymapEditor, ToolbarEditor } from "./SettingsExtra";
 import { HighlightEditor } from "./HighlightEditor";
+import { TriggerEditor } from "./TriggerEditor";
 import { RemoteSettingsEditor } from "./SettingsRemote";
 import { SyncSettingsEditor } from "./SettingsSync";
 import { useCloseGuard } from "./useCloseGuard";
@@ -72,7 +73,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {prompt}
 
         <div className="adv-tabs settings-tabs">
-          {(["general", "terminal", "mouse", "logs", "xserver", "remote", "sync", "highlight", "keys", "toolbar"] as const).map((id) => (
+          {(["general", "terminal", "mouse", "logs", "xserver", "remote", "sync", "highlight", "triggers", "keys", "toolbar"] as const).map((id) => (
             <button key={id} type="button" className={`adv-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
               {t(`settingsModal.tab.${id}`)}
             </button>
@@ -89,6 +90,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {tab === "keys" && <KeymapEditor draft={draft} onChange={setDraft} />}
           {tab === "toolbar" && <ToolbarEditor draft={draft} onChange={setDraft} />}
           {tab === "highlight" && <HighlightEditor draft={draft} onChange={setDraft} />}
+          {tab === "triggers" && <TriggerEditor draft={draft} onChange={setDraft} />}
           {tab === "terminal" && <TerminalSettings draft={draft} onChange={setDraft} sessions={sessions} />}
           {tab === "mouse" && <MouseSettingsEditor draft={draft} onChange={setDraft} />}
           {tab === "logs" && <LogTransferSettings draft={draft} onChange={setDraft} />}

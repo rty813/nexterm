@@ -121,6 +121,34 @@ export function matchAtRow(term: Terminal, row: number, start: number, end: numb
   return { row: first.row, col: first.col, cells, lineText: text, start, end };
 }
 
+/**
+ * The logical line (wrapped rows joined) that buffer row `row` belongs to, with the
+ * cell of every UTF-16 code unit. At most `maxRows` rows are joined.
+ */
+export function logicalLineAt(
+  term: Terminal,
+  row: number,
+  maxRows = 64
+): { text: string; pos: { row: number; col: number }[] } | null {
+  const buf = term.buffer.active;
+  if (!buf.getLine(row)) return null;
+  let y = row;
+  while (y > 0 && row - y < maxRows && buf.getLine(y)?.isWrapped) y--;
+  let text = "";
+  const pos: { row: number; col: number }[] = [];
+  const end = y + maxRows;
+  do {
+    const line = buf.getLine(y);
+    if (!line) break;
+    const next = buf.getLine(y + 1);
+    const full = next?.isWrapped ? readFullRow(line) : readRow(line);
+    for (let i = 0; i < full.text.length; i++) pos.push({ row: y, col: full.cols[i] });
+    text += full.text;
+    y++;
+  } while (y < end && y < buf.length && buf.getLine(y)?.isWrapped);
+  return { text, pos };
+}
+
 function readFullRow(line: IBufferLine): { text: string; cols: number[] } {
   let text = "";
   const cols: number[] = [];
