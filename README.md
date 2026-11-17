@@ -13,7 +13,7 @@ It keeps WindTerm's familiar workflow (session tree, nested split panes, quick c
 - **E2EE Remote Access & Session Sharing**: Scan a QR code or open a link to view and control desktop terminals from any browser (phone or computer), adapt terminal dimensions to a phone screen, manage sessions, transfer files, or share a single session through a one-off link (read-only until you grant control), all with zero-knowledge encryption.
 - **Full Scrollback History**: Every line a pane ever printed stays available, compressed in the background. Scroll, search and export all of it, back to the start of the session.
 
-Windows 10 / 11 only. Current version: `0.1.4`.
+Windows 10 / 11 only. Current version: `0.1.5`.
 
 ![Nexterm main window: session tree, split panes running htop and Claude Code, SFTP file browser, quick-command bar](docs/media/screenshot.jpg)
 
