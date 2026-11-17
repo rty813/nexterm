@@ -43,7 +43,7 @@ Windows 10 / 11 only. Current version: `0.1.2`.
 
 ### Scrollback & Search
 
-- **Every Line, Seamlessly**: Scroll up as far as the session goes. Older output loads into the same terminal as you approach it, so there is no separate viewer. The scrollbar spans the whole history: drag it to the top for the first line. Clearing the scrollback from the menu clears it too, while a remote `clear` keeps it and marks the spot. See [How the full scrollback works](#how-the-full-scrollback-works).
+- **Every Line, Seamlessly**: Scroll up as far as the session goes. Older output loads into the same terminal as you approach it, so there is no separate viewer. The scrollbar spans the whole history: drag it to the top for the first line. Clearing the scrollback, from the menu or with a remote `clear`, clears it too and restarts line numbers at 1, like WindTerm. See [How the full scrollback works](#how-the-full-scrollback-works).
 - **Search the Whole History**: `Ctrl+Shift+F` counts, steps through and lists matches across the entire history, with case, whole-word and regex options. Matches outside the loaded lines are loaded when you jump to them.
 - **Whole-History Scrollbar Marks**: Search hits, keyword-highlight rules and other occurrences of the selected text are marked on the scrollbar for the entire history.
 - **Timestamp & Line-Number Gutter** (`Ctrl+Shift+S`): The time each line was written and its line number since the pane opened. The current line is shown in its own color. In the terminal, the cursor's line and the clicked line get background bands.
@@ -55,7 +55,7 @@ Windows 10 / 11 only. Current version: `0.1.2`.
 - **Live Tab Status**: Tabs display whether Claude Code, Codex or Gemini CLI is **Working**, **Waiting for Approval / Input**, **Finished (Unread)**, or in **Error**.
 - **Instant Notifications**: When a background agent **completes a task**, **pauses for permission approval**, or **fails**, Nexterm flashes the taskbar and sends a system notification—click it to focus that exact pane.
 - **One-Click Hooks + Screen Fallback**: Install Claude Code / Codex / Gemini CLI hooks in one click on local Windows, remote SSH, or WSL (or copy a one-liner for other Linux / serial shells); falls back to screen detection when hooks aren't installed.
-- **Human-in-the-Loop MCP Server**: Register Nexterm as an MCP server so agents can read screens, run commands, or drive TUI apps (`vim`, `top`). Every takeover or new session requires **dialog approval**, locks pane keyboard input against stray keystrokes, and lets you **Pause** or **Take Back Control** anytime.
+- **Human-in-the-Loop MCP Server**: Register Nexterm as an MCP server so agents can read screens, run commands, or drive TUI apps (`vim`, `top`). On SSH panes they can also browse the server's folders and **upload / download files and folders** (SFTP, falling back to SCP), queued in the transfer panel where you can pause or cancel them. Every takeover or new session requires **dialog approval**, locks pane keyboard input against stray keystrokes, and lets you **Pause** or **Take Back Control** anytime.
 
 <p align="center">
   <a href="docs/media/mcp-demo.mp4"><img src="docs/media/mcp-demo.gif" alt="MCP demo: Claude Code asks Nexterm to open WSL and check disk usage" width="860" /></a>
