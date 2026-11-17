@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Minimize2 } from "lucide-react";
+import { Download, Minimize2 } from "lucide-react";
 import { applyThemeCssVars, BUILTIN_THEMES } from "./constants/themes";
 import { backend, currentWindowLabel, isTauriRuntime, type RemoteAuth, type RemoteTab } from "./services/backend";
 import { actionForCombo, comboFromEvent, resolveKeymap } from "./utils/actions";
@@ -91,7 +91,8 @@ import { CommandPalette, type PaletteTab } from "./components/CommandPalette";
 import { ProtocolBadge } from "./components/ProtocolBadge";
 import { ACTIONS, DEFAULT_TOOLBAR_HIDDEN, TOOLBAR_LAYOUT_VERSION } from "./utils/actions";
 import { restoreWorkspace, snapshotWorkspace, type WorkspaceSnapshot } from "./utils/workspaceSnapshot";
-import { UPDATE_CHECK_DELAY_MS, releaseNotesPreview, shouldPromptUpdate, updateCheckEnabled } from "./utils/updateCheck";
+import { UPDATE_CHECK_DELAY_MS, shouldPromptUpdate, updateCheckEnabled } from "./utils/updateCheck";
+import { ReleaseNotes } from "./components/ReleaseNotes";
 
 function sameDropHint(a: DropHint | null, b: DropHint | null): boolean {
   if (!a || !b) return a === b;
@@ -1300,7 +1301,14 @@ export const App: React.FC = () => {
     const answer = await ask({
       title: t("update.title", { version: info.latest }),
       message: t("update.message", { current: info.current, latest: info.latest }),
-      detail: releaseNotesPreview(info.notes) || undefined,
+      icon: <Download size={16} />,
+      wide: Boolean(info.notes.trim()),
+      body: info.notes.trim() ? (
+        <>
+          <div className="release-notes-label">{t("update.notes")}</div>
+          <ReleaseNotes notes={info.notes} lang={i18n.language} />
+        </>
+      ) : undefined,
       okLabel: t("update.download"),
       cancelLabel: t("update.later"),
       checkboxLabel: offerSkip ? t("update.skip") : undefined,

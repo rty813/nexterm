@@ -9,6 +9,8 @@ use std::time::Duration;
 
 const LATEST_URL: &str = "https://api.github.com/repos/rty813/nexterm/releases/latest";
 const RELEASES_PAGE: &str = "https://github.com/rty813/nexterm/releases/latest";
+/// Release notes as HTML, not subject to the API's rate limit.
+const RELEASES_FEED: &str = "https://github.com/rty813/nexterm/releases.atom";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,12 +154,114 @@ async fn from_redirect() -> Result<Release, String> {
     })
 }
 
+/// Decodes the XML / HTML character references used by GitHub's feed.
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        let Some(end) = rest.bytes().take(12).position(|b| b == b';') else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
+        let name = &rest[1..end];
+        let ch = match name {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "nbsp" => Some(' '),
+            _ => name
+                .strip_prefix("#x")
+                .or_else(|| name.strip_prefix("#X"))
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .or_else(|| name.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .and_then(char::from_u32),
+        };
+        match ch {
+            Some(c) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// GitHub's rendered release notes -> the markdown subset the dialog shows
+/// (headings, list items, line breaks, **bold**, `code`; images and link targets dropped).
+fn html_to_markdown(html: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RULES: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let rules = RULES.get_or_init(|| {
+        [
+            (r"\s*\n\s*", " "),
+            (r"(?i)<br\s*/?>\s*", "\n"),
+            (r"(?i)<h[12][^>]*>", "\n\n## "),
+            (r"(?i)<h[3-6][^>]*>", "\n\n### "),
+            (r"(?i)<li[^>]*>", "\n- "),
+            (r"(?i)</(h[1-6]|p|ul|ol|li|div|blockquote)>", "\n"),
+            (r"(?i)<(p|ul|ol|div|blockquote)(\s[^>]*)?>", "\n\n"),
+            (r"(?i)</?(strong|b)>", "**"),
+            (r"(?i)</?(code|tt)>", "`"),
+            (r"(?i)<img[^>]*>", ""),
+            (r"<[^>]*>", ""),
+            (r"[ \t]+\n", "\n"),
+            (r"\n{3,}", "\n\n"),
+        ]
+        .into_iter()
+        .map(|(p, r)| (Regex::new(p).unwrap(), r))
+        .collect()
+    });
+    let mut s = html.to_string();
+    for (re, rep) in rules {
+        s = re.replace_all(&s, *rep).into_owned();
+    }
+    decode_entities(s.trim())
+}
+
+/// The notes of release `tag` from the Atom feed (the feed lists recent releases only).
+fn notes_from_feed(feed: &str, tag: &str) -> Option<String> {
+    let suffix = format!("/releases/tag/{tag}\"");
+    feed.split("<entry>").skip(1).find(|e| e.contains(&suffix)).and_then(|entry| {
+        let start = entry.find("<content")?;
+        let body = &entry[start..];
+        let body = &body[body.find('>')? + 1..body.find("</content>")?];
+        Some(html_to_markdown(&decode_entities(body)))
+    })
+}
+
+async fn feed_notes(tag: &str) -> Result<String, String> {
+    let resp = client(true)?.get(RELEASES_FEED).send().await.map_err(describe)?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let feed = resp.text().await.map_err(describe)?;
+    notes_from_feed(&feed, tag).ok_or_else(|| format!("{tag} not in feed"))
+}
+
 pub async fn check() -> Result<UpdateInfo, String> {
     // The API allows 60 unauthenticated requests per hour per IP, which a shared
-    // network can use up; the release page redirect still gives the version.
+    // network can use up; the release page redirect still gives the version, and
+    // the releases feed its notes.
     let release = match from_api().await {
         Ok(r) => r,
-        Err(api_err) => from_redirect().await.map_err(|e| format!("{api_err}; {e}"))?,
+        Err(api_err) => {
+            let mut r = from_redirect().await.map_err(|e| format!("{api_err}; {e}"))?;
+            if compare_versions(&r.tag_name, env!("CARGO_PKG_VERSION")) == Some(Ordering::Greater) {
+                r.body = feed_notes(&r.tag_name).await.ok();
+            }
+            r
+        }
     };
     info_from(release, env!("CARGO_PKG_VERSION"))
 }
@@ -192,6 +296,33 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         println!("{:?}", rt.block_on(check()));
         println!("{:?}", rt.block_on(from_redirect()).map(|r| r.tag_name));
+        println!("{}", rt.block_on(feed_notes("v0.1.3")).unwrap());
+    }
+
+    #[test]
+    fn reads_notes_from_feed() {
+        let feed = r#"<feed><title>Release notes</title>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/rty813/nexterm/releases/tag/v0.1.4"/>
+    <content type="html">&lt;h2&gt;新功能 / What&amp;#39;s new&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;数据解释器&lt;/strong&gt;：A &amp;amp; B &lt;code&gt;x&lt;/code&gt;。&lt;br&gt;
+&lt;strong&gt;Data interpreter&lt;/strong&gt;: a &amp;lt;b&amp;gt;.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;a href=&quot;https://x/a.jpg&quot;&gt;&lt;img src=&quot;https://x/a.jpg&quot; alt=&quot;pic&quot;&gt;&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Full Changelog&lt;/strong&gt;: &lt;a href=&quot;https://x&quot;&gt;&lt;tt&gt;v0.1.3...v0.1.4&lt;/tt&gt;&lt;/a&gt;&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/rty813/nexterm/releases/tag/v0.1.3"/>
+    <content type="html">&lt;p&gt;old&lt;/p&gt;</content>
+  </entry>
+</feed>"#;
+        assert_eq!(
+            notes_from_feed(feed, "v0.1.4").unwrap(),
+            "## 新功能 / What's new\n\n- **数据解释器**：A & B `x`。\n**Data interpreter**: a <b>.\n\n**Full Changelog**: `v0.1.3...v0.1.4`"
+        );
+        assert_eq!(notes_from_feed(feed, "v0.1.3").unwrap(), "old");
+        assert_eq!(notes_from_feed(feed, "v0.1.2"), None);
     }
 
     fn release(tag: &str) -> Release {

@@ -14,6 +14,12 @@ export interface ConfirmRequest {
   danger?: boolean;
   /** Checkbox under the message ("Don't ask again"). */
   checkboxLabel?: string;
+  /** Rich content under the message (e.g. release notes). */
+  body?: React.ReactNode;
+  /** Title icon instead of the warning sign. */
+  icon?: React.ReactNode;
+  /** Wider panel, for long content. */
+  wide?: boolean;
 }
 
 export type ConfirmAnswer = { ok: boolean; extra: boolean; checked: boolean };
@@ -32,10 +38,10 @@ export const ConfirmDialog: React.FC<{ request: ConfirmRequest; onAnswer: (a: Co
         if (e.key === "Escape") onAnswer({ ok: false, extra: false, checked });
       }}
     >
-      <div className={`modal-panel confirm-panel ${request.danger ? "danger" : ""}`}>
+      <div className={`modal-panel confirm-panel ${request.danger ? "danger" : ""} ${request.wide ? "wide" : ""}`}>
         <div className="modal-header">
           <h3>
-            <TriangleAlert size={16} /> {request.title}
+            {request.icon ?? <TriangleAlert size={16} />} {request.title}
           </h3>
           <button type="button" className="icon-btn" onClick={() => onAnswer({ ok: false, extra: false, checked })}>
             <X size={16} />
@@ -44,6 +50,7 @@ export const ConfirmDialog: React.FC<{ request: ConfirmRequest; onAnswer: (a: Co
         <div className="modal-body">
           <p className="confirm-message">{request.message}</p>
           {request.detail && <pre className="confirm-detail mono">{request.detail}</pre>}
+          {request.body}
           {request.checkboxLabel && (
             <label className="checkbox-row">
               <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />

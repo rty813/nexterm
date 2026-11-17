@@ -156,6 +156,7 @@ export const uiResources = {
       download: "前往下载",
       later: "稍后",
       skip: "跳过这个版本",
+      notes: "更新内容",
     },
   },
   "en-US": {
@@ -186,6 +187,7 @@ export const uiResources = {
       download: "Download",
       later: "Later",
       skip: "Skip this version",
+      notes: "What's new",
     },
     fullHistory: {
       cleared: "──── screen cleared ────",

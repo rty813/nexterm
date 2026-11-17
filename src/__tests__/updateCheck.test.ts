@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { releaseNotesPreview, shouldPromptUpdate, updateCheckEnabled } from "../utils/updateCheck";
+import { parseNoteInline, parseReleaseNotes, shouldPromptUpdate, updateCheckEnabled } from "../utils/updateCheck";
 import type { UpdateInfo } from "../types/domain";
 
 const info = (latest: string, available = true): UpdateInfo => ({
@@ -24,12 +24,47 @@ describe("update check", () => {
     expect(shouldPromptUpdate(info("0.1.4"), { skippedUpdateVersion: "0.1.3" })).toBe(true);
   });
 
-  it("trims release notes", () => {
-    const notes = "## What's Changed\r\n\r\n\r\n* **MCP** file transfer\r\n* Clear resets history\r\n\r\n";
-    expect(releaseNotesPreview(notes)).toBe("What's Changed\n\n* MCP file transfer\n* Clear resets history");
-    const long = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
-    const out = releaseNotesPreview(long, 3).split("\n");
-    expect(out).toEqual(["line 0", "line 1", "line 2", "…"]);
-    expect(releaseNotesPreview("")).toBe("");
+  it("parses release notes into blocks", () => {
+    const notes =
+      "## What's Changed\r\n\r\n\r\n* **MCP** file transfer\r\n* Clear resets history by @a in [#3](https://x/3)\r\n\r\n" +
+      "[![pic](https://x/a.jpg)](https://x/a.jpg)\n\nSome text\ncontinued\n\n**Full Changelog**: https://x/compare";
+    expect(parseReleaseNotes(notes)).toEqual([
+      { kind: "h2", lines: ["What's Changed"] },
+      { kind: "li", lines: ["**MCP** file transfer"] },
+      { kind: "li", lines: ["Clear resets history by @a in #3"] },
+      { kind: "p", lines: ["Some text", "continued"] },
+    ]);
+    expect(parseReleaseNotes("")).toEqual([]);
+  });
+
+  it("keeps the UI language of bilingual notes", () => {
+    const notes =
+      "## 新功能 / What's new\n\n### MCP\n\n- **数据解释器**：单击字节。\n**Data interpreter**: click a byte.\n" +
+      "- 仅中文\n- English only<br>still English\n";
+    expect(parseReleaseNotes(notes, "zh-CN")).toEqual([
+      { kind: "h2", lines: ["新功能"] },
+      { kind: "h3", lines: ["MCP"] },
+      { kind: "li", lines: ["**数据解释器**：单击字节。"] },
+      { kind: "li", lines: ["仅中文"] },
+      { kind: "li", lines: ["English only", "still English"] },
+    ]);
+    expect(parseReleaseNotes(notes, "en-US").map((b) => b.lines)).toEqual([
+      ["What's new"],
+      ["MCP"],
+      ["**Data interpreter**: click a byte."],
+      ["仅中文"],
+      ["English only", "still English"],
+    ]);
+  });
+
+  it("splits bold and code spans", () => {
+    expect(parseNoteInline("New `list_files` and **MCP** tools")).toEqual([
+      { text: "New " },
+      { text: "list_files", code: true },
+      { text: " and " },
+      { text: "MCP", bold: true },
+      { text: " tools" },
+    ]);
+    expect(parseNoteInline("plain")).toEqual([{ text: "plain" }]);
   });
 });
