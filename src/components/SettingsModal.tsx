@@ -195,12 +195,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onChange={(e) =>
                   setDraft({
                     ...draft,
-                    scrollback: Number(e.target.value) || 50000,
+                    scrollback: Number(e.target.value) || 10000,
                   })
                 }
               />
             </label>
           </div>
+
+          <label className="checkbox-row" title={t("fullHistory.enabledTip")}>
+            <input
+              type="checkbox"
+              checked={draft.fullHistory !== false}
+              onChange={(e) => setDraft({ ...draft, fullHistory: e.target.checked })}
+            />
+            <span>{t("fullHistory.enabled")}</span>
+          </label>
+          {draft.fullHistory !== false && (
+            <>
+              <div className="form-grid-2">
+                <label className="field">
+                  <span>{t("fullHistory.memoryMb")}</span>
+                  <input
+                    type="number"
+                    className="text-input"
+                    min={4}
+                    max={4096}
+                    value={draft.fullHistoryMemoryMb ?? 32}
+                    onChange={(e) => setDraft({ ...draft, fullHistoryMemoryMb: Math.max(4, Number(e.target.value) || 32) })}
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("fullHistory.diskMb")}</span>
+                  <input
+                    type="number"
+                    className="text-input"
+                    min={0}
+                    max={102400}
+                    value={draft.fullHistoryDiskMb ?? 2048}
+                    onChange={(e) => setDraft({ ...draft, fullHistoryDiskMb: Math.max(0, Number(e.target.value) || 0) })}
+                  />
+                </label>
+              </div>
+              <p className="adv-hint">{t("fullHistory.hint")}</p>
+            </>
+          )}
 
           <label className="checkbox-row">
             <input
@@ -242,6 +280,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onChange={(e) => setDraft({ ...draft, timestampMs: e.target.checked })}
               />
               <span>{t("settingsModal.timestampMs")}</span>
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={draft.gutterLineNumbers !== false}
+                onChange={(e) => setDraft({ ...draft, gutterLineNumbers: e.target.checked })}
+              />
+              <span>{t("settingsModal.gutterLineNumbers")}</span>
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={draft.highlightCurrentLine !== false}
+                onChange={(e) => setDraft({ ...draft, highlightCurrentLine: e.target.checked })}
+              />
+              <span>{t("settingsModal.highlightCurrentLine")}</span>
             </label>
           </div>
 

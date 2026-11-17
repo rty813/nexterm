@@ -2353,6 +2353,8 @@ html.ctxmenu-host #root {
   flex: 0 0 auto;
   min-width: 68px;
   padding: 0 6px 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   border-right: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--term-bg) 85%, #000);
   overflow: hidden;
@@ -2362,15 +2364,54 @@ html.ctxmenu-host #root {
   position: absolute;
   left: 8px;
   right: 6px;
+  display: flex;
+  gap: 1ch;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-muted);
   white-space: nowrap;
-  text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.ts-row.ts-repeat {
+.ts-time {
+  flex: 0 0 auto;
+  min-width: 8ch;
+}
+.ts-time.ts-repeat {
   opacity: 0.35;
+}
+/* Line numbers: right-aligned against the text, in the theme's blue. */
+.ts-no {
+  flex: 1;
+  text-align: right;
+  color: var(--term-blue, #5c9ee6);
+}
+/* The cursor's line: time and number in the theme's magenta, on a band like the terminal's. */
+.ts-row.ts-current {
+  left: 0;
+  right: 0;
+  padding: 0 6px 0 8px;
+  background: color-mix(in srgb, var(--term-fg) 7%, transparent);
+}
+.ts-row.ts-current .ts-time,
+.ts-row.ts-current .ts-no {
+  color: var(--term-magenta, #e6508a);
+  opacity: 1;
+}
+
+/* Current line and clicked line in the terminal (utils/lineHighlight.ts). */
+.term-line-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: none;
+  pointer-events: none;
+  z-index: 3;
+}
+.term-line-current {
+  background: color-mix(in srgb, var(--term-fg) 7%, transparent);
+}
+.term-line-clicked {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 /* ---------- Locked tabs ---------- */
@@ -2781,6 +2822,39 @@ html.ctxmenu-host #root {
 }
 .xterm .xterm-decoration-overview-ruler {
   opacity: 0.95;
+}
+
+/* Full-history scrollbar (services/historyScroll.ts): covers every line of the history,
+   drawn in place of xterm's own thumb, which only knows the lines currently loaded. */
+.xterm.hist-bar-on .xterm-viewport::-webkit-scrollbar-thumb,
+.xterm.hist-bar-on .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: transparent;
+}
+.hist-bar {
+  position: absolute;
+  right: 0;
+  width: 14px;
+  z-index: 6;
+  display: none;
+}
+.hist-bar-marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* Its marks cover the whole history; xterm's ruler only knows the loaded lines. */
+.xterm.hist-bar-on .xterm-decoration-overview-ruler {
+  display: none;
+}
+.hist-bar-thumb {
+  position: absolute;
+  left: 1px;
+  right: 0;
+  min-height: 24px;
+  background: rgba(160, 160, 160, 0.28);
+}
+.hist-bar-thumb:hover {
+  background: rgba(180, 180, 180, 0.45);
 }
 
 /* ---------- Highlight color row in the context menu ---------- */

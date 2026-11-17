@@ -95,6 +95,32 @@ export function findAll(term: Terminal, re: RegExp, limit = 2000): { matches: Bu
   return { matches, truncated: false };
 }
 
+/**
+ * The cells of UTF-16 range [start, end) of the logical line that starts at buffer row
+ * `row` (a match the full-history search found there). Null when the range is not there.
+ */
+export function matchAtRow(term: Terminal, row: number, start: number, end: number): BufferMatch | null {
+  const buf = term.buffer.active;
+  let text = "";
+  const pos: { row: number; col: number }[] = [];
+  let y = row;
+  do {
+    const line = buf.getLine(y);
+    if (!line) break;
+    const next = buf.getLine(y + 1);
+    const full = next?.isWrapped ? readFullRow(line) : readRow(line);
+    for (let i = 0; i < full.text.length; i++) pos.push({ row: y, col: full.cols[i] });
+    text += full.text;
+    y++;
+  } while (y < buf.length && buf.getLine(y)?.isWrapped);
+  const first = pos[start];
+  const last = pos[end - 1];
+  if (!first || !last || end <= start) return null;
+  const width = buf.getLine(last.row)?.getCell(last.col)?.getWidth() || 1;
+  const cells = (last.row - first.row) * term.cols + last.col + width - first.col;
+  return { row: first.row, col: first.col, cells, lineText: text, start, end };
+}
+
 function readFullRow(line: IBufferLine): { text: string; cols: number[] } {
   let text = "";
   const cols: number[] = [];

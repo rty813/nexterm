@@ -42,7 +42,7 @@ const OUT_TAIL: usize = 26_000;
 const INSTRUCTIONS: &str = "Nexterm 终端控制。先用 list_panes 查看窗格；操作某个窗格前用 request_control 申请，\
 用户在 Nexterm 中确认后才能读屏和输入（control 为 active 的窗格可以直接操作）。\
 普通 shell 命令用 run_command（有 Shell 集成时返回输出和退出码）；vim、top、REPL、密码提示等交互程序用 send_keys + read_screen；\
-长时间运行的命令用 wait_for 继续等待。完成后用 release_control 把窗格还给用户。\
+长时间运行的命令用 wait_for 继续等待；更早的输出（已滚出屏幕和回滚区）用 search_history 搜索、read_history 读取。完成后用 release_control 把窗格还给用户。\
 需要连接新的机器或开新的本地终端时，用 list_sessions 找已保存的会话，再用 open_session 打开（用户确认后新窗格直接归你控制）；\
 自己打开的窗格用完可以用 close_pane 关闭。\
 用户可以随时暂停或收回控制，此时工具会返回错误，请停止操作并等待用户。用户拒绝申请后不要反复申请。\
@@ -486,6 +486,36 @@ fn tool_defs() -> Value {
             "annotations": { "readOnlyHint": true }
         },
         {
+            "name": "read_history",
+            "description": "读取窗格的完整输出历史（包括已滚出 xterm 回滚区的内容和当前屏幕），每行带行号。默认返回最后 200 行；offset 表示从末尾往前跳过多少行，用来往前翻页。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pane": pane,
+                    "lines": { "type": "integer", "minimum": 1, "maximum": 2000, "description": "返回的行数，默认 200" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "从末尾往前跳过的行数，默认 0" }
+                },
+                "required": ["pane"]
+            },
+            "annotations": { "readOnlyHint": true }
+        },
+        {
+            "name": "search_history",
+            "description": "在窗格的完整输出历史中搜索，返回匹配的行（带行号，从最新往前）。再用 read_history 读取上下文。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pane": pane,
+                    "query": { "type": "string" },
+                    "regex": { "type": "boolean", "description": "query 是正则表达式，默认 false" },
+                    "case_sensitive": { "type": "boolean", "description": "默认 false" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 500, "description": "最多返回的行数，默认 50" }
+                },
+                "required": ["pane", "query"]
+            },
+            "annotations": { "readOnlyHint": true }
+        },
+        {
             "name": "run_command",
             "description": "在窗格的 shell 中输入一条命令并等待结束。有 Shell 集成时返回命令输出和退出码；没有时等输出安静后返回屏幕内容。命令不能包含换行（多条用 && 或 ; 连接）。不适用于交互程序（用 send_keys）。",
             "inputSchema": {
@@ -643,6 +673,67 @@ fn arg_u64(args: &Value, key: &str, default: u64, max: u64) -> u64 {
     args.get(key).and_then(Value::as_u64).unwrap_or(default).min(max)
 }
 
+fn history_of(pane: &str) -> Result<std::sync::Arc<crate::history::Recorder>, String> {
+    crate::history::get(pane).ok_or_else(|| "该窗格没有完整历史（设置里关闭了完整回滚历史，或窗格还没有连接过）".to_string())
+}
+
+fn read_history(pane: &str, args: &Value) -> Result<String, String> {
+    let r = history_of(pane)?;
+    let info = r.info();
+    let total = info.end + info.tail;
+    let count = arg_u64(args, "lines", 200, 2000);
+    let offset = arg_u64(args, "offset", 0, u64::MAX);
+    let to = total.saturating_sub(offset).max(info.first);
+    let from = to.saturating_sub(count).max(info.first);
+    let page = r.lines(from, (to - from) as u32)?;
+    let mut out = format!("历史共 {} 行（第 {}～{} 行可读", total - info.first, info.first, total.saturating_sub(1));
+    if info.dropped > 0 {
+        out.push_str(&format!("，更早的 {} 行已因大小限制丢弃", info.dropped));
+    }
+    out.push_str(&format!("），以下是第 {}～{} 行：\n", page.first, page.first + page.lines.len() as u64));
+    for (i, l) in page.lines.iter().enumerate() {
+        let text = if l.kind == crate::history::line::KIND_CLEARED { "──── 已清屏 ────" } else { l.text.as_str() };
+        out.push_str(&format!("{:>8}  {}\n", page.first + i as u64, text));
+    }
+    Ok(out)
+}
+
+fn search_history(pane: &str, args: &Value) -> Result<String, String> {
+    let r = history_of(pane)?;
+    let query = arg_str(args, "query").unwrap_or("");
+    let regex = args.get("regex").and_then(Value::as_bool).unwrap_or(false);
+    let case = args.get("case_sensitive").and_then(Value::as_bool).unwrap_or(false);
+    let limit = arg_u64(args, "limit", 50, 500) as usize;
+    let spec = crate::history::QuerySpec { pattern: query.to_string(), regex, case_sensitive: case, whole_word: false };
+    let m = crate::history::Matcher::new(&spec)?;
+    let mut lines: Vec<u64> = Vec::new();
+    let mut from = u64::MAX;
+    // Newest first; a line with many matches counts once.
+    loop {
+        let res = r.search(&m, from, true, limit * 4, u64::MAX)?;
+        for m in res.matches {
+            if lines.last() != Some(&m.line) {
+                lines.push(m.line);
+            }
+        }
+        match res.next {
+            Some(n) if lines.len() < limit => from = n,
+            _ => break,
+        }
+    }
+    lines.truncate(limit);
+    if lines.is_empty() {
+        return Ok("没有匹配的行。".into());
+    }
+    let mut out = format!("{} 行匹配（从最新往前）：\n", lines.len());
+    for n in lines {
+        if let Some(l) = r.lines(n, 1)?.lines.first() {
+            out.push_str(&format!("{:>8}  {}\n", n, l.text));
+        }
+    }
+    Ok(out)
+}
+
 fn call_tool(app: &AppHandle, name: &str, args: &Value, caller: &Caller) -> Result<String, String> {
     let ctx = app.try_state::<crate::AppContext>().ok_or("Nexterm 尚未初始化")?;
     let conns = &ctx.connections;
@@ -739,6 +830,11 @@ fn call_tool(app: &AppHandle, name: &str, args: &Value, caller: &Caller) -> Resu
     }
     if let Some(e) = control_error(&pane) {
         return Err(e);
+    }
+    match name {
+        "read_history" => return read_history(&pane, args),
+        "search_history" => return search_history(&pane, args),
+        _ => {}
     }
     let rt = conns.pane_runtime(&pane).ok_or("该窗格没有活动的连接")?;
 
@@ -1628,7 +1724,7 @@ mod tests {
         let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}});
         assert_eq!(local_response(&init).unwrap().unwrap()["result"]["protocolVersion"], DEFAULT_PROTOCOL);
         let list = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
-        assert_eq!(local_response(&list).unwrap().unwrap()["result"]["tools"].as_array().unwrap().len(), 10);
+        assert_eq!(local_response(&list).unwrap().unwrap()["result"]["tools"].as_array().unwrap().len(), 12);
         assert!(local_response(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).unwrap().is_none());
         assert!(local_response(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call"})).is_none());
         assert_eq!(local_response(&json!({"jsonrpc":"2.0","id":4,"method":"x"})).unwrap().unwrap()["error"]["code"], -32601);

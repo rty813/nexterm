@@ -1,23 +1,48 @@
 import type { IDisposable, IMarker, Terminal } from "@xterm/xterm";
+import { logicalRows } from "./lineHighlight";
 
 /**
  * WindTerm-style timestamp margin: remembers when each line first received output
- * and paints the time beside the visible rows.
+ * and paints its line number and time beside the visible rows.
  *
  * Stamps hang off one xterm marker per block of lines, so they follow their lines
  * through scrolling and are dropped with them when scrollback is trimmed. Not one
  * marker per line: xterm visits every marker for each line it trims, so a full
  * scrollback with thousands of markers made large output many times slower.
+ *
+ * Offsets count logical lines (wrapped rows belong to the line above), not rows: when a
+ * resize re-wraps long lines, rows are added or removed inside a block, but its logical
+ * lines stay the same, so the stamps stay on their lines.
+ *
+ * Line numbers count logical lines (a wrapped line is one) since the pane opened, so
+ * they keep counting when old lines are trimmed. Rows loaded from the full history
+ * (services/historyScroll.ts) carry the backend's own numbers; `alignNumbers` shifts the
+ * live count to match them.
  */
 interface Block {
   /** First line of the block. */
   marker: IMarker;
-  /** Stamped lines, as offsets from the marker, ascending, with their times. */
+  /** Stamped lines, as logical-line offsets from the marker, ascending, with their times and numbers. */
   offsets: number[];
+  /** Last row resolved by `indexOf` and its logical offset (cleared on resize). */
+  cacheRow?: number;
+  cacheIdx?: number;
   times: number[];
+  nos: number[];
+  /** Rows from the full history: numbers are absolute (no live offset applied). */
+  abs: boolean;
 }
 
-/** Stamps kept before the oldest are released (bounded by scrollback anyway). */
+/** A stamp by absolute buffer line (exported / imported around output folding). */
+export interface LineStamp {
+  line: number;
+  /** 0: unknown. */
+  time: number;
+  no?: number;
+  abs?: boolean;
+}
+
+/** Live stamps kept before the oldest are released (bounded by scrollback anyway). */
 const MAX_STAMPS = 20000;
 /** Lines covered by one marker. */
 const BLOCK_LINES = 512;
@@ -32,30 +57,55 @@ export function formatStamp(time: number, withMs: boolean): string {
   return withMs ? `${base}.${String(d.getMilliseconds()).padStart(3, "0")}` : base;
 }
 
+/** Margin width in characters: number column (at least 4 digits) and time column. */
+export function gutterChars(maxNo: number, showNumbers: boolean, withMs: boolean): number {
+  const digits = showNumbers ? Math.max(4, String(Math.max(0, maxNo)).length) + 1 : 0;
+  return digits + (withMs ? 12 : 8);
+}
+
+interface PaneRow {
+  el: HTMLDivElement;
+  no: HTMLSpanElement;
+  time: HTMLSpanElement;
+}
+
 export class TimestampGutter implements IDisposable {
   private blocks: Block[] = [];
   private stampCount = 0;
   /** Absolute line of the last stamped row, so a write only stamps rows it reached. */
   private lastLine = -1;
-  private rows: HTMLDivElement[] = [];
+  /** Follows `lastLine` through trims of a full scrollback (absolute lines shift then). */
+  private lastMarker: IMarker | null = null;
+  /** Number of the next live line (before `numberOffset`). */
+  private nextNo = 1;
+  /** Added to live numbers so they match the full history's numbering. */
+  private numberOffset = 0;
+  private rows: PaneRow[] = [];
   private frame = 0;
   private readonly subs: IDisposable[];
   private visible = false;
+  private chars = 0;
   /** Output folding is rewriting the buffer: do not stamp the rows it writes. */
   private suspended = false;
 
   constructor(
     private readonly term: Terminal,
     private readonly host: HTMLDivElement,
-    private withMs = false
+    private withMs = false,
+    private showNumbers = true
   ) {
     this.subs = [
       term.onWriteParsed(() => this.stampNewLines()),
+      // A cursor move renders the cursor's row, so this also follows the current line.
       term.onRender(() => this.schedule()),
-      term.onResize(() => this.schedule()),
+      term.onResize(() => {
+        // Rows moved within blocks (re-wrap): row caches are stale.
+        for (const b of this.blocks) b.cacheRow = b.cacheIdx = undefined;
+        this.schedule();
+      }),
       term.buffer.onBufferChange(() => this.schedule()),
     ];
-    this.host.style.minWidth = withMs ? "96px" : "68px";
+    this.setWidth(0);
   }
 
   /** Stamps are recorded all the time; this only shows / hides the margin. */
@@ -67,7 +117,13 @@ export class TimestampGutter implements IDisposable {
 
   setWithMs(withMs: boolean): void {
     this.withMs = withMs;
-    this.host.style.minWidth = withMs ? "96px" : "68px";
+    this.chars = 0;
+    this.schedule();
+  }
+
+  setShowNumbers(show: boolean): void {
+    this.showNumbers = show;
+    this.chars = 0;
     this.schedule();
   }
 
@@ -75,28 +131,76 @@ export class TimestampGutter implements IDisposable {
    * Stamps by absolute line, for output folding. Stops stamping until importStamps:
    * the rows the fold rewrites are not new output.
    */
-  exportStamps(): { line: number; time: number }[] {
+  exportStamps(): LineStamp[] {
     this.suspended = true;
-    const out: { line: number; time: number }[] = [];
-    for (const b of this.live()) b.offsets.forEach((o, i) => out.push({ line: b.marker.line + o, time: b.times[i] }));
+    const out: LineStamp[] = [];
+    for (const b of this.live()) {
+      const rows = this.rowsOf(b, Infinity);
+      b.offsets.forEach((_, i) => {
+        if (rows[i] !== undefined) out.push({ line: rows[i], time: b.times[i], no: b.nos[i], abs: b.abs });
+      });
+    }
     return out;
   }
 
   /** Replace every stamp after a rewrite (cursorLine = absolute cursor row now). */
-  importStamps(list: { line: number; time: number }[], cursorLine: number): void {
+  importStamps(list: LineStamp[], cursorLine: number): void {
     this.clear();
-    for (const s of list.sort((a, b) => a.line - b.line)) this.add(s.line, cursorLine, s.time);
+    for (const s of list.sort((a, b) => a.line - b.line)) {
+      this.add(s.line, cursorLine, s.time, s.no ?? 0, Boolean(s.abs));
+    }
     // The cursor row is stamped when output lands there, as usual.
-    this.lastLine = list.some((s) => s.line === cursorLine) ? cursorLine : cursorLine - 1;
+    this.setLastStamped(list.some((s) => s.line === cursorLine) ? cursorLine : cursorLine - 1, cursorLine);
     this.suspended = false;
     this.schedule();
+  }
+
+  /**
+   * Rows just loaded from the full history (ascending absolute lines), with the
+   * backend's line numbers. They go above the live stamps, anywhere among earlier ones.
+   */
+  addHistoryStamps(list: LineStamp[]): void {
+    const buf = this.term.buffer.active;
+    if (buf.type !== "normal" || list.length === 0) return;
+    const cursorLine = buf.baseY + buf.cursorY;
+    const made: Block[] = [];
+    let b: Block | null = null;
+    for (const s of list) {
+      if (!b || b.offsets.length >= BLOCK_LINES) {
+        const marker = this.term.registerMarker(s.line - cursorLine);
+        if (!marker) continue;
+        b = { marker, offsets: [], times: [], nos: [], abs: true };
+        made.push(b);
+      }
+      b.offsets.push(this.indexOf(b, s.line));
+      b.times.push(s.time);
+      b.nos.push(s.no ?? 0);
+    }
+    // Keep blocks in buffer order (painting skips the ones above the view by it).
+    this.blocks = [...made, ...this.live()].sort((a, b) => a.marker.line - b.marker.line);
+    this.schedule();
+  }
+
+  /** The live line at absolute `line` is number `no` of the full history. */
+  alignNumbers(line: number, no: number): void {
+    for (const b of this.live()) {
+      if (b.abs) continue;
+      if (line < b.marker.line) continue;
+      const i = b.offsets.indexOf(this.indexOf(b, line));
+      if (i >= 0) {
+        this.numberOffset = no - b.nos[i];
+        this.schedule();
+        return;
+      }
+    }
   }
 
   /** Stamp time of an absolute buffer line, if any. */
   timeOfLine(line: number): number | undefined {
     let time: number | undefined;
     for (const b of this.live()) {
-      const i = b.offsets.indexOf(line - b.marker.line);
+      if (line < b.marker.line) continue;
+      const i = b.offsets.indexOf(this.indexOf(b, line));
       if (i >= 0) time = b.times[i];
     }
     return time;
@@ -105,6 +209,7 @@ export class TimestampGutter implements IDisposable {
   dispose(): void {
     cancelAnimationFrame(this.frame);
     this.subs.forEach((s) => s.dispose());
+    this.lastMarker?.dispose();
     this.clear();
     this.host.replaceChildren();
   }
@@ -119,24 +224,82 @@ export class TimestampGutter implements IDisposable {
   private live(): Block[] {
     if (this.blocks.some((b) => b.marker.isDisposed)) {
       this.blocks = this.blocks.filter((b) => !b.marker.isDisposed);
-      this.stampCount = this.blocks.reduce((n, b) => n + b.offsets.length, 0);
+      this.stampCount = this.blocks.reduce((n, b) => n + (b.abs ? 0 : b.offsets.length), 0);
     }
     return this.blocks;
   }
 
   /** Stamp absolute `line` (cursor at `cursorLine`), opening a new block when needed. */
-  private add(line: number, cursorLine: number, time: number): void {
+  private add(line: number, cursorLine: number, time: number, no: number, abs = false): void {
     let b = this.blocks[this.blocks.length - 1];
-    const offset = b && !b.marker.isDisposed ? line - b.marker.line : -1;
-    if (!b || offset < 0 || offset >= BLOCK_LINES || offset <= (b.offsets[b.offsets.length - 1] ?? -1)) {
+    const offset = b && !b.marker.isDisposed && line >= b.marker.line ? this.indexOf(b, line) : -1;
+    if (!b || b.abs !== abs || offset < 0 || offset >= BLOCK_LINES || offset <= (b.offsets[b.offsets.length - 1] ?? -1)) {
       const marker = this.term.registerMarker(line - cursorLine);
       if (!marker) return;
-      b = { marker, offsets: [], times: [] };
+      b = { marker, offsets: [], times: [], nos: [], abs };
       this.blocks.push(b);
+      b.offsets.push(0);
+    } else {
+      b.offsets.push(offset);
     }
-    b.offsets.push(line - b.marker.line);
     b.times.push(time);
-    this.stampCount++;
+    b.nos.push(no);
+    if (!abs) {
+      this.stampCount++;
+      this.nextNo = Math.max(this.nextNo, no + 1);
+    }
+  }
+
+  /** Logical-line offset of absolute row `line` (>= the block's marker) in block `b`. */
+  private indexOf(b: Block, line: number): number {
+    const buf = this.term.buffer.active;
+    let row = b.marker.line;
+    let idx = 0;
+    if (b.cacheRow !== undefined && b.cacheIdx !== undefined && b.cacheRow <= line && b.cacheRow >= row) {
+      row = b.cacheRow;
+      idx = b.cacheIdx;
+    }
+    for (let r = row + 1; r <= line; r++) if (!buf.getLine(r)?.isWrapped) idx++;
+    b.cacheRow = line;
+    b.cacheIdx = idx;
+    return idx;
+  }
+
+  /** Absolute rows of a block's stamps, up to row `until`. */
+  private rowsOf(b: Block, until: number): number[] {
+    const buf = this.term.buffer.active;
+    const out: number[] = [];
+    let idx = 0;
+    let k = 0;
+    const end = Math.min(until, buf.length - 1);
+    for (let r = b.marker.line; r <= end && k < b.offsets.length; r++) {
+      if (r > b.marker.line && buf.getLine(r)?.isWrapped) continue;
+      if (r > b.marker.line) idx++;
+      while (k < b.offsets.length && b.offsets[k] < idx) k++;
+      if (b.offsets[k] === idx) out[k++] = r;
+    }
+    return out;
+  }
+
+  /** Where `lastLine` is now: the buffer's numbering shifts when full scrollback trims rows. */
+  private lastStamped(): number {
+    if (this.lastMarker) {
+      if (this.lastMarker.isDisposed) {
+        // Trimmed away: every row still in the buffer is newer.
+        this.lastMarker = null;
+        this.lastLine = -1;
+      } else {
+        this.lastLine = this.lastMarker.line;
+      }
+    }
+    return this.lastLine;
+  }
+
+  private setLastStamped(line: number, cursorLine: number): void {
+    if (line === this.lastLine && this.lastMarker && !this.lastMarker.isDisposed) return;
+    this.lastMarker?.dispose();
+    this.lastMarker = line >= 0 ? this.term.registerMarker(line - cursorLine) ?? null : null;
+    this.lastLine = line;
   }
 
   private stampNewLines(): void {
@@ -144,25 +307,31 @@ export class TimestampGutter implements IDisposable {
     const buf = this.term.buffer.active;
     if (buf.type !== "normal") return;
     const cursorLine = buf.baseY + buf.cursorY;
+    let last = this.lastStamped();
     // After a clear / reset the cursor moves back up; start over from there.
-    if (cursorLine < this.lastLine) this.lastLine = cursorLine - 1;
+    if (cursorLine < last) last = cursorLine - 1;
     const now = Date.now();
-    for (let line = Math.max(this.lastLine + 1, buf.baseY); line <= cursorLine; line++) {
+    // Every new line, also those a burst of output already scrolled past: the line
+    // numbers count them all.
+    for (let line = last + 1; line <= cursorLine; line++) {
       const bufLine = buf.getLine(line);
       // Continuation rows of a wrapped line belong to the line that started it.
       if (bufLine?.isWrapped) {
-        this.lastLine = line;
+        last = line;
         continue;
       }
-      const text = bufLine?.translateToString(true) ?? "";
       // An empty cursor row is not output yet; stamp it when something lands there.
-      if (line === cursorLine && text.length === 0) break;
-      this.add(line, cursorLine, now);
-      this.lastLine = line;
+      if (line === cursorLine && (bufLine?.translateToString(true) ?? "").length === 0) break;
+      this.add(line, cursorLine, now, this.nextNo);
+      last = line;
     }
+    this.setLastStamped(last, cursorLine);
     this.live();
-    while (this.stampCount > MAX_STAMPS && this.blocks.length > 1) {
-      const b = this.blocks.shift()!;
+    while (this.stampCount > MAX_STAMPS) {
+      // Oldest live block first; history rows go when the history scroller drops them.
+      const i = this.blocks.findIndex((b) => !b.abs);
+      if (i < 0 || i === this.blocks.length - 1) break;
+      const [b] = this.blocks.splice(i, 1);
       b.marker.dispose();
       this.stampCount -= b.offsets.length;
     }
@@ -179,6 +348,13 @@ export class TimestampGutter implements IDisposable {
     });
   }
 
+  private setWidth(maxNo: number): void {
+    const chars = gutterChars(maxNo, this.showNumbers, this.withMs);
+    if (chars === this.chars) return;
+    this.chars = chars;
+    this.host.style.minWidth = `calc(${chars}ch + 16px)`;
+  }
+
   private paint(): void {
     const buf = this.term.buffer.active;
     const screen = this.term.element?.querySelector(".xterm-screen") as HTMLElement | null;
@@ -187,36 +363,63 @@ export class TimestampGutter implements IDisposable {
     const top = screen.getBoundingClientRect().top - this.host.getBoundingClientRect().top;
 
     while (this.rows.length < this.term.rows) {
-      const row = document.createElement("div");
-      row.className = "ts-row";
-      this.host.appendChild(row);
-      this.rows.push(row);
+      const el = document.createElement("div");
+      el.className = "ts-row";
+      const no = document.createElement("span");
+      no.className = "ts-no";
+      const time = document.createElement("span");
+      time.className = "ts-time";
+      // Time first, the line number next to the text (as in WindTerm).
+      el.append(time, no);
+      this.host.appendChild(el);
+      this.rows.push({ el, no, time });
     }
-    while (this.rows.length > this.term.rows) this.rows.pop()!.remove();
+    while (this.rows.length > this.term.rows) this.rows.pop()!.el.remove();
 
-    const byLine = new Map<number, number>();
+    const byLine = new Map<number, { time: number; no: number }>();
     if (buf.type === "normal") {
       const first = buf.viewportY;
       const last = first + this.term.rows;
-      for (const b of this.live()) {
-        const base = b.marker.line;
-        if (base >= last || base + BLOCK_LINES <= first) continue;
-        b.offsets.forEach((o, i) => {
-          if (base + o >= first && base + o < last) byLine.set(base + o, b.times[i]);
+      const blocks = this.live();
+      blocks.forEach((b, bi) => {
+        if (b.marker.line >= last) return;
+        // Blocks are in buffer order: one followed by a block starting above the view ends there too.
+        const next = blocks[bi + 1];
+        if (next && next.marker.line <= first) return;
+        const shift = b.abs ? 0 : this.numberOffset;
+        const rows = this.rowsOf(b, last - 1);
+        rows.forEach((row, i) => {
+          if (row >= first && row < last) byLine.set(row, { time: b.times[i], no: b.nos[i] + shift });
         });
-      }
+      });
     }
+    // The cursor's line (all its rows), drawn in the "current line" color.
+    let current: [number, number] | null = null;
+    if (buf.type === "normal") {
+      const cursorRow = buf.baseY + buf.cursorY;
+      current = logicalRows(cursorRow, (l) => Boolean(buf.getLine(l)?.isWrapped), buf.length);
+      // The prompt row before anything is printed on it: show the number it will get.
+      if (!byLine.has(current[0])) byLine.set(current[0], { time: 0, no: this.nextNo + this.numberOffset });
+    }
+    let maxNo = this.nextNo + this.numberOffset;
+    for (const v of byLine.values()) maxNo = Math.max(maxNo, v.no);
+    this.setWidth(maxNo);
+
     let previous = "";
     this.rows.forEach((row, i) => {
-      row.style.top = `${top + i * rowHeight}px`;
-      row.style.height = `${rowHeight}px`;
-      row.style.lineHeight = `${rowHeight}px`;
-      const time = byLine.get(buf.viewportY + i);
-      const text = time === undefined ? "" : formatStamp(time, this.withMs);
+      row.el.style.top = `${top + i * rowHeight}px`;
+      row.el.style.height = `${rowHeight}px`;
+      row.el.style.lineHeight = `${rowHeight}px`;
+      const abs = buf.viewportY + i;
+      const stamp = byLine.get(abs);
+      row.el.classList.toggle("ts-current", current !== null && abs >= current[0] && abs <= current[1]);
+      const text = stamp?.time ? formatStamp(stamp.time, this.withMs) : "";
+      row.no.textContent = this.showNumbers && stamp && stamp.no > 0 ? String(stamp.no) : "";
+      row.no.style.display = this.showNumbers ? "" : "none";
+      row.time.textContent = text;
       // Repeated times are dimmed, like WindTerm, so bursts of output stay readable.
-      row.textContent = text;
-      row.classList.toggle("ts-repeat", text !== "" && text === previous);
-      row.title = time === undefined ? "" : new Date(time).toLocaleString();
+      row.time.classList.toggle("ts-repeat", text !== "" && text === previous);
+      row.el.title = stamp?.time ? new Date(stamp.time).toLocaleString() : "";
       if (text) previous = text;
     });
   }

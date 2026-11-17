@@ -2,6 +2,7 @@ pub mod agent;
 pub mod app_paths;
 pub mod charset;
 pub mod commands;
+pub mod history;
 pub mod importer;
 pub mod local_pty;
 pub mod manager;
@@ -92,6 +93,16 @@ fn sftp_concurrency(settings: &AppSettings) -> usize {
         .and_then(|v| v.get("concurrency"))
         .and_then(|v| v.as_u64())
         .unwrap_or(3) as usize
+}
+
+/// settings.extra.fullHistory (default on) and its memory / disk limits per pane.
+fn history_config(settings: &AppSettings) -> (bool, crate::history::HistoryLimits) {
+    let mb = |key: &str, default: f64| settings.extra.get(key).and_then(|v| v.as_f64()).unwrap_or(default).max(0.0);
+    let limits = crate::history::HistoryLimits {
+        memory: (mb("fullHistoryMemoryMb", 32.0).max(1.0) * 1_048_576.0) as usize,
+        disk: (mb("fullHistoryDiskMb", 2048.0) * 1_048_576.0) as u64,
+    };
+    (extra_bool(settings, "fullHistory", true), limits)
 }
 
 fn extra_str(settings: &AppSettings, key: &str) -> String {
@@ -186,10 +197,114 @@ fn apply_settings_effects(ctx: &AppContext, settings: &AppSettings) {
     ctx.ask_before_quit
         .store(extra_bool(&settings, "askBeforeCloseWindow", true), Ordering::Relaxed);
     crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
+    let (history_on, history_limits) = history_config(settings);
+    crate::history::configure(history_on, history_limits);
     crate::xserver::configure(xserver_config(settings));
     crate::remote::configure(remote_config(settings));
     if let Some(hub) = crate::transfer::hub() {
         hub.set_limit(sftp_concurrency(settings));
+    }
+}
+
+// ------------------------------------------------------------------ full scrollback history
+
+/// Async: a sync command runs on the main thread, and `info` may wait for the history
+/// worker's lock while it parses a batch.
+#[tauri::command]
+async fn history_info(instance_id: String) -> Option<crate::history::Info> {
+    let r = crate::history::get(&instance_id)?;
+    tauri::async_runtime::spawn_blocking(move || r.info()).await.ok()
+}
+
+/// Lines `from..from + count` of a pane's history (archived lines, then those on screen).
+#[tauri::command]
+async fn history_lines(instance_id: String, from: u64, count: u32) -> Result<Option<crate::history::Page>, String> {
+    let Some(r) = crate::history::get(&instance_id) else { return Ok(None) };
+    tauri::async_runtime::spawn_blocking(move || r.lines(from, count).map(Some))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Up to `limit` matches from history line `from` on (or back), across the whole history.
+#[tauri::command]
+async fn history_search(
+    instance_id: String,
+    spec: crate::history::QuerySpec,
+    from: u64,
+    backward: bool,
+    limit: Option<u32>,
+) -> Result<crate::history::SearchResult, String> {
+    let r = crate::history::get(&instance_id).ok_or("no history")?;
+    let m = crate::history::Matcher::new(&spec)?;
+    let limit = limit.unwrap_or(500).clamp(1, 5000) as usize;
+    tauri::async_runtime::spawn_blocking(move || r.search(&m, from, backward, limit, u64::MAX))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Scrollbar marks and match counts of several queries over the whole history.
+#[tauri::command]
+async fn history_marks(
+    instance_id: String,
+    specs: Vec<crate::history::QuerySpec>,
+    buckets: u32,
+) -> Result<Option<crate::history::Marks>, String> {
+    let Some(r) = crate::history::get(&instance_id) else { return Ok(None) };
+    tauri::async_runtime::spawn_blocking(move || r.marks_of(&specs, buckets).map(Some))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// How many matches come before (line, UTF-16 offset `start`): the "3" of "3/120".
+#[tauri::command]
+async fn history_rank(instance_id: String, spec: crate::history::QuerySpec, line: u64, start: u32) -> Result<u64, String> {
+    let r = crate::history::get(&instance_id).ok_or("no history")?;
+    let m = crate::history::Matcher::new(&spec)?;
+    tauri::async_runtime::spawn_blocking(move || r.rank(&m, line, start))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Write the whole history to a file (plain text or with ANSI colors); returns the line count.
+#[tauri::command]
+async fn history_export(instance_id: String, path: String, ansi: bool) -> Result<u64, String> {
+    let r = crate::history::get(&instance_id).ok_or("no history")?;
+    tauri::async_runtime::spawn_blocking(move || r.export(std::path::Path::new(&path), ansi))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Which history line xterm.js's buffer starts at: `sig` are its first logical lines,
+/// `hint` the expected position, `window` how far either side to look. None: not found.
+#[tauri::command]
+async fn history_locate(instance_id: String, sig: Vec<String>, hint: u64, window: Option<u64>) -> Result<Option<u64>, String> {
+    let Some(r) = crate::history::get(&instance_id) else { return Ok(None) };
+    let window = window.unwrap_or(200_000).min(2_000_000);
+    tauri::async_runtime::spawn_blocking(move || r.locate(&sig, hint, window))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The user cleared the scrollback.
+#[tauri::command]
+fn history_clear(instance_id: String) {
+    if let Some(r) = crate::history::get(&instance_id) {
+        r.clear();
+    }
+}
+
+/// The pane closed.
+#[tauri::command]
+fn history_drop(instance_id: String) {
+    crate::history::remove(&instance_id);
+}
+
+/// Text the front end wrote into xterm.js itself (banners, local resets), so the
+/// history's terminal stays in step with the screen.
+#[tauri::command]
+fn history_feed(instance_id: String, data: String) {
+    if let Some(r) = crate::history::get(&instance_id) {
+        r.feed(data.as_bytes());
     }
 }
 
@@ -286,6 +401,8 @@ async fn connect_terminal(
     reuse_from: Option<String>,
 ) -> Result<Option<String>, String> {
     let sink = Arc::new(TauriSink { app });
+    // Before connecting, so the first output is recorded; a reconnect keeps the pane's history.
+    crate::history::ensure(&instance_id, cols, rows);
     let auto_log = session.auto_log;
     let vars = log_vars(&session);
     ctx.connections
@@ -1368,9 +1485,12 @@ pub fn run() {
                 app.path().resource_dir().unwrap_or_else(|_| crate::app_paths::resource_dir()),
                 data_dir.clone(),
             );
+            crate::history::init_dir(&data_dir.join("history"));
             let storage = Storage::new(data_dir).expect("Failed to initialize Nexterm data directory");
             let settings = storage.load_settings().unwrap_or_default();
             crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
+            let (history_on, history_limits) = history_config(&settings);
+            crate::history::configure(history_on, history_limits);
             app.manage(AppContext {
                 storage: Mutex::new(storage),
                 connections: ConnectionManager::new(),
@@ -1584,8 +1704,24 @@ pub fn run() {
             transfer_answer,
             transfer_remove,
             reveal_path,
-            open_local_path
+            open_local_path,
+            history_info,
+            history_lines,
+            history_search,
+            history_marks,
+            history_rank,
+            history_export,
+            history_locate,
+            history_clear,
+            history_drop,
+            history_feed
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Nexterm");
+        .build(tauri::generate_context!())
+        .expect("error while running Nexterm")
+        .run(|_, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Spill files of the full history are deleted with their folder.
+                crate::history::shutdown();
+            }
+        });
 }

@@ -4,6 +4,14 @@
  */
 export const uiResources = {
   "zh-CN": {
+    fullHistory: {
+      cleared: "──── 已清屏 ────",
+      enabled: "保留完整回滚历史",
+      enabledTip: "所有输出都压缩保存在后台，向上滚动可以一直看到会话开始时的内容。终端本身只保留上面设置的行数。",
+      memoryMb: "每个窗格内存上限（MB）",
+      diskMb: "每个窗格临时文件上限（MB，0 表示不写磁盘）",
+      hint: "超出内存上限的旧内容会加密写入临时文件，关闭窗格或退出时删除；超出磁盘上限后丢弃最旧的内容。新设置对之后打开的窗格生效。",
+    },
     zmodem: {
       saveTo: "选择 ZModem 接收文件的保存位置",
       preparing: "正在准备拖入的文件",
@@ -124,6 +132,14 @@ export const uiResources = {
     },
   },
   "en-US": {
+    fullHistory: {
+      cleared: "──── screen cleared ────",
+      enabled: "Keep the full scrollback history",
+      enabledTip: "All output is kept compressed in the background, so scrolling up reaches back to the start of the session. The terminal itself keeps only the number of lines set above.",
+      memoryMb: "Memory per pane (MB)",
+      diskMb: "Temp files per pane (MB, 0 = memory only)",
+      hint: "Older output over the memory limit goes to encrypted temp files, deleted when the pane closes or the app exits; past the disk limit the oldest output is dropped. New settings apply to panes opened afterwards.",
+    },
     zmodem: {
       saveTo: "Choose where to save ZModem downloads",
       preparing: "Preparing the dropped files",

@@ -238,6 +238,10 @@ export interface AppSettings {
   showTimestamps?: boolean;
   /** Timestamps with milliseconds. */
   timestampMs?: boolean;
+  /** Line numbers in the timestamp margin (default on). */
+  gutterLineNumbers?: boolean;
+  /** Background bands on the cursor's line and on the line last clicked (default on). */
+  highlightCurrentLine?: boolean;
   highlightRules?: HighlightRule[];
   /** Lines scrolled per mouse wheel notch (WindTerm default 3). */
   wheelScrollLines?: number;
@@ -249,6 +253,14 @@ export interface AppSettings {
   tabCommand?: boolean;
   /** Load shell integration (OSC 133 / 633 / 7) into SSH and WSL bash / zsh / fish and local PowerShell (default on; read by the backend from settings.extra). */
   shellIntegration?: boolean;
+  /** Keep every pane's whole output in the backend and scroll back through all of it (default on; read by the backend from settings.extra). */
+  fullHistory?: boolean;
+  /** Compressed history kept in memory per pane, in MB (default 32); older parts go to encrypted temp files. */
+  fullHistoryMemoryMb?: number;
+  /** Temp-file space per pane, in MB (default 2048; 0 = memory only, oldest lines dropped). */
+  fullHistoryDiskMb?: number;
+  /** The old 50000-line scrollback default was lowered once (full history holds the rest). */
+  scrollbackMigrated?: boolean;
   /** Guess Claude Code / Codex state from the screen when their hooks are not installed (default on). */
   agentScreenDetect?: boolean;
   /** Windows notification when an agent finishes, needs approval or fails (default on). */

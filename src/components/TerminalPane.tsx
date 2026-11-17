@@ -47,6 +47,7 @@ import { compactMenu, useContextMenu } from "./ContextMenu";
 import { ProtocolBadge } from "./ProtocolBadge";
 import { OutputHighlighter, resolveScheme } from "../utils/outputHighlighter";
 import { TimestampGutter } from "../utils/timestampGutter";
+import { installSelectionClamp, LineHighlight } from "../utils/lineHighlight";
 import { installWideCursorFix } from "../utils/wideCursorFix";
 import { installCompositionBounds } from "../utils/compositionBounds";
 import { compileUserRules } from "../utils/outputHighlighter";
@@ -66,6 +67,8 @@ import { modemOf, mouseOf } from "../utils/settingsDefaults";
 import { zmodemDrop } from "../utils/zmodemDrop";
 import { historyKeyOf } from "../utils/commandHistory";
 import { AutoCompletePopup } from "./AutoCompletePopup";
+import { HistoryScroll } from "../services/historyScroll";
+import { mixColor } from "../utils/screenOverlay";
 import type { QuickCommand } from "../types/domain";
 
 /** Serializers of mounted terminals, used to carry scrollback when a tab moves to another window. */
@@ -314,6 +317,9 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const rulerMarksRef = useRef<ReturnType<typeof installRulerMarks> | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
   const timestampsRef = useRef<TimestampGutter | null>(null);
+  const lineHighlightRef = useRef<LineHighlight | null>(null);
+  /** Older lines from the backend's full history, loaded as the view nears the top. */
+  const historyRef = useRef<HistoryScroll | null>(null);
   const [showTimestamps, setShowTimestamps] = useState<boolean>(Boolean(settings.showTimestamps));
   const [rememberPwd, setRememberPwd] = useState<boolean>(true);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
@@ -430,10 +436,29 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     }
     xtermRef.current = term;
     highlighterRef.current = new OutputHighlighter(term, theme, settings.syntaxHighlight !== false, scheme);
-    if (gutterRef.current) {
-      timestampsRef.current = new TimestampGutter(term, gutterRef.current, Boolean(settings.timestampMs));
+    lineHighlightRef.current = new LineHighlight(term, settings.highlightCurrentLine !== false);
+    const selectionClamp = installSelectionClamp(term);
+    if (isTauriRuntime() && settings.fullHistory !== false) {
+      historyRef.current = new HistoryScroll(term, leaf.paneId, {
+        clearedLabel: t("fullHistory.cleared"),
+        // Rows loaded from the full history get their numbers and times in the margin.
+        onInserted: (stamps) => timestampsRef.current?.addHistoryStamps(stamps),
+        onAligned: (line, no) => timestampsRef.current?.alignNumbers(line, no),
+      });
     }
-    if (leaf.restoreContent) term.write(leaf.restoreContent);
+    if (gutterRef.current) {
+      timestampsRef.current = new TimestampGutter(
+        term,
+        gutterRef.current,
+        Boolean(settings.timestampMs),
+        settings.gutterLineNumbers !== false
+      );
+    }
+    if (leaf.restoreContent) {
+      // A tab moved from another window: its line count starts over here, so take the
+      // numbers from the history once the restored content is parsed.
+      term.write(leaf.restoreContent, () => void historyRef.current?.syncNumbers());
+    }
 
     // Tell the app and the remote about a new size only when rows / columns changed, and
     // only once a drag settles: every SIGWINCH makes full-screen programs redraw.
@@ -633,17 +658,48 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         playBeep();
       }
     });
+    // The selection and its other occurrences in the whole history, on the history's scrollbar
+    // (xterm's own ruler only sees the loaded lines).
+    let selTimer = 0;
+    const markSelection = () => {
+      const hist = historyRef.current;
+      if (!hist) return;
+      const pos = term.getSelectionPosition();
+      const line = pos ? hist.lineOfRow(pos.start.y) : null;
+      if (!pos || line === null) {
+        hist.setMarkLayer("selection", null);
+        return;
+      }
+      const text = term.getSelection();
+      const gray = mixColor(themeRef.current.termBg, "#ffffff", 0.3);
+      const occurrences = !text.includes("\n") && text.trim().length >= 2;
+      hist.setMarkLayer("selection", {
+        specs: occurrences ? [{ pattern: text, regex: false, caseSensitive: true, wholeWord: false }] : [],
+        colors: [gray],
+        lines: [line],
+        lineColor: gray,
+        position: "full",
+      });
+    };
     const selDisp = term.onSelectionChange(() => {
       if (settingsRef.current.copyOnSelect && term.hasSelection()) {
         void backend.writeClipboard(term.getSelection());
       }
+      window.clearTimeout(selTimer);
+      selTimer = window.setTimeout(markSelection, 150);
     });
+    // Clearing the scrollback (menu, shortcut) clears the full history too.
+    const clearHistory = () => {
+      historyRef.current?.reset();
+      void backend.historyClear(leaf.paneId);
+    };
     extras.registerTerminal(leaf.paneId, {
       copy: () => term.hasSelection() && void backend.writeClipboard(term.getSelection()),
       paste: () => void backend.readClipboard().then((text) => text && requestPaste(text)),
       selectAll: () => term.selectAll(),
       clear: () => {
         term.clear();
+        clearHistory();
         remoteMirror.refresh(leaf.paneId);
       },
       find: () => {
@@ -654,6 +710,9 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       toggleTimestamps: () => setShowTimestamps((v) => !v),
       reset: () => {
         term.reset();
+        // The full history keeps what was on screen (the reset only starts a fresh screen).
+        historyRef.current?.reset();
+        void backend.historyFeed(leaf.paneId, `${ESC}c`);
         remoteMirror.refresh(leaf.paneId);
         featuresRef.current?.tracker.reset();
         // Let the shell redraw its prompt.
@@ -661,6 +720,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       },
       clearScrollback: () => {
         term.clear();
+        clearHistory();
         remoteMirror.refresh(leaf.paneId);
       },
       saveToFile: () => void saveBufferRef.current(),
@@ -793,10 +853,16 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       rulerMarks.dispose();
       rulerMarksRef.current = null;
       selDisp.dispose();
+      window.clearTimeout(selTimer);
       serializers.delete(leaf.paneId);
       extras.registerTerminal(leaf.paneId, null);
       highlighterRef.current?.dispose();
       highlighterRef.current = null;
+      historyRef.current?.dispose();
+      historyRef.current = null;
+      lineHighlightRef.current?.dispose();
+      lineHighlightRef.current = null;
+      selectionClamp.dispose();
       timestampsRef.current?.dispose();
       timestampsRef.current = null;
       featuresRef.current?.dispose();
@@ -816,9 +882,30 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     timestampsRef.current?.setWithMs(Boolean(settings.timestampMs));
   }, [settings.timestampMs]);
 
+  useEffect(() => {
+    timestampsRef.current?.setShowNumbers(settings.gutterLineNumbers !== false);
+  }, [settings.gutterLineNumbers]);
+
+  useEffect(() => {
+    lineHighlightRef.current?.setEnabled(settings.highlightCurrentLine !== false);
+  }, [settings.highlightCurrentLine]);
+
   const userRules = useMemo(() => compileUserRules(settings.highlightRules), [settings.highlightRules]);
   useEffect(() => {
     highlighterRef.current?.setUserRules(userRules);
+    // Keyword highlights over the whole history, on the history's scrollbar.
+    const rules = (settings.highlightRules ?? []).filter((r) => r.enabled && r.pattern);
+    historyRef.current?.setMarkLayer(
+      "rules",
+      rules.length
+        ? {
+            specs: rules.map((r) => ({ pattern: r.pattern, regex: r.regex, caseSensitive: r.caseSensitive, wholeWord: r.wholeWord })),
+            colors: rules.map((r) => r.color),
+            position: "right",
+          }
+        : null
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userRules]);
 
   const attachedRef = useRef(Boolean(leaf.attached));
@@ -847,7 +934,9 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const rows = term?.rows ?? 30;
     if (leaf.reconnectCount > 0 && term) {
       const msg = t("pane.reconnectingBanner", { label: leaf.session.label });
-      term.write(`${CR_LF}${ESC}[90m${msg}${ESC}[0m${CR_LF}`);
+      const banner = `${CR_LF}${ESC}[90m${msg}${ESC}[0m${CR_LF}`;
+      term.write(banner);
+      void backend.historyFeed(leaf.paneId, banner);
     }
     // Duplicated SSH tab: open a channel on the source pane's connection (first connect only).
     const reuse = leaf.reconnectCount === 0 ? leaf.reuseFrom ?? null : null;
@@ -937,13 +1026,15 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
 
 
   const saveBuffer = async () => {
-    const text = featuresRef.current?.plainText() ?? "";
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     const name = `${leaf.session.label.replace(/[\\/:*?"<>|]/g, "_")}_${stamp}.txt`;
     const path = await backend.pickSavePath(t("maint.saveTitle"), name, [{ name: "Text", extensions: ["txt", "log"] }]);
     if (!path) return;
     try {
-      await backend.writeTextFile(path, text);
+      // The whole output from the backend's history; xterm.js's buffer when there is none.
+      const info = await backend.historyInfo(leaf.paneId).catch(() => null);
+      if (info) await backend.historyExport(leaf.paneId, path, false);
+      else await backend.writeTextFile(path, featuresRef.current?.plainText() ?? "");
       extras.onToast(t("maint.saved", { path }));
     } catch (err) {
       extras.onToast(String(err));
@@ -992,6 +1083,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const api = {
       reset: () => {
         term.reset();
+        historyRef.current?.reset();
+        void backend.historyFeed(leaf.paneId, `${ESC}c`);
         remoteMirror.refresh(leaf.paneId);
         features?.tracker.reset();
         if (leaf.status === "connected") onUserInputRef.current(leaf.paneId, "\x0c");
@@ -1084,10 +1177,22 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         {
           label: t("maint.menu"),
           children: [
-            { label: t("menu.clearScreen"), shortcut: k["terminal.clear"], onClick: () => term.clear() },
+            {
+              label: t("menu.clearScreen"),
+              shortcut: k["terminal.clear"],
+              onClick: () => {
+                term.clear();
+                historyRef.current?.reset();
+                void backend.historyClear(leaf.paneId);
+              },
+            },
             {
               label: t("maint.clearScreenOnly"),
-              onClick: () => term.write("\x1b[H\x1b[2J"),
+              onClick: () => {
+                term.write("\x1b[H\x1b[2J");
+                // The same on the history's terminal: the screen moves into the history, as here.
+                void backend.historyFeed(leaf.paneId, "\x1b[H\x1b[2J");
+              },
             },
             { label: t("maint.reset"), shortcut: k["terminal.reset"], onClick: () => api.reset() },
             { type: "separator" },
@@ -1474,6 +1579,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       {searchOpen && xtermRef.current && (
         <TerminalSearch
           term={xtermRef.current}
+          paneId={leaf.paneId}
+          history={historyRef.current}
           accent={theme.accent}
           initialQuery={searchSeed}
           onClose={() => {

@@ -147,6 +147,8 @@ export function applyThemeCssVars(theme: ThemeDefinition): void {
     "--accent": theme.accent,
     "--term-bg": theme.termBg,
     "--term-fg": theme.termFg,
+    "--term-blue": theme.ansi[12] ?? theme.ansi[4],
+    "--term-magenta": theme.ansi[13] ?? theme.ansi[5],
     "--shadow-pop": light
       ? "0 0 0 1px rgba(0, 0, 0, 0.08), 0 12px 32px -8px rgba(0, 0, 0, 0.22)"
       : "0 0 0 1px rgba(0, 0, 0, 0.5), 0 16px 40px -8px rgba(0, 0, 0, 0.6)",

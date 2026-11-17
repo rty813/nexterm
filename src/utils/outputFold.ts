@@ -1,6 +1,7 @@
 import type { IBuffer, IDisposable, IMarker, Terminal } from "@xterm/xterm";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import { logicalStart } from "./inputTracker";
+import type { LineStamp } from "./timestampGutter";
 
 /**
  * WindTerm-style output folding: every command's output can be folded under its prompt
@@ -16,14 +17,14 @@ interface Fold {
   hidden: string;
   /** Rows they took. */
   rows: number;
-  /** Timestamps of the hidden rows: row offset -> time. */
-  stamps: { offset: number; time: number }[];
+  /** Timestamps (and line numbers) of the hidden rows, by row offset. */
+  stamps: (Omit<LineStamp, "line"> & { offset: number })[];
 }
 
 export interface FoldHost {
   /** Timestamps of the buffer, to carry them through a rewrite. */
-  exportStamps?: () => { line: number; time: number }[];
-  importStamps?: (stamps: { line: number; time: number }[], cursorLine: number) => void;
+  exportStamps?: () => LineStamp[];
+  importStamps?: (stamps: LineStamp[], cursorLine: number) => void;
   /** Called when the buffer was rewritten: absolute old row -> new row. */
   onRemap?: (map: (line: number) => number) => void;
   placeholder: (rows: number, command: string) => string;
@@ -233,7 +234,7 @@ export class OutputFolder implements IDisposable {
     const reps: Replacement[] = blocks.map((b) => {
       const rows = b.end - b.start;
       const hidden = this.serializeRows(b.start, b.end - 1);
-      const hiddenStamps = stamps.filter((s) => s.line >= b.start && s.line < b.end).map((s) => ({ offset: s.line - b.start, time: s.time }));
+      const hiddenStamps = stamps.filter((s) => s.line >= b.start && s.line < b.end).map(({ line, ...rest }) => ({ ...rest, offset: line - b.start }));
       return {
         start: b.start,
         end: b.end,
@@ -256,7 +257,7 @@ export class OutputFolder implements IDisposable {
         rows: f.rows,
         content: f.hidden,
         placed: (line: number) => {
-          f.stamps.forEach((s) => this.pendingStamps.push({ line: line + s.offset, time: s.time }));
+          f.stamps.forEach((s) => this.pendingStamps.push({ line: line + s.offset, time: s.time, no: s.no, abs: s.abs }));
         },
       }))
       .sort((a, b) => a.start - b.start);
@@ -267,7 +268,7 @@ export class OutputFolder implements IDisposable {
   }
 
   private pendingFolds: { line: number; hidden: string; rows: number; stamps: Fold["stamps"] }[] = [];
-  private pendingStamps: { line: number; time: number }[] = [];
+  private pendingStamps: LineStamp[] = [];
 
   /**
    * Rows a..b (inclusive, whole logical lines) as text with escape sequences, one CRLF
@@ -295,7 +296,7 @@ export class OutputFolder implements IDisposable {
     return 0;
   }
 
-  private rebuild(reps: Replacement[], keepRow: number | null, stamps: { line: number; time: number }[]): void {
+  private rebuild(reps: Replacement[], keepRow: number | null, stamps: LineStamp[]): void {
     const cursor = this.cursorLine();
     const cursorX = this.buf.cursorX;
     const last = Math.max(this.lineEnd(logicalStart(this.buf, cursor)), this.lastContentRow());
@@ -351,7 +352,7 @@ export class OutputFolder implements IDisposable {
       }
       const moved = stamps
         .filter((s) => !sorted.some((r) => s.line >= r.start && s.line < r.end))
-        .map((s) => ({ line: map(s.line), time: s.time }))
+        .map((s) => ({ ...s, line: map(s.line) }))
         .concat(this.pendingStamps);
       this.cb.importStamps?.(moved, now);
       this.cb.onRemap?.(map);

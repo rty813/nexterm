@@ -112,7 +112,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   themeId: "dige-black",
   fontFamily: "'Cascadia Mono', Consolas, 'Roboto Mono', 'Microsoft YaHei UI', monospace",
   fontSize: 14,
-  scrollback: 50000,
+  scrollback: 10000,
   cursorBlink: false,
   cursorStyle: "block",
   confirmBeforeClose: false,
@@ -258,6 +258,18 @@ export const App: React.FC = () => {
           ...st,
           toolbarLayout: TOOLBAR_LAYOUT_VERSION,
           toolbarHidden: st.toolbarHidden?.length ? st.toolbarHidden : [...DEFAULT_TOOLBAR_HIDDEN],
+        };
+        snap = { ...snap, settings: migrated };
+        void backend.saveSettings(migrated);
+      }
+      // Full history keeps everything in the backend: xterm.js's own scrollback can be
+      // smaller. Once, and only from the old default (a value the user picked stays).
+      if (!snap.settings.scrollbackMigrated && currentWindowLabel() === "main") {
+        const cur = snap.settings;
+        const migrated = {
+          ...cur,
+          scrollbackMigrated: true,
+          scrollback: cur.scrollback === 50000 && cur.fullHistory !== false ? 10000 : cur.scrollback,
         };
         snap = { ...snap, settings: migrated };
         void backend.saveSettings(migrated);
@@ -554,6 +566,7 @@ export const App: React.FC = () => {
     if (locked.length > 0) setToast(t("app.lockedSkip", { count: locked.length }));
     for (const paneId of paneIds) {
       void backend.disconnectTerminal(paneId);
+      void backend.historyDrop(paneId);
       terminalBus.clearPane(paneId);
       paneCwd.forget(paneId);
     }
@@ -1150,7 +1163,10 @@ export const App: React.FC = () => {
             setToast(t("app.quitBlocked", { count: locked }));
             return;
           }
-          for (const l of leaves) void backend.disconnectTerminal(l.paneId);
+          for (const l of leaves) {
+            void backend.disconnectTerminal(l.paneId);
+            void backend.historyDrop(l.paneId);
+          }
           closingRef.current = true;
           await getCurrentWindow().destroy();
         })

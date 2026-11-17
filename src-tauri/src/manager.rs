@@ -224,6 +224,8 @@ struct ScopedSink {
     tracker: Mutex<ShellTracker>,
     /// Last status reported for the pane ("connecting", "connected", "disconnected" ...).
     status: Mutex<String>,
+    /// The pane's full scrollback history (outlives this connection: see history.rs).
+    history: Option<Arc<crate::history::Recorder>>,
 }
 
 struct ManualInject {
@@ -269,6 +271,9 @@ impl ScopedSink {
         };
         if let Some(log) = lock(&self.log).as_mut() {
             log.write(data);
+        }
+        if let Some(history) = &self.history {
+            history.feed(data);
         }
         lock(&self.tracker).feed(data, Instant::now());
         self.inner.emit_output(instance_id, data);
@@ -476,6 +481,7 @@ impl ConnectionManager {
             inject: Mutex::new(None),
             tracker: Mutex::new(ShellTracker::default()),
             status: Mutex::new("connecting".into()),
+            history: crate::history::get(&instance_id),
         });
         let protocol = serde_json::to_value(&config.protocol)
             .ok()
@@ -582,6 +588,9 @@ impl ConnectionManager {
     pub fn resize(&self, instance_id: &str, cols: u16, rows: u16) -> Result<()> {
         if let Some(entry) = lock(&self.sessions).get(instance_id) {
             entry.control.send_resize(cols, rows);
+        }
+        if let Some(history) = crate::history::get(instance_id) {
+            history.resize(cols, rows);
         }
         Ok(())
     }

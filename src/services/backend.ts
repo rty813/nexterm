@@ -28,6 +28,44 @@ import type {
   SyncSettings,
   SyncStateInfo,
 } from "../types/domain";
+import type { HistoryInfo, HistoryPage } from "../utils/historyView";
+
+/** One step of a full-history search (history/mod.rs SearchResult). */
+/** A search or highlight rule for the full history (history/search.rs QuerySpec). */
+export interface HistoryQuery {
+  pattern: string;
+  regex: boolean;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+}
+
+export interface HistoryMatch {
+  line: number;
+  /** UTF-16 offsets in the line's text. */
+  start: number;
+  end: number;
+  /** The line around the match, starting at UTF-16 offset ctxOffset of the line. */
+  ctx: string;
+  ctxOffset: number;
+}
+
+/** Full-history search results (history/mod.rs SearchResult). */
+export interface HistorySearchResult {
+  matches: HistoryMatch[];
+  /** Where to continue; null: reached the end in that direction. */
+  next: number | null;
+}
+
+/** Scrollbar marks and counts per query (history/mod.rs Marks). */
+export interface HistoryMarks {
+  first: number;
+  total: number;
+  counts: number[];
+  /** Buckets of [first, total) with matches, per query. */
+  buckets: number[][];
+  /** Per query: why it does not compile, or null. */
+  errors: (string | null)[];
+}
 
 export interface HostKeyPromptPayload {
   requestId: string;
@@ -460,6 +498,64 @@ export const backend = {
   async disconnectTerminal(instanceId: string): Promise<void> {
     if (!isTauriRuntime()) return;
     await invoke("disconnect_terminal", { instanceId });
+  },
+
+  // ---- Full scrollback history (src-tauri/src/history/) ----
+
+  /** null: no history for this pane (turned off, or never connected). */
+  async historyInfo(instanceId: string): Promise<HistoryInfo | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke<HistoryInfo | null>("history_info", { instanceId });
+  },
+
+  async historyLines(instanceId: string, from: number, count: number): Promise<HistoryPage | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke<HistoryPage | null>("history_lines", { instanceId, from, count });
+  },
+
+  /** Matches from history line `from` on (or back), across the whole history. */
+  async historySearch(instanceId: string, spec: HistoryQuery, from: number, backward: boolean, limit: number): Promise<HistorySearchResult> {
+    if (!isTauriRuntime()) return { matches: [], next: null };
+    return invoke<HistorySearchResult>("history_search", { instanceId, spec, from, backward, limit });
+  },
+
+  /** Where each query matches in the whole history (`buckets` slots) and how often; null: no history. */
+  async historyMarks(instanceId: string, specs: HistoryQuery[], buckets: number): Promise<HistoryMarks | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke<HistoryMarks | null>("history_marks", { instanceId, specs, buckets: Math.max(1, Math.round(buckets)) });
+  },
+
+  /** Matches before (line, UTF-16 offset start): the position shown as "3/120". */
+  async historyRank(instanceId: string, spec: HistoryQuery, line: number, start: number): Promise<number> {
+    return invoke<number>("history_rank", { instanceId, spec, line, start });
+  },
+
+  /** Write the whole history to a file; returns the number of lines written. */
+  async historyExport(instanceId: string, path: string, ansi: boolean): Promise<number> {
+    return invoke<number>("history_export", { instanceId, path, ansi });
+  },
+
+  /** History line where xterm.js's buffer starts (`sig`: its first lines); null if not found. */
+  async historyLocate(instanceId: string, sig: string[], hint: number, window: number): Promise<number | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke<number | null>("history_locate", { instanceId, sig, hint, window });
+  },
+
+  async historyClear(instanceId: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("history_clear", { instanceId });
+  },
+
+  /** The pane closed for good: drop its history. */
+  async historyDrop(instanceId: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("history_drop", { instanceId });
+  },
+
+  /** Text written into xterm.js by the front end itself, so the history stays in step. */
+  async historyFeed(instanceId: string, data: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("history_feed", { instanceId, data });
   },
 
   async scanImportCandidates(): Promise<DiscoveryCandidate[]> {

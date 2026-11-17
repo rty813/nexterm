@@ -178,7 +178,12 @@ const MAX_SCAN_LINES = 1000;
 export class OutputHighlighter implements IDisposable {
   private records: LineRecord[] = [];
   private timer: number | undefined;
-  private scanFrom = 0;
+  /**
+   * Where the next scan resumes, held by a marker: absolute rows shift when the scrollback
+   * trims rows at the top or the full history inserts / drops rows there.
+   */
+  private scanMarker: IMarker | null = null;
+  private scanRow = 0;
   private enabled: boolean;
   private palette: Palette;
   private rules: Rule[];
@@ -231,14 +236,31 @@ export class OutputHighlighter implements IDisposable {
   dispose(): void {
     window.clearTimeout(this.timer);
     this.subs.forEach((s) => s.dispose());
+    this.scanMarker?.dispose();
     this.clearAll();
   }
 
   private reset(): void {
     this.clearAll();
     const buf = this.term.buffer.active;
-    this.scanFrom = Math.max(0, buf.baseY + this.term.rows - MAX_SCAN_LINES);
+    this.setScanFrom(Math.max(0, buf.baseY + this.term.rows - MAX_SCAN_LINES));
     this.schedule();
+  }
+
+  private scanFrom(): number {
+    if (this.scanMarker) {
+      // Trimmed away: everything still in the buffer is newer.
+      this.scanRow = this.scanMarker.isDisposed ? 0 : this.scanMarker.line;
+    }
+    return this.scanRow;
+  }
+
+  private setScanFrom(row: number): void {
+    const buf = this.term.buffer.active;
+    if (row === this.scanRow && this.scanMarker && !this.scanMarker.isDisposed && this.scanMarker.line === row) return;
+    this.scanMarker?.dispose();
+    this.scanMarker = buf.type === "normal" ? this.term.registerMarker(row - (buf.baseY + buf.cursorY)) ?? null : null;
+    this.scanRow = row;
   }
 
   private clearAll(): void {
@@ -265,7 +287,7 @@ export class OutputHighlighter implements IDisposable {
     const end = buf.baseY + rows;
     const cursorAbs = buf.baseY + buf.cursorY;
     // New output since the last pass, and whatever the viewport shows now.
-    const fresh = Math.max(0, end - MAX_SCAN_LINES, this.scanFrom);
+    const fresh = Math.max(0, end - MAX_SCAN_LINES, this.scanFrom());
     const view = buf.viewportY;
     const lines: number[] = [];
     for (let y = view; y < Math.min(view + rows, fresh); y++) lines.push(y);
@@ -309,7 +331,7 @@ export class OutputHighlighter implements IDisposable {
       this.paint(rec, line, text, cols);
     }
     // Resume from the line the cursor is on; everything above it is settled.
-    this.scanFrom = cursorAbs;
+    this.setScanFrom(cursorAbs);
 
     if (this.records.length > MAX_RECORDS) {
       this.records.sort((a, b) => a.marker.line - b.marker.line);

@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, Highlighter, List, Search, X } from "lucide-react";
 import type { IDecoration, IMarker, Terminal } from "@xterm/xterm";
-import { buildMatcher, contrastText, findAll, HIGHLIGHT_PRESETS, type BufferMatch } from "../utils/textMatch";
+import { buildMatcher, contrastText, findAll, HIGHLIGHT_PRESETS, matchAtRow, type BufferMatch } from "../utils/textMatch";
+import { backend, type HistoryMatch, type HistoryQuery } from "../services/backend";
+import type { HistoryScroll } from "../services/historyScroll";
 import { useContextMenu } from "./ContextMenu";
 
 export interface SearchOptionsState {
@@ -18,6 +20,10 @@ let lastQuery = "";
 const MAX_MATCHES = 5000;
 const MATCH_BG = "#6b5410";
 const MATCH_RULER = "#d4a017";
+/** Full history: wait this long after typing before searching. */
+const DEBOUNCE_MS = 250;
+/** Full history: results shown in the list. */
+const LIST_LIMIT = 1000;
 
 interface Painted {
   marker: IMarker;
@@ -28,15 +34,23 @@ interface Painted {
  * Find bar: one matcher drives the counter, the decorations, next / previous and
  * the results list, so they always agree (the search addon counts overlapping
  * regex matches such as 3000ms, 000ms, 00ms ...).
+ *
+ * With a full history (services/historyScroll.ts) the counter, next / previous, the
+ * results list and the scrollbar marks cover the whole history: the backend searches
+ * it, and a match outside the loaded lines is loaded when it is jumped to. Matches in
+ * the loaded lines are painted in the terminal as before.
  */
 export const TerminalSearch: React.FC<{
   term: Terminal;
+  paneId: string;
+  /** The pane's full history, if it has one. */
+  history?: HistoryScroll | null;
   accent: string;
   initialQuery?: string;
   onClose: () => void;
   /** Turn the current search into a permanent text highlight. */
   onHighlight: (pattern: string, options: SearchOptionsState, color: string) => void;
-}> = ({ term, accent, initialQuery, onClose, onHighlight }) => {
+}> = ({ term, paneId, history, accent, initialQuery, onClose, onHighlight }) => {
   const { t } = useTranslation();
   const openMenu = useContextMenu();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -48,8 +62,28 @@ export const TerminalSearch: React.FC<{
   const painted = useRef<Painted[]>([]);
   const activePaint = useRef<Painted[]>([]);
 
+  // Full history: whole-history count, the match jumped to and its position, the list.
+  const full = Boolean(history?.hasHistory());
+  const [fullCount, setFullCount] = useState<number | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const [fullActive, setFullActive] = useState<HistoryMatch | null>(null);
+  const [fullRank, setFullRank] = useState<number | null>(null);
+  const [fullList, setFullList] = useState<{ matches: HistoryMatch[]; more: boolean } | null>(null);
+  const stepSeq = useRef(0);
+  // The history's size arrives shortly after the pane opens: look again until it is known.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!history || history.hasHistory()) return;
+    const timer = window.setTimeout(() => setTick((n) => n + 1), 500);
+    return () => window.clearTimeout(timer);
+  });
+
   const matcher = useMemo(() => buildMatcher(query, opts), [query, opts]);
-  const invalid = Boolean(query) && matcher.error !== null;
+  const invalid = Boolean(query) && (matcher.error !== null || (full && backendError !== null));
+  const spec = useMemo<HistoryQuery | null>(
+    () => (query && matcher.re ? { pattern: query, regex: opts.regex, caseSensitive: opts.caseSensitive, wholeWord: opts.wholeWord } : null),
+    [query, opts, matcher]
+  );
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -126,18 +160,65 @@ export const TerminalSearch: React.FC<{
     recompute();
   }, [recompute]);
 
-  // New output: refresh the matches (debounced).
+  // New output, or history lines loaded / dropped: refresh the painted matches (debounced).
   useEffect(() => {
     let timer = 0;
-    const sub = term.onWriteParsed(() => {
+    const later = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(recompute, 250);
-    });
+    };
+    const sub = term.onWriteParsed(later);
+    const loaded = history?.onLoaded(later);
     return () => {
       sub.dispose();
+      loaded?.dispose();
       window.clearTimeout(timer);
     };
-  }, [term, recompute]);
+  }, [term, recompute, history]);
+
+  // Full history: count and scrollbar marks, after typing settles.
+  useEffect(() => {
+    if (!history) return;
+    setFullActive(null);
+    setFullRank(null);
+    setFullList(null);
+    setBackendError(null);
+    if (!spec) {
+      setFullCount(null);
+      history.setMarkLayer("search", null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      history.setMarkLayer("search", {
+        specs: [spec],
+        colors: [MATCH_RULER],
+        position: "left",
+        onResult: ({ counts, errors }) => {
+          setFullCount(counts[0] ?? 0);
+          setBackendError(errors[0] ?? null);
+        },
+      });
+    }, DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [history, spec]);
+
+  useEffect(() => () => history?.setMarkLayer("search", null), [history]);
+
+  // Full history: the results list, when it is open.
+  useEffect(() => {
+    if (!full || !showList || !spec) return;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      void backend
+        .historySearch(paneId, spec, 0, false, LIST_LIMIT)
+        .then((r) => alive && setFullList({ matches: r.matches, more: r.next !== null }))
+        .catch((e) => alive && setBackendError(String(e)));
+    }, DEBOUNCE_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [full, showList, spec, paneId]);
 
   // Active match: stronger decoration, selection and scroll into view.
   const reveal = useCallback(
@@ -158,8 +239,56 @@ export const TerminalSearch: React.FC<{
   );
 
   useEffect(() => {
-    reveal(active, false);
-  }, [active, reveal]);
+    if (!full) reveal(active, false);
+  }, [active, reveal, full]);
+
+  /** Full history: load the match's line if needed, then select and mark it. */
+  const revealFull = useCallback(
+    async (m: HistoryMatch, seq: number) => {
+      if (!history || !spec) return;
+      setFullActive(m);
+      const row = await history.reveal(m.line);
+      if (seq !== stepSeq.current) return;
+      clear(activePaint);
+      const bm = row === null ? null : matchAtRow(term, row, m.start, m.end);
+      if (bm) {
+        activePaint.current = paint(bm, accent, contrastText(accent), accent);
+        term.select(bm.col, bm.row, bm.cells);
+      }
+      const rank = await backend.historyRank(paneId, spec, m.line, m.start).catch(() => null);
+      if (seq === stepSeq.current) setFullRank(rank);
+    },
+    [history, spec, term, paint, accent, paneId]
+  );
+
+  /** Full history: the next / previous match after the active one (or the view), wrapping. */
+  const stepFull = async (next: boolean) => {
+    if (!history || !spec || invalid) return;
+    const seq = ++stepSeq.current;
+    const cur = fullActive;
+    const top = history.topLine() ?? 0;
+    let from = cur ? cur.line : next ? top : top + term.rows;
+    const after = (m: HistoryMatch) =>
+      !cur || (next ? m.line > cur.line || (m.line === cur.line && m.start > cur.start) : m.line < cur.line || (m.line === cur.line && m.start < cur.start));
+    try {
+      let found: HistoryMatch | null = null;
+      for (let round = 0; round < 4 && !found; round++) {
+        const r = await backend.historySearch(paneId, spec, from, !next, 50);
+        if (seq !== stepSeq.current) return;
+        found = r.matches.find(after) ?? null;
+        if (found || r.next === null) break;
+        from = r.next;
+      }
+      if (!found) {
+        // Wrap around to the other end.
+        const r = await backend.historySearch(paneId, spec, next ? 0 : Number.MAX_SAFE_INTEGER, !next, 1);
+        found = r.matches[0] ?? null;
+      }
+      if (found && seq === stepSeq.current) await revealFull(found, seq);
+    } catch (e) {
+      setBackendError(String(e));
+    }
+  };
 
   useEffect(
     () => () => {
@@ -176,6 +305,10 @@ export const TerminalSearch: React.FC<{
   };
 
   const step = (next: boolean) => {
+    if (full) {
+      void stepFull(next);
+      return;
+    }
     const n = result.matches.length;
     if (!n) return;
     const i = active < 0 ? (next ? 0 : n - 1) : (active + (next ? 1 : -1) + n) % n;
@@ -202,7 +335,20 @@ export const TerminalSearch: React.FC<{
     );
   };
 
-  const count = result.matches.length;
+  const count = full ? fullCount ?? 0 : result.matches.length;
+  const counter = invalid
+    ? t("search.badRegex")
+    : !query
+    ? ""
+    : full
+    ? fullCount === null
+      ? t("search.searching")
+      : fullCount === 0
+      ? t("search.noResults")
+      : `${fullRank !== null ? fullRank + 1 : "?"}/${fullCount}`
+    : count === 0
+    ? t("search.noResults")
+    : `${active >= 0 ? active + 1 : "?"}/${count}${result.truncated ? "+" : ""}`;
 
   return (
     <div className="terminal-search-wrap" onMouseDown={(e) => e.stopPropagation()}>
@@ -212,8 +358,8 @@ export const TerminalSearch: React.FC<{
           ref={inputRef}
           type="text"
           className={invalid ? "invalid" : ""}
-          placeholder={t("pane.findPlaceholder")}
-          title={invalid && matcher.error !== "empty" ? matcher.error ?? "" : ""}
+          placeholder={full ? t("search.placeholderFull") : t("pane.findPlaceholder")}
+          title={invalid ? (backendError ?? (matcher.error !== "empty" ? matcher.error ?? "" : "")) : ""}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -235,15 +381,7 @@ export const TerminalSearch: React.FC<{
         <button type="button" className={`search-opt ${opts.regex ? "on" : ""}`} title={t("search.regex")} onClick={() => toggle("regex")}>
           .*
         </button>
-        <span className={`search-count ${query && !invalid && count === 0 ? "none" : ""}`}>
-          {invalid
-            ? t("search.badRegex")
-            : !query
-            ? ""
-            : count === 0
-            ? t("search.noResults")
-            : `${active >= 0 ? active + 1 : "?"}/${count}${result.truncated ? "+" : ""}`}
-        </span>
+        <span className={`search-count ${query && !invalid && count === 0 && (!full || fullCount !== null) ? "none" : ""}`}>{counter}</span>
         <button type="button" className="icon-btn-xs" onClick={() => step(false)} title={t("pane.prev")}>
           <ChevronUp size={14} />
         </button>
@@ -272,7 +410,31 @@ export const TerminalSearch: React.FC<{
         </button>
       </div>
 
-      {showList && (
+      {showList && full && (
+        <div className="search-results">
+          <div className="search-results-head">
+            {t("search.resultsHead", { count })}
+            {fullList?.more && <span className="muted"> · {t("search.truncated", { count: LIST_LIMIT })}</span>}
+          </div>
+          <div className="search-results-list">
+            {(fullList?.matches ?? []).map((m, i) => (
+              <button
+                key={`${m.line}-${m.start}-${i}`}
+                type="button"
+                className={`search-result ${fullActive?.line === m.line && fullActive.start === m.start ? "selected" : ""}`}
+                onClick={() => void revealFull(m, ++stepSeq.current)}
+              >
+                <span className="search-line-no">{m.line + 1}</span>
+                <span className="search-line-text">{snippetOf(m.ctx, m.start - m.ctxOffset, m.end - m.ctxOffset, m.ctxOffset > 0)}</span>
+              </button>
+            ))}
+            {fullList === null && query && !invalid && <div className="search-results-empty">{t("search.searching")}</div>}
+            {fullList !== null && fullList.matches.length === 0 && <div className="search-results-empty">{t("search.noResults")}</div>}
+          </div>
+        </div>
+      )}
+
+      {showList && !full && (
         <div className="search-results">
           <div className="search-results-head">
             {t("search.resultsHead", { count })}
@@ -287,7 +449,7 @@ export const TerminalSearch: React.FC<{
                 onClick={() => jump(i)}
               >
                 <span className="search-line-no">{m.row + 1}</span>
-                <span className="search-line-text">{snippet(m)}</span>
+                <span className="search-line-text">{snippetOf(m.lineText, m.start, m.end, false)}</span>
               </button>
             ))}
             {count === 0 && <div className="search-results-empty">{t("search.noResults")}</div>}
@@ -299,16 +461,16 @@ export const TerminalSearch: React.FC<{
 };
 
 /** The matching line around the hit, with the hit marked. */
-function snippet(m: BufferMatch): React.ReactNode {
-  const from = Math.max(0, m.start - 40);
-  const to = Math.min(m.lineText.length, m.end + 80);
+function snippetOf(text: string, start: number, end: number, cutBefore: boolean): React.ReactNode {
+  const from = Math.max(0, start - 40);
+  const to = Math.min(text.length, end + 80);
   return (
     <>
-      {from > 0 && "…"}
-      {m.lineText.slice(from, m.start).trimStart()}
-      <mark>{m.lineText.slice(m.start, m.end)}</mark>
-      {m.lineText.slice(m.end, to)}
-      {to < m.lineText.length && "…"}
+      {(from > 0 || cutBefore) && "…"}
+      {text.slice(from, start).trimStart()}
+      <mark>{text.slice(start, end)}</mark>
+      {text.slice(end, to)}
+      {to < text.length && "…"}
     </>
   );
 }
