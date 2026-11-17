@@ -1001,6 +1001,18 @@ export const App: React.FC = () => {
     else void backend.broadcast("claim-pane", { paneId, to: currentWindowLabel(), zone: hint.zone });
   };
 
+  /** A sidebar session dropped on the terminals: open it in that group, or split beside it. */
+  const handleSessionDrop = (sessionId: string, x: number, y: number) => {
+    const hint = hintAt(x, y, "tab");
+    setDropHint(null);
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    const leaf = makeLeafFromSession(session);
+    setWs((prev) =>
+      placeLeaves(prev.root, [leaf], hint?.zone ?? null, prev.activeGroupId, { group: uid("group"), split: uid("split") })
+    );
+  };
+
   const moveTabToNewWindow = async (paneId: string, at?: { x: number; y: number }) => {
     const pack = packPane(paneId);
     if (!pack) return;
@@ -2564,6 +2576,7 @@ export const App: React.FC = () => {
             dropHint={dropHint}
             onTabDragOver={(p) => updateDropHint(p ? hintAt(p.x, p.y, "tab") : null)}
             onTabDrop={handleTabDrop}
+            onSessionDrop={handleSessionDrop}
             hideWelcome={!isMainWindow}
           />
 

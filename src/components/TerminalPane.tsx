@@ -30,8 +30,12 @@ import { buildXtermTheme } from "../constants/themes";
 import { backend, isTauriRuntime, type RemoteAuth, type RemoteLoginPayload } from "../services/backend";
 import { terminalBus } from "../services/terminalBus";
 import { registerMcpScreen } from "../services/mcpScreen";
+import { DataInterpreter } from "./DataInterpreter";
+import { ByteMark } from "../utils/byteMark";
+import { byteUnderCursor, selectedBytes, type ByteSelection, type ScreenLine } from "../utils/dataInterpreter";
 import {
   DEFAULT_TERMINAL_OPTIONS,
+  hasDataType,
   type AiControl,
   type AiControlMode,
   type McpClient,
@@ -324,6 +328,21 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const [rememberPwd, setRememberPwd] = useState<boolean>(true);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [searchSeed, setSearchSeed] = useState<string>("");
+  /** Binary data type: output is a hex dump and the selection feeds the data interpreter. */
+  const isBinary = leaf.session.dataType === "binary" && hasDataType(leaf.session.protocol);
+  const isBinaryRef = useRef(isBinary);
+  isBinaryRef.current = isBinary;
+  const [byteSelection, setByteSelection] = useState<ByteSelection | null>(null);
+  /** The interpreter is open in every binary pane until closed (pane menu reopens it). */
+  const [interpOpen, setInterpOpen] = useState(true);
+  const byteMarkRef = useRef<ByteMark | null>(null);
+  useEffect(() => {
+    if (!isBinary) setByteSelection(null);
+  }, [isBinary]);
+  // Closing the interpreter drops the mark too.
+  useEffect(() => {
+    if (!interpOpen) byteMarkRef.current?.clear();
+  }, [interpOpen]);
 
   const isRemote =
     leaf.session.protocol === "ssh" || leaf.session.protocol === "tcp" || leaf.session.protocol === "telnet";
@@ -681,9 +700,44 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         position: "full",
       });
     };
+    // Binary data type: a single click on a byte (hex digits or ASCII) selects it, as in
+    // WinHex, so the data interpreter reads from there. Drags and double-clicks stay xterm's.
+    let clickFrom: { x: number; y: number } | null = null;
+    const onClickDown = (e: MouseEvent) => {
+      clickFrom = isBinaryRef.current && e.button === 0 && e.detail === 1 && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey
+        ? { x: e.clientX, y: e.clientY }
+        : null;
+    };
+    const onClickUp = (e: MouseEvent) => {
+      const from = clickFrom;
+      clickFrom = null;
+      if (!from || e.button !== 0 || Math.abs(e.clientX - from.x) > 3 || Math.abs(e.clientY - from.y) > 3) return;
+      // After xterm handled the click (which clears the selection).
+      window.setTimeout(() => {
+        if (term.hasSelection()) return;
+        const cell = cellAt(term, e.clientX, e.clientY);
+        const hit = cell && byteUnderCursor(screenLines(term, cell.y, cell.y), term.cols, cell);
+        if (hit) term.select(hit.start.x, hit.start.y, hit.length);
+      }, 0);
+    };
+    const screenEl = term.element?.querySelector<HTMLElement>(".xterm-screen") ?? null;
+    screenEl?.addEventListener("mousedown", onClickDown, true);
+    window.addEventListener("mouseup", onClickUp, true);
+    // The byte the interpreter reads: outlined in the hex and the ASCII column (blinks on move).
+    const byteMark = new ByteMark(term);
+    byteMarkRef.current = byteMark;
     const selDisp = term.onSelectionChange(() => {
       if (settingsRef.current.copyOnSelect && term.hasSelection()) {
         void backend.writeClipboard(term.getSelection());
+      }
+      // Keep the last reading when the selection is cleared (a click, new output ...).
+      if (isBinaryRef.current) {
+        const bytes = readByteSelection(term);
+        if (bytes) {
+          setByteSelection(bytes);
+          setInterpOpen(true);
+          byteMark.show(bytes);
+        }
       }
       window.clearTimeout(selTimer);
       selTimer = window.setTimeout(markSelection, 150);
@@ -855,6 +909,10 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       rulerMarks.dispose();
       rulerMarksRef.current = null;
       selDisp.dispose();
+      screenEl?.removeEventListener("mousedown", onClickDown, true);
+      window.removeEventListener("mouseup", onClickUp, true);
+      byteMark.dispose();
+      byteMarkRef.current = null;
       window.clearTimeout(selTimer);
       serializers.delete(leaf.paneId);
       extras.registerTerminal(leaf.paneId, null);
@@ -1215,6 +1273,11 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           checked: showTimestamps,
           shortcut: k["terminal.toggleTimestamp"],
           onClick: () => setShowTimestamps((v) => !v),
+        },
+        isBinary && {
+          label: t("interp.title"),
+          checked: interpOpen,
+          onClick: () => setInterpOpen((v) => !v),
         },
         { type: "separator" },
         { label: extras.isZoomed ? t("menu.unzoom") : t("menu.zoom"), shortcut: k["split.zoom"], onClick: () => extras.onToggleZoom(leaf.paneId) },
@@ -1707,6 +1770,9 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           {suggestions && isActive && (
             <AutoCompletePopup state={suggestions} onPick={(i) => featuresRef.current?.acceptSuggestion(i)} />
           )}
+          {isBinary && interpOpen && (
+            <DataInterpreter selection={byteSelection} onClose={() => setInterpOpen(false)} />
+          )}
         </div>
       </div>
     </div>
@@ -1765,6 +1831,48 @@ function commandFromLine(line: string): string | null {
   const m = /^.*?[$#%>❯➜»λ]\s+(.+)$/.exec(line.trim()) ;
   const cmd = (m ? m[1] : line).trim();
   return cmd ? cmd.slice(0, 120) : null;
+}
+
+/** Rows a selection is read over: a select-all of a huge dump only counts this far. */
+const MAX_SELECTION_ROWS = 5000;
+
+/** Logical lines (wrapped rows joined) from the one holding row `from` through row `to`. */
+function screenLines(term: Terminal, from: number, to: number): ScreenLine[] {
+  const buf = term.buffer.active;
+  let first = from;
+  while (first > 0 && buf.getLine(first)?.isWrapped) first--;
+  let last = Math.min(buf.length - 1, to, first + MAX_SELECTION_ROWS);
+  // Finish the last logical line.
+  while (last + 1 < buf.length && buf.getLine(last + 1)?.isWrapped) last++;
+  const lines: ScreenLine[] = [];
+  for (let y = first; y <= last; y++) {
+    const line = buf.getLine(y);
+    if (!line) break;
+    const text = line.translateToString(false);
+    if (line.isWrapped && lines.length) lines[lines.length - 1].text += text;
+    else lines.push({ text, startRow: y });
+  }
+  for (const l of lines) l.text = l.text.trimEnd();
+  return lines;
+}
+
+/** The buffer cell (0-based column, buffer row) under a mouse position, if on the screen. */
+function cellAt(term: Terminal, clientX: number, clientY: number): { x: number; y: number } | null {
+  const screen = term.element?.querySelector(".xterm-screen");
+  if (!screen) return null;
+  const r = screen.getBoundingClientRect();
+  if (clientX < r.left || clientX >= r.right || clientY < r.top || clientY >= r.bottom) return null;
+  const x = Math.floor(((clientX - r.left) / r.width) * term.cols);
+  const row = Math.floor(((clientY - r.top) / r.height) * term.rows);
+  return { x: Math.min(term.cols - 1, x), y: term.buffer.active.viewportY + Math.min(term.rows - 1, row) };
+}
+
+/** The hex-dump bytes under the terminal's selection (binary data type). */
+function readByteSelection(term: Terminal): ByteSelection | null {
+  const pos = term.getSelectionPosition();
+  if (!pos) return null;
+  // A few rows past the selection: the interpreter reads up to 8 bytes from its start.
+  return selectedBytes(screenLines(term, pos.start.y, pos.end.y + 4), term.cols, pos.start, pos.end);
 }
 
 /** Re-render a pane only when something it shows or uses changed (App re-renders often). */

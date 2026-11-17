@@ -3355,6 +3355,156 @@ html.ctxmenu-host #root {
   resize: vertical;
   font-size: 12px;
 }
+/* The byte the data interpreter reads: boxed in the hex and ASCII columns, blinks on move. */
+.byte-mark {
+  box-sizing: border-box;
+  border: 1.5px solid #f5c542;
+  border-radius: 2px;
+  background: color-mix(in srgb, #f5c542 28%, transparent);
+  pointer-events: none;
+  animation: byte-mark-blink 0.3s ease-in-out 3;
+}
+.byte-mark-ascii {
+  border-style: dashed;
+}
+@keyframes byte-mark-blink {
+  50% {
+    background: color-mix(in srgb, #f5c542 70%, transparent);
+    border-color: #fff3c4;
+  }
+}
+/* Data interpreter (binary data type): floats over the pane's bottom right corner. */
+.data-interp {
+  position: absolute;
+  right: 18px;
+  bottom: 10px;
+  z-index: 15;
+  min-width: 250px;
+  max-width: calc(100% - 36px);
+  padding: 6px 8px 8px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+}
+.data-interp-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--fg-strong);
+  font-weight: 600;
+}
+.data-interp-header > span {
+  flex: 1;
+}
+.data-interp-endian {
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--fg-primary);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.data-interp-endian:hover {
+  background: var(--bg-hover);
+}
+.data-interp-info {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.data-interp-empty {
+  max-width: 230px;
+  margin: 2px 0 6px;
+  font-size: 12px;
+}
+.data-interp-bytes {
+  margin: 2px 0 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.data-interp-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  row-gap: 1px;
+  font-family: var(--font-mono);
+}
+.data-interp-label {
+  text-align: right;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.data-interp-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 3px;
+  padding: 0 3px;
+  cursor: copy;
+  user-select: text;
+}
+.data-interp-value:hover {
+  background: var(--bg-hover);
+}
+.data-interp-value.na {
+  color: var(--fg-muted);
+  cursor: default;
+}
+.data-interp-value.copied {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.field-hint-inline {
+  align-self: end;
+  margin: 0 0 6px;
+}
+.sender-mode {
+  display: flex;
+  align-self: flex-start;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.sender-mode-btn {
+  padding: 2px 10px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--fg-muted);
+  border: none;
+  cursor: pointer;
+}
+.sender-mode-btn + .sender-mode-btn {
+  border-left: 1px solid var(--border-subtle);
+}
+.sender-mode-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.sender-mode-btn.active {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--fg-strong);
+}
+.sender-badge {
+  flex: none;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 14px;
+  border-radius: 3px;
+  color: var(--fg-muted);
+  border: 1px solid var(--border-subtle);
+}
+.sender-hex-status {
+  margin: -2px 0 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.sender-hex-status.error {
+  color: var(--danger);
+}
 .sender-targets,
 .startup-list {
   display: flex;

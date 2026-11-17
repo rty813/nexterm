@@ -2,6 +2,7 @@ pub mod agent;
 pub mod app_paths;
 pub mod charset;
 pub mod commands;
+pub mod hexdump;
 pub mod history;
 pub mod importer;
 pub mod local_pty;

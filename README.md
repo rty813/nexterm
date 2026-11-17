@@ -36,10 +36,18 @@ Windows 10 / 11 only. Current version: `0.1.2`.
 
 ### Windows & Input
 
-- **Splits & Multi-Window**: Searchable nested session tree; arbitrary nested split panes, drag-to-rearrange, and tear-off tabs into separate windows.
-- **Fast Input**: **Broadcast input** (to current tab panes or all tabs), timed multi-session Sender, Command Palette, grouped Quick Commands, and **history/dictionary auto-completion**.
+- **Splits & Multi-Window**: Searchable nested session tree; arbitrary nested split panes, drag-to-rearrange, and tear-off tabs into separate windows. Drag a session from the sidebar onto the terminals to open it there: drop it on a pane's edge to split, or in the middle to add a tab.
+- **Fast Input**: **Broadcast input** (to current tab panes or all tabs), timed multi-session Sender (text or **hex bytes**), Command Palette, grouped Quick Commands, and **history/dictionary auto-completion**.
 - **Quick-Connect Bar**: Connect instantly with `ssh user@host:22`, `ssh -p 2222 -i key user@host`, `powershell`, or `wsl`.
 - **Command Alerts & Readability**: One-shot **"Notify When Command Finishes"** alerts (with duration and exit code), output folding, highlight rules, Focus Mode (`F11`), and workspace lock.
+
+### Serial & Binary Data
+
+- **Binary Data Type**: Set a serial or raw TCP session's **Data Type** to **Binary (Hex)** (WindTerm's `session.dataType`, imported too). Received bytes are shown as a hex dump with offset, hex and ASCII columns; narrow panes get 8 or 4 bytes per row. Keystrokes and sent data go out exactly as given, with no charset conversion, and ZMODEM detection is off so stray bytes never open a transfer.
+- **Data Interpreter**: A WinHex-style panel in every binary pane. Click a byte, in the hex or the ASCII column, and it reads the bytes from there as 8 / 16 / 32 / 64-bit signed and unsigned integers, Float, Double and binary bits, in big or little endian. It reads on into the next row and stops where the offsets break. The current byte is boxed in both columns and blinks when it moves; the reading stays after you click elsewhere. Click a value to copy it.
+- **Hex Sender**: Switch the Sender to **Hex** and write one packet per line, as `48 65 6C`, `48656C`, `0x01,0x03`, `\x1B\x5B` or `AA-BB:CC`. It counts packets and bytes as you type and points at the line and token it cannot read. Line delay, repeats and multi-session sending work as for text.
+
+![Data interpreter: a serial pane in binary mode, the byte at offset 8 boxed in the hex and ASCII columns, and its values in little endian](docs/media/data-interpreter.jpg)
 
 ### Scrollback & Search
 
@@ -86,6 +94,7 @@ Windows 10 / 11 only. Current version: `0.1.2`.
 
 - **Easy Migration**: Import sessions, quick commands, and color schemes from **WindTerm**, or hosts from `~/.ssh/config`.
 - **Customization**: 4 built-in themes + custom themes, configurable shortcuts and toolbar, in English and Simplified Chinese.
+- **Update Check**: Checks GitHub for a newer release at startup and offers to open its download page (or skip that version). Turn it off or check by hand under **Settings → General**.
 
 ## Performance
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::charset::Codec;
+use crate::hexdump::HexDump;
 use crate::local_pty::spawn_local_pty;
 use crate::models::{ProtocolType, SessionConfig, TerminalStatePayload};
 use crate::serial_conn::spawn_serial_session;
@@ -226,6 +227,10 @@ struct ScopedSink {
     status: Mutex<String>,
     /// The pane's full scrollback history (outlives this connection: see history.rs).
     history: Option<Arc<crate::history::Recorder>>,
+    /// Binary data type (serial / raw TCP): output shown as a hex dump, no charset.
+    binary: Option<Mutex<HexDump>>,
+    /// Pane width, for the hex dump's bytes per row.
+    cols: AtomicU16,
 }
 
 struct ManualInject {
@@ -269,14 +274,25 @@ impl ScopedSink {
                 &decoded[..]
             }
         };
-        if let Some(log) = lock(&self.log).as_mut() {
-            log.write(data);
+        self.emit_text(instance_id, data, data);
+    }
+
+    /// UTF-8 output to the pane; `log` is what the session log gets (they differ for
+    /// the hex dump, whose partly filled row is redrawn on screen but logged once full).
+    fn emit_text(&self, instance_id: &str, screen: &[u8], log: &[u8]) {
+        if !log.is_empty() {
+            if let Some(file) = lock(&self.log).as_mut() {
+                file.write(log);
+            }
+        }
+        if screen.is_empty() {
+            return;
         }
         if let Some(history) = &self.history {
-            history.feed(data);
+            history.feed(screen);
         }
-        lock(&self.tracker).feed(data, Instant::now());
-        self.inner.emit_output(instance_id, data);
+        lock(&self.tracker).feed(screen, Instant::now());
+        self.inner.emit_output(instance_id, screen);
     }
 
     fn transfer_busy(&self) -> bool {
@@ -363,6 +379,11 @@ impl ScopedSink {
     /// Output past the manual-injection filter: ZModem detection, charset, log, pane.
     fn deliver(&self, instance_id: &str, data: &[u8]) {
         if self.cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(dump) = &self.binary {
+            let out = lock(dump).feed(data, self.cols.load(Ordering::Relaxed));
+            self.emit_text(instance_id, &out.screen, &out.log);
             return;
         }
         if !self.zmodem_enabled {
@@ -467,6 +488,7 @@ impl ConnectionManager {
         let ssh_slot: SshSlot = Arc::default();
 
         let cancelled = Arc::new(AtomicBool::new(false));
+        let binary = config.binary_data();
         let scoped = Arc::new(ScopedSink {
             inner: sink,
             cancelled: Arc::clone(&cancelled),
@@ -474,14 +496,17 @@ impl ConnectionManager {
             codec: Mutex::new(Codec::new(&config.charset)),
             zmodem: Mutex::new(ZState::Idle(Detector::default())),
             // Local ConPTY shells are not 8-bit clean, so only network / serial links.
-            zmodem_enabled: matches!(
-                config.protocol,
-                ProtocolType::Ssh | ProtocolType::Telnet | ProtocolType::Serial | ProtocolType::Tcp
-            ),
+            zmodem_enabled: !binary
+                && matches!(
+                    config.protocol,
+                    ProtocolType::Ssh | ProtocolType::Telnet | ProtocolType::Serial | ProtocolType::Tcp
+                ),
             inject: Mutex::new(None),
             tracker: Mutex::new(ShellTracker::default()),
             status: Mutex::new("connecting".into()),
             history: crate::history::get(&instance_id),
+            binary: binary.then(|| Mutex::new(HexDump::default())),
+            cols: AtomicU16::new(cols),
         });
         let protocol = serde_json::to_value(&config.protocol)
             .ok()
@@ -531,7 +556,8 @@ impl ConnectionManager {
                             if is_serial { "串口打开失败" } else { "本地终端启动失败" },
                             msg
                         );
-                        scoped_sink.emit_output(&instance_id, banner.as_bytes());
+                        // Straight to the pane: not hex-dumped, not charset-decoded.
+                        scoped.emit_text(&instance_id, banner.as_bytes(), banner.as_bytes());
                         scoped_sink.emit_state(&instance_id, "error", Some(msg));
                         // Keep a placeholder entry so a started log survives the retry.
                         let (dead_tx, _) = std_mpsc::channel::<ControlMsg>();
@@ -564,6 +590,11 @@ impl ConnectionManager {
         if entry.sink.transfer_busy() {
             return;
         }
+        // Binary data type: the bytes go out exactly as given (hex sender, keystrokes).
+        if entry.sink.binary.is_some() {
+            entry.control.send_write(data);
+            return;
+        }
         let encoded = lock(&entry.sink.codec).encode(data);
         entry.control.send_write(&encoded);
     }
@@ -587,6 +618,7 @@ impl ConnectionManager {
 
     pub fn resize(&self, instance_id: &str, cols: u16, rows: u16) -> Result<()> {
         if let Some(entry) = lock(&self.sessions).get(instance_id) {
+            entry.sink.cols.store(cols, Ordering::Relaxed);
             entry.control.send_resize(cols, rows);
         }
         if let Some(history) = crate::history::get(instance_id) {
@@ -1038,6 +1070,50 @@ mod tests {
                 guard.push(status.to_string());
             }
         }
+    }
+
+    /// Binary data type: received bytes become a hex dump, written bytes go out untouched
+    /// (no GBK encoding of 0x80+ bytes), and ZMODEM's start sequence is just data.
+    #[test]
+    fn tcp_binary_data_type() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let (got_tx, got_rx) = std_mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let _ = sock.write_all(b"**\x18B00\x01\xFFok");
+                let mut b = [0u8; 16];
+                if let Ok(n) = sock.read(&mut b) {
+                    let _ = got_tx.send(b[..n].to_vec());
+                }
+            }
+        });
+        let sink = Arc::new(MockSink::default());
+        let mut cfg = SessionConfig {
+            id: "bin".into(),
+            protocol: ProtocolType::Tcp,
+            host: "127.0.0.1".into(),
+            port,
+            charset: "GBK".into(),
+            ..Default::default()
+        };
+        cfg.extra.insert("dataType".into(), "binary".into());
+        let mgr = ConnectionManager::new();
+        mgr.connect("pane-bin".into(), cfg, 100, 24, sink.clone(), None).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut text = String::new();
+        while Instant::now() < deadline && !text.contains("**.B00..ok") {
+            std::thread::sleep(Duration::from_millis(50));
+            text = String::from_utf8_lossy(&sink.output.lock().unwrap()).to_string();
+        }
+        assert!(text.contains("2A 2A 18 42 30 30 01 FF  6F 6B"), "{text:?}");
+        assert!(text.contains("**.B00..ok"), "{text:?}");
+
+        mgr.write("pane-bin", &[0x01, 0x03, 0xC4, 0xE3]).unwrap();
+        let sent = got_rx.recv_timeout(Duration::from_secs(4)).expect("server got bytes");
+        mgr.disconnect("pane-bin");
+        assert_eq!(sent, vec![0x01, 0x03, 0xC4, 0xE3]);
     }
 
     #[test]

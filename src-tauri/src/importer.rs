@@ -247,7 +247,12 @@ pub fn parse_windterm_sessions(raw: &str) -> Result<Vec<SessionConfig>> {
             charset: get_str("session.charset").unwrap_or_default(),
             system: get_str("session.system").map(|s| s.to_ascii_lowercase()).unwrap_or_default(),
             skip_host_key_check: obj.get("ssh.verifyServerFingerprint").and_then(|v| v.as_bool()) == Some(false),
-            extra: Default::default(),
+            extra: match get_str("session.dataType") {
+                Some(t) if t.eq_ignore_ascii_case("binary") => {
+                    [("dataType".to_string(), Value::from("binary"))].into_iter().collect()
+                }
+                _ => Default::default(),
+            },
         });
     }
 
@@ -956,6 +961,7 @@ mod tests {
             },
             {
                 "serial.baudRate" : "115200",
+                "session.dataType" : "binary",
                 "session.protocol" : "Serial",
                 "session.target" : "COM5",
                 "session.uuid" : "serial-2"
@@ -992,6 +998,8 @@ mod tests {
         assert_eq!(sessions[0].host, "COM4");
         assert_eq!(sessions[0].serial.as_ref().unwrap().baud_rate, 1_500_000);
         assert_eq!(sessions[1].label, "COM5 (115200)");
+        assert!(!sessions[0].binary_data());
+        assert!(sessions[1].binary_data());
 
         assert_eq!(sessions[2].protocol, ProtocolType::Ssh);
         assert_eq!(sessions[2].username, "");

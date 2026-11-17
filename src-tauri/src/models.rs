@@ -155,6 +155,15 @@ fn default_x11_display() -> String {
     "localhost:0.0".to_string()
 }
 
+impl SessionConfig {
+    /// Binary data type (`extra.dataType == "binary"`, WindTerm `session.dataType`):
+    /// serial / raw TCP bytes are shown as a hex dump and sent without charset conversion.
+    pub fn binary_data(&self) -> bool {
+        matches!(self.protocol, ProtocolType::Serial | ProtocolType::Tcp)
+            && self.extra.get("dataType").and_then(|v| v.as_str()) == Some("binary")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SerialConfig {

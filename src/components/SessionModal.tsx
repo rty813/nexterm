@@ -5,12 +5,14 @@ import { backend } from "../services/backend";
 import { SessionAdvanced, advancedToSession, initialAdvanced } from "./SessionAdvanced";
 import { ProtocolBadge } from "./ProtocolBadge";
 import { useCloseGuard } from "./useCloseGuard";
-import type {
-  AuthType,
-  JumpHostConfig,
-  ProtocolType,
-  SerialConfig,
-  SessionConfig,
+import {
+  hasDataType,
+  type AuthType,
+  type DataType,
+  type JumpHostConfig,
+  type ProtocolType,
+  type SerialConfig,
+  type SessionConfig,
 } from "../types/domain";
 
 const BAUD_RATES = [
@@ -79,6 +81,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     stopBits: initial?.serial?.stopBits ?? 1,
     flowControl: initial?.serial?.flowControl ?? "none",
   });
+  const [dataType, setDataType] = useState<DataType>(initial?.dataType === "binary" ? "binary" : "text");
   const [autoLog, setAutoLog] = useState<boolean>(initial?.autoLog ?? false);
   const [advanced, setAdvanced] = useState(() => initialAdvanced(initial));
   const [serialPorts, setSerialPorts] = useState<string[]>([]);
@@ -161,6 +164,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       workingDir: workingDir.trim() || undefined,
       shellCommand: shellCommand.trim() || undefined,
       serial: protocol === "serial" ? serialCfg : null,
+      dataType: hasDataType(protocol) && dataType === "binary" ? "binary" : undefined,
       autoLog,
       ...advancedToSession(advanced, protocol),
     };
@@ -289,6 +293,19 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     ))}
                   </datalist>
                 </label>
+              </div>
+            )}
+
+            {hasDataType(protocol) && (
+              <div className="form-grid-2">
+                <label className="field" title={t("sessionModal.dataTypeTip")}>
+                  <span>{t("sessionModal.dataType")}</span>
+                  <select className="text-input" value={dataType} onChange={(e) => setDataType(e.target.value as DataType)}>
+                    <option value="text">{t("sessionModal.dataTypeText")}</option>
+                    <option value="binary">{t("sessionModal.dataTypeBinary")}</option>
+                  </select>
+                </label>
+                {dataType === "binary" && <p className="adv-hint field-hint-inline">{t("sessionModal.dataTypeTip")}</p>}
               </div>
             )}
 

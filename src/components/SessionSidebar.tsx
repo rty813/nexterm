@@ -21,6 +21,7 @@ import type { SessionConfig } from "../types/domain";
 import { ProtocolBadge } from "./ProtocolBadge";
 import { sessionTargetSummary } from "../utils/sessionSummary";
 import { useContextMenu } from "./ContextMenu";
+import { SESSION_MIME } from "./TabBar";
 
 /** Tabs of a saved session open in this window: how many, and the best status among them. */
 export interface SessionOpenState {
@@ -154,6 +155,11 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         className={`tree-session-row ${isSelected ? "selected" : ""} ${open ? "is-open" : ""}`}
         style={{ paddingLeft: `${14 + depth * 14}px` }}
         tabIndex={0}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData(SESSION_MIME, s.id);
+          e.dataTransfer.effectAllowed = "copy";
+        }}
         onClick={() => onSelectSession(s.id)}
         onDoubleClick={(e) => activate(s, e.ctrlKey || e.metaKey)}
         onKeyDown={(e) => {

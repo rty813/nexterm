@@ -15,6 +15,8 @@ import { TAB_COLORS, type TabMark } from "./TerminalPane";
 
 /** Drag payload type for moving a tab between split groups. */
 export const TAB_MIME = "application/x-nexterm-pane";
+/** A saved session dragged from the sidebar (data: its id); opens where it is dropped. */
+export const SESSION_MIME = "application/x-nexterm-session";
 
 export interface GroupTabBarProps {
   group: PaneGroup;

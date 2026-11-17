@@ -10,6 +10,14 @@ export type ProtocolType =
 
 export type AuthType = "password" | "privatekey" | "none";
 
+/** Session data type (serial / TCP): text runs through the terminal, binary is a hex dump. */
+export type DataType = "text" | "binary";
+
+/** Protocols with a data type choice (Rust `SessionConfig::binary_data`). */
+export function hasDataType(protocol: ProtocolType): boolean {
+  return protocol === "serial" || protocol === "tcp";
+}
+
 export interface JumpHostConfig {
   enabled: boolean;
   host: string;
@@ -47,6 +55,8 @@ export interface SessionConfig {
   x11?: X11Config | null;
   /** Remote charset ("" = UTF-8). */
   charset?: string;
+  /** Serial / TCP: "binary" shows received bytes as a hex dump and sends bytes as is (WindTerm session.dataType). */
+  dataType?: DataType;
   /** Highlight scheme ("" = auto). */
   system?: HighlightSystem | "";
   /** Accept any SSH host key without asking. */
@@ -523,6 +533,8 @@ export interface SenderItem {
   /** Line ending sent after each line. */
   eol: "cr" | "lf" | "crlf" | "none";
   target: "active" | "visible" | "all" | "selected";
+  /** "hex": each line is hex bytes ("48 65 6C"), sent as raw bytes (default "text"). */
+  mode?: "text" | "hex";
 }
 
 export interface AppStateSnapshot {

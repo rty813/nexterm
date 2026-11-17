@@ -12,7 +12,7 @@ import type {
 } from "../types/domain";
 import { TerminalPane } from "./TerminalPane";
 import type { PaneExtras, ReconnectCredentials } from "./TerminalPane";
-import { GroupTabBar, TAB_MIME, type GroupTabBarProps } from "./TabBar";
+import { GroupTabBar, SESSION_MIME, TAB_MIME, type GroupTabBarProps } from "./TabBar";
 import type { DropHint } from "../utils/dropZones";
 import type { MenuItem } from "./ContextMenu";
 
@@ -146,6 +146,8 @@ interface SplitWorkspaceProps {
   /** A tab is dragged over the terminals (null: left the workspace or over a tab bar). */
   onTabDragOver: (point: { x: number; y: number } | null) => void;
   onTabDrop: (paneId: string, x: number, y: number) => void;
+  /** A sidebar session dropped on the terminals: open it at that zone. */
+  onSessionDrop: (sessionId: string, x: number, y: number) => void;
   /** Hide the welcome card (secondary windows). */
   hideWelcome?: boolean;
 }
@@ -173,30 +175,37 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
   dropHint,
   onTabDragOver,
   onTabDrop,
+  onSessionDrop,
   hideWelcome,
 }) => {
   const { t } = useTranslation();
   const stageRef = useRef<HTMLDivElement | null>(null);
 
   // A tab dragged over the terminals (of this or another window): split or join a group.
+  // A session from the sidebar gets the same zones and opens there.
+  const dragKind = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes(TAB_MIME) ? "tab" : e.dataTransfer.types.includes(SESSION_MIME) ? "session" : null;
   const dropHandlers = {
     onDragOver: (e: React.DragEvent) => {
-      if (!e.dataTransfer.types.includes(TAB_MIME)) return;
-      if ((e.target as HTMLElement).closest?.(".group-tabbar")) {
+      const kind = dragKind(e);
+      if (!kind) return;
+      if (kind === "tab" && (e.target as HTMLElement).closest?.(".group-tabbar")) {
         onTabDragOver(null); // the tab bar places it between tabs itself
         return;
       }
       e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
+      e.dataTransfer.dropEffect = kind === "tab" ? "move" : "copy";
       onTabDragOver({ x: e.clientX, y: e.clientY });
     },
     onDragLeave: (e: React.DragEvent) => {
       if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onTabDragOver(null);
     },
     onDrop: (e: React.DragEvent) => {
-      if (!e.dataTransfer.types.includes(TAB_MIME)) return;
+      const kind = dragKind(e);
+      if (!kind) return;
       e.preventDefault();
-      onTabDrop(e.dataTransfer.getData(TAB_MIME), e.clientX, e.clientY);
+      if (kind === "tab") onTabDrop(e.dataTransfer.getData(TAB_MIME), e.clientX, e.clientY);
+      else onSessionDrop(e.dataTransfer.getData(SESSION_MIME), e.clientX, e.clientY);
     },
   };
   const hintBox = dropHint && (

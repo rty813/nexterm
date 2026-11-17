@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, Pause, Play, Plus, Save, Send, Square, Trash2, X } from "lucide-react";
 import type { SenderItem } from "../types/domain";
+import { joinPackets, parseHexPackets, withEol } from "../utils/hexSend";
 
 /** A pane the sender can type into. */
 export interface SenderTarget {
@@ -48,8 +49,8 @@ export const SenderPanel: React.FC<{
   /** Pane the panel was opened for (pane menu). */
   preferredPaneId: string | null;
   onChange: (items: SenderItem[]) => void;
-  /** Send raw text (no line ending added) to the given panes. */
-  onSend: (paneIds: string[], text: string) => void;
+  /** Send raw text or bytes (no line ending added) to the given panes. */
+  onSend: (paneIds: string[], data: string | Uint8Array) => void;
   onClose: () => void;
 }> = ({ items, targets, activePaneId, preferredPaneId, onChange, onSend, onClose }) => {
   const { t } = useTranslation();
@@ -98,12 +99,23 @@ export const SenderPanel: React.FC<{
   const run = async (item: SenderItem) => {
     const ids = resolveTargets(item);
     if (!ids.length || !item.text) return;
+    const eol = EOL[item.eol];
+    // Text: one string per line. Hex: one packet of raw bytes per non-blank line.
+    let lines: string[] | Uint8Array[];
+    if (item.mode === "hex") {
+      const parsed = parseHexPackets(item.text);
+      if (!parsed.ok || !parsed.packets.length) return;
+      lines = parsed.packets;
+    } else {
+      lines = item.text.replace(/\r\n/g, "\n").split("\n");
+      // A trailing newline in the editor does not mean an extra empty line.
+      if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    }
+    const one = (line: string | Uint8Array) => (typeof line === "string" ? line + eol : withEol(line, eol));
+    const all = () =>
+      item.mode === "hex" ? joinPackets(lines as Uint8Array[], eol) : (lines as string[]).join(eol) + eol;
     stopRef.current = false;
     pauseRef.current = false;
-    const lines = item.text.replace(/\r\n/g, "\n").split("\n");
-    // A trailing newline in the editor does not mean an extra empty line.
-    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-    const eol = EOL[item.eol];
     const rounds = item.repeat <= 0 ? Infinity : item.repeat;
     for (let round = 1; round <= rounds && !stopRef.current; round++) {
       if (item.lineDelay > 0) {
@@ -111,12 +123,12 @@ export const SenderPanel: React.FC<{
           setRunning({ id: item.id, round, line: i + 1, paused: pauseRef.current });
           await sleep(0);
           if (stopRef.current) break;
-          onSend(resolveTargets(item), lines[i] + eol);
+          onSend(resolveTargets(item), one(lines[i]));
           if (i < lines.length - 1) await sleep(item.lineDelay);
         }
       } else {
         setRunning({ id: item.id, round, line: lines.length, paused: false });
-        onSend(ids, lines.join(eol) + eol);
+        onSend(ids, all());
       }
       if (round < rounds) await sleep(Math.max(0, item.interval));
     }
@@ -132,6 +144,17 @@ export const SenderPanel: React.FC<{
 
   const busy = running !== null;
   const targetCount = resolveTargets(draft).length;
+  const isHex = draft.mode === "hex";
+  const hex = useMemo(() => (isHex ? parseHexPackets(draft.text) : null), [isHex, draft.text]);
+  const hexBytes = hex?.ok ? hex.packets.reduce((n, p) => n + p.length, 0) : 0;
+  const sendable = Boolean(draft.text) && (!hex || (hex.ok && hex.packets.length > 0));
+  /** Switching modes also switches the usual line ending: Enter for text, nothing for hex. */
+  const setMode = (hexOn: boolean) =>
+    setDraft({
+      ...draft,
+      mode: hexOn ? "hex" : "text",
+      eol: hexOn && draft.eol === "cr" ? "none" : !hexOn && draft.eol === "none" ? "cr" : draft.eol,
+    });
 
   return (
     <aside className="side-panel sender-panel">
@@ -151,6 +174,7 @@ export const SenderPanel: React.FC<{
               title={item.text}
             >
               <span className="sender-name">{item.name || t("sender.untitled")}</span>
+              {item.mode === "hex" && <span className="sender-badge">HEX</span>}
               <button
                 type="button"
                 className="icon-btn-xs"
@@ -190,9 +214,32 @@ export const SenderPanel: React.FC<{
           disabled={busy}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         />
+        <div className="sender-mode" role="radiogroup" aria-label={t("sender.mode")}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!isHex}
+            className={`sender-mode-btn ${!isHex ? "active" : ""}`}
+            disabled={busy}
+            onClick={() => isHex && setMode(false)}
+          >
+            {t("sender.modeText")}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={isHex}
+            className={`sender-mode-btn ${isHex ? "active" : ""}`}
+            disabled={busy}
+            title={t("sender.hexTip")}
+            onClick={() => !isHex && setMode(true)}
+          >
+            Hex
+          </button>
+        </div>
         <textarea
           className="text-input mono sender-text"
-          placeholder={t("sender.textPh")}
+          placeholder={isHex ? t("sender.hexPh") : t("sender.textPh")}
           value={draft.text}
           spellCheck={false}
           disabled={busy}
@@ -204,6 +251,13 @@ export const SenderPanel: React.FC<{
             }
           }}
         />
+        {hex && draft.text.trim() !== "" && (
+          <p className={`sender-hex-status ${hex.ok ? "" : "error"}`}>
+            {hex.ok
+              ? t("sender.hexCount", { packets: hex.packets.length, bytes: hexBytes })
+              : t("sender.hexError", { line: hex.line, token: hex.token })}
+          </p>
+        )}
         <div className="form-grid-2">
           <label className="field">
             <span>{t("sender.eol")}</span>
@@ -315,7 +369,7 @@ export const SenderPanel: React.FC<{
             >
               <Copy size={12} /> {t("sender.copy")}
             </button>
-            <button type="button" className="btn-primary btn-sm" disabled={!draft.text || targetCount === 0} onClick={() => void run(draft)}>
+            <button type="button" className="btn-primary btn-sm" disabled={!sendable || targetCount === 0} onClick={() => void run(draft)}>
               <Send size={12} /> {t("sender.send")} (Ctrl+Enter)
             </button>
           </div>
