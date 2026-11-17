@@ -145,6 +145,7 @@ export const uiResources = {
     },
     update: {
       section: "更新",
+      currentVersion: "当前版本 {{version}}",
       checkAtStartup: "启动时检查更新",
       checkNow: "立即检查",
       checking: "正在检查…",
@@ -174,6 +175,7 @@ export const uiResources = {
     },
     update: {
       section: "Updates",
+      currentVersion: "Version {{version}}",
       checkAtStartup: "Check for updates at startup",
       checkNow: "Check now",
       checking: "Checking…",

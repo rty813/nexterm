@@ -223,6 +223,7 @@ export const resources = {
         "split.equalize": "平均分配分栏大小",
         "window.alwaysOnTop": "窗口置顶",
         "window.lock": "锁定屏幕",
+        "window.checkUpdate": "检查更新",
       },
       toolbar: {
         "customize": "自定义工具栏...",
@@ -829,6 +830,7 @@ export const resources = {
         "split.equalize": "Equalize Groups",
         "window.alwaysOnTop": "Always on Top",
         "window.lock": "Lock Screen",
+        "window.checkUpdate": "Check for Updates",
       },
       toolbar: {
         "customize": "Customize Toolbar...",

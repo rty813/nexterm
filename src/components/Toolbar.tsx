@@ -78,6 +78,8 @@ interface ToolbarProps {
   onOpenRemoteSettings: () => void;
   /** Right-click on the toolbar: customize. */
   onCustomize: () => void;
+  /** "Check for Updates" in the More menu. */
+  onCheckUpdate: () => void;
   channelCount: number;
   onOpenPalette: () => void;
   /** Recent quick connect addresses, offered while typing. */
@@ -121,6 +123,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleRemote,
   onOpenRemoteSettings,
   onCustomize,
+  onCheckUpdate,
   channelCount,
   onOpenPalette,
   quickHistory,
@@ -132,6 +135,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const pausedPanes = syncMembers.filter((m) => m.paused).length;
   const tip = (label: string, action: string) => (keymap[action] ? `${label} (${keymap[action]})` : label);
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => {
+    void backend.appVersion().then(setAppVersion);
+  }, []);
   useEffect(() => {
     void backend.remoteStatus().then(setRemoteStatus);
     const un = backend.onRemoteState(setRemoteStatus);
@@ -207,6 +214,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       ...items,
       ...(items.length ? [{ type: "separator" } as MenuItem] : []),
       { label: t("toolbar.customize"), onClick: onCustomize },
+      { type: "separator" },
+      { label: t("actions.window.checkUpdate"), shortcut: keymap["window.checkUpdate"], onClick: onCheckUpdate },
+      ...(appVersion ? [{ label: t("update.currentVersion", { version: appVersion }), disabled: true } as MenuItem] : []),
     ]);
   };
 

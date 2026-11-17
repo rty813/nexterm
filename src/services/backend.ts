@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { emit, emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { utf8Base64 } from "../utils/zmodemDrop";
@@ -413,6 +414,8 @@ function backdropColor(): [number, number, number] | undefined {
     return undefined;
   }
 }
+
+let appVersionPromise: Promise<string> | undefined;
 
 export const backend = {
   async loadInitialState(): Promise<AppStateSnapshot> {
@@ -1317,6 +1320,13 @@ export const backend = {
       return;
     }
     await invoke("open_external", { url });
+  },
+
+  /** This build's version ("0.1.3"), from the app config; empty outside Tauri. */
+  appVersion(): Promise<string> {
+    if (!isTauriRuntime()) return Promise.resolve("");
+    appVersionPromise ??= getVersion().catch(() => "");
+    return appVersionPromise;
   },
 
   /** Compare this build with the newest GitHub release (throws when offline / outside Tauri). */

@@ -489,6 +489,10 @@ const UpdateCheckRow: React.FC = () => {
   const [state, setState] = useState<
     { kind: "idle" } | { kind: "checking" } | { kind: "done"; info: UpdateInfo } | { kind: "failed"; error: string }
   >({ kind: "idle" });
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    void backend.appVersion().then(setVersion);
+  }, []);
   const check = () => {
     setState({ kind: "checking" });
     backend
@@ -498,6 +502,7 @@ const UpdateCheckRow: React.FC = () => {
   };
   return (
     <div className="agent-hooks-row">
+      {version && <span className="adv-hint">{t("update.currentVersion", { version })}</span>}
       <button type="button" className="btn-secondary" disabled={state.kind === "checking"} onClick={check}>
         {state.kind === "checking" ? t("update.checking") : t("update.checkNow")}
       </button>

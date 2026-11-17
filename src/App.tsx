@@ -75,7 +75,7 @@ import { TmuxPanel, type TmuxTarget } from "./components/TmuxPanel";
 import { commandHistory, historyKeyOf } from "./utils/commandHistory";
 import { autoSyncInterval, syncErrorKey, syncReady } from "./utils/configSync";
 import { historyOf, modemOf, remoteOf, sftpOf, syncOf } from "./utils/settingsDefaults";
-import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem } from "./types/domain";
+import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem, UpdateInfo } from "./types/domain";
 import { AiRequestDialog } from "./components/AiRequestDialog";
 import { PortForwardPanel, type ForwardTarget } from "./components/PortForwardPanel";
 import { SftpPanel, type SftpTarget } from "./components/SftpPanel";
@@ -1273,6 +1273,47 @@ export const App: React.FC = () => {
 
   // ---------------------------------------------------------------- shortcuts
 
+  /** Offer a newer release: open its download page, or (startup check only) skip this version. */
+  const promptUpdate = async (info: UpdateInfo, offerSkip: boolean) => {
+    const answer = await ask({
+      title: t("update.title", { version: info.latest }),
+      message: t("update.message", { current: info.current, latest: info.latest }),
+      detail: releaseNotesPreview(info.notes) || undefined,
+      okLabel: t("update.download"),
+      cancelLabel: t("update.later"),
+      checkboxLabel: offerSkip ? t("update.skip") : undefined,
+    });
+    if (answer.ok) void backend.openExternal(info.url).catch((e) => setToast(String(e)));
+    else if (answer.checked) saveSettings({ ...settingsRef.current, skippedUpdateVersion: info.latest });
+  };
+  const promptUpdateRef = useRef(promptUpdate);
+  promptUpdateRef.current = promptUpdate;
+  /** "Check for Updates" from the More menu / palette: always answers, even when up to date or offline. */
+  const checkingUpdateRef = useRef(false);
+  const checkUpdateNow = () => {
+    if (checkingUpdateRef.current) return;
+    if (!isTauriRuntime()) {
+      setToast(t("update.failed", { error: "not in Tauri" }));
+      return;
+    }
+    checkingUpdateRef.current = true;
+    setToast(t("update.checking"));
+    void backend
+      .checkUpdate()
+      .then((info) => {
+        if (!info.available) {
+          setToast(t("update.upToDate", { version: info.current }));
+          return;
+        }
+        setToast(null);
+        return promptUpdateRef.current(info, false);
+      })
+      .catch((e) => setToast(t("update.failed", { error: String(e) })))
+      .finally(() => {
+        checkingUpdateRef.current = false;
+      });
+  };
+
   const runAction = (id: string): boolean => {
     const leaf = activeLeafRef.current;
     const api = leaf ? paneApis.current.get(leaf.paneId) : undefined;
@@ -1438,6 +1479,10 @@ export const App: React.FC = () => {
       case "window.lock":
         setLocked(true);
         return true;
+      case "window.checkUpdate":
+        if (!isMainWindow) inMainWindow(id);
+        else checkUpdateNow();
+        return true;
       default: {
         // Quick commands listed in the command palette.
         const quick = id.startsWith("quick:") ? quickCommandsRef.current.find((q) => `quick:${q.id}` === id) : undefined;
@@ -1460,18 +1505,9 @@ export const App: React.FC = () => {
     const timer = window.setTimeout(() => {
       void backend
         .checkUpdate()
-        .then(async (info) => {
+        .then((info) => {
           if (cancelled || !shouldPromptUpdate(info, settingsRef.current)) return;
-          const answer = await ask({
-            title: t("update.title", { version: info.latest }),
-            message: t("update.message", { current: info.current, latest: info.latest }),
-            detail: releaseNotesPreview(info.notes) || undefined,
-            okLabel: t("update.download"),
-            cancelLabel: t("update.later"),
-            checkboxLabel: t("update.skip"),
-          });
-          if (answer.ok) void backend.openExternal(info.url).catch((e) => setToast(String(e)));
-          else if (answer.checked) saveSettings({ ...settingsRef.current, skippedUpdateVersion: info.latest });
+          return promptUpdateRef.current(info, true);
         })
         .catch(() => undefined);
     }, UPDATE_CHECK_DELAY_MS);
@@ -2455,6 +2491,7 @@ export const App: React.FC = () => {
               setSettingsTab("general");
               setSettingsModalOpen(true);
             }}
+            onCheckUpdate={() => runAction("window.checkUpdate")}
             channelCount={Object.keys(syncChannels).length}
             hidden={settings.toolbarHidden ?? DEFAULT_TOOLBAR_HIDDEN}
             onOpenPalette={() => setPaletteOpen(true)}

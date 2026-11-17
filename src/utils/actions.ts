@@ -64,6 +64,7 @@ export const ACTIONS: ActionDef[] = [
 
   { id: "window.alwaysOnTop", group: "window", defaultKey: "" },
   { id: "window.lock", group: "window", defaultKey: "" },
+  { id: "window.checkUpdate", group: "window", defaultKey: "" },
 ];
 
 const CODE_NAMES: Record<string, string> = {
