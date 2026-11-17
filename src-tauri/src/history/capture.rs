@@ -77,9 +77,10 @@ impl Capture {
             i += off;
             let rest = &buf[i..];
             if rest.starts_with(CLEAR_SCROLLBACK) {
-                // `clear`: the remote wipes the scrollback. The full history keeps it; note where.
+                // `clear`: the remote wipes the scrollback, and the full history goes with it
+                // (as in WindTerm; line numbers start over). The screen stays, as in xterm.js.
                 self.advance(&buf[start..i], now);
-                self.archive.mark_cleared(now);
+                self.clear_scrollback();
                 i += CLEAR_SCROLLBACK.len();
                 start = i;
             } else if rest.starts_with(RESET) {
@@ -144,6 +145,15 @@ impl Capture {
         }
         self.forget_rows();
         self.update_rows(now);
+    }
+
+    /// ESC[3J. Only the main screen's scrollback: on the alternate screen xterm.js has none.
+    fn clear_scrollback(&mut self) {
+        if !self.term.mode().contains(TermMode::ALT_SCREEN) {
+            self.archive.clear();
+            // A line wrapped from the scrollback onto the screen: its archived part is gone.
+            self.pending.active = false;
+        }
     }
 
     /// The lines still on screen (not yet in the archive), oldest first.
@@ -416,14 +426,26 @@ mod tests {
     }
 
     #[test]
-    fn clear_keeps_history_and_marks_it() {
+    fn clear_drops_history_and_restarts_numbers() {
         let mut c = cap(20, 3);
-        c.feed(b"one\r\ntwo\r\n", 1);
+        c.feed(b"one\r\ntwo\r\nthree\r\nfour\r\n", 1);
+        assert_eq!(texts(&archived(&c)), ["one", "two"]);
         // What `clear` sends, split across two chunks inside the ESC[3J.
         c.feed(b"\x1b[H\x1b[2J\x1b[", 2);
         c.feed(b"3Jprompt", 3);
-        assert_eq!(texts(&archived(&c)), ["one", "two", "<cleared>"]);
+        assert!(archived(&c).is_empty());
         assert_eq!(texts(&c.tail()), ["prompt"]);
+        // The prompt (first line on screen) is line 1 again.
+        assert_eq!(c.archive.number(c.archive.end()), 1);
+        assert_eq!(c.archive.stats().dropped, 4);
+    }
+
+    #[test]
+    fn clear_on_alt_screen_keeps_history() {
+        let mut c = cap(20, 2);
+        c.feed(b"one\r\ntwo\r\nthree\r\n", 1);
+        c.feed(b"\x1b[?1049h\x1b[3J", 2);
+        assert_eq!(texts(&archived(&c)), ["one", "two"]);
     }
 
     #[test]

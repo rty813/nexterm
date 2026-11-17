@@ -41,6 +41,8 @@ export interface HistoryQuery {
 
 export interface HistoryMatch {
   line: number;
+  /** Line number as the margin shows it (starts over after each clear). */
+  no: number;
   /** UTF-16 offsets in the line's text. */
   start: number;
   end: number;

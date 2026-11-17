@@ -32,6 +32,8 @@ export interface HistoryLine {
   runs: [number, number][];
   ts: number;
   kind: number;
+  /** Line number as the margin shows it (starts over after each clear); 0 for markers. */
+  no: number;
 }
 
 export interface HistoryInfo {
@@ -40,6 +42,8 @@ export interface HistoryInfo {
   end: number;
   tail: number;
   dropped: number;
+  /** The line numbered 1 since the last clear (0: never cleared). */
+  base: number;
   memoryBytes: number;
   diskBytes: number;
 }
@@ -116,6 +120,14 @@ export function linesToAnsi(lines: HistoryLine[], styles: HistoryStyle[], marker
     out += "\x1b[0m\r\n";
   }
   return out;
+}
+
+/**
+ * Margin number of history line `line` (numbers start over at each clear, which drops the
+ * lines before it); null for a line from before the last clear.
+ */
+export function liveNumber(line: number, info: Pick<HistoryInfo, "base">): number | null {
+  return line >= info.base ? line - info.base + 1 : null;
 }
 
 /** Text of a logical line for comparing with xterm.js (trailing blanks dropped). */

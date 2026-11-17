@@ -692,6 +692,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const clearHistory = () => {
       historyRef.current?.reset();
       void backend.historyClear(leaf.paneId);
+      // Line numbers start over, as after `clear` (and in WindTerm).
+      timestampsRef.current?.restart();
     };
     extras.registerTerminal(leaf.paneId, {
       copy: () => term.hasSelection() && void backend.writeClipboard(term.getSelection()),
@@ -1184,6 +1186,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
                 term.clear();
                 historyRef.current?.reset();
                 void backend.historyClear(leaf.paneId);
+                timestampsRef.current?.restart();
               },
             },
             {

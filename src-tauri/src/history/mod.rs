@@ -68,6 +68,8 @@ pub struct Info {
     pub tail: u64,
     /// Lines discarded (size limits or cleared).
     pub dropped: u64,
+    /// The line numbered 1 in the margin: where the last clear left off (0: never cleared).
+    pub base: u64,
     pub memory_bytes: u64,
     pub disk_bytes: u64,
 }
@@ -80,6 +82,8 @@ pub struct WireLine {
     pub runs: Vec<(u32, u32)>,
     pub ts: i64,
     pub kind: u8,
+    /// Line number as shown in the margin (starts over at each clear); 0 for markers.
+    pub no: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,6 +99,8 @@ pub struct Page {
 #[serde(rename_all = "camelCase")]
 pub struct Match {
     pub line: u64,
+    /// Line number as shown in the margin.
+    pub no: u64,
     /// UTF-16 offsets in the line's text.
     pub start: u32,
     pub end: u32,
@@ -208,7 +214,9 @@ impl Recorder {
         let mut ids: HashMap<Style, u32> = HashMap::new();
         let lines = lines
             .into_iter()
-            .map(|l| WireLine {
+            .enumerate()
+            .map(|(i, l)| WireLine {
+                no: if l.kind == KIND_TEXT { (from + i as u64).saturating_sub(info.base) + 1 } else { 0 },
                 runs: l
                     .runs
                     .iter()
@@ -298,7 +306,8 @@ impl Recorder {
                     }
                     for (start, end) in ranges {
                         let (ctx, ctx_offset) = context(&h.text, start);
-                        found.push(Match { line: h.line, start, end, ctx, ctx_offset });
+                        let no = h.line.saturating_sub(info.base) + 1;
+                        found.push(Match { line: h.line, no, start, end, ctx, ctx_offset });
                     }
                     if found.len() >= limit {
                         stop_at = Some(h.line);
@@ -476,7 +485,15 @@ fn squash(s: &str) -> String {
 
 fn info_of(state: &Capture, tail: u64) -> Info {
     let s = state.archive.stats();
-    Info { first: s.first, end: s.end, tail, dropped: s.dropped, memory_bytes: s.mem_bytes, disk_bytes: s.disk_bytes }
+    Info {
+        first: s.first,
+        end: s.end,
+        tail,
+        dropped: s.dropped,
+        base: state.archive.number_base(),
+        memory_bytes: s.mem_bytes,
+        disk_bytes: s.disk_bytes,
+    }
 }
 
 /// Context of a match starting at UTF-16 offset `start`: the whole line when short, else

@@ -14,10 +14,12 @@ import { logicalRows } from "./lineHighlight";
  * resize re-wraps long lines, rows are added or removed inside a block, but its logical
  * lines stay the same, so the stamps stay on their lines.
  *
- * Line numbers count logical lines (a wrapped line is one) since the pane opened, so
- * they keep counting when old lines are trimmed. Rows loaded from the full history
- * (services/historyScroll.ts) carry the backend's own numbers; `alignNumbers` shifts the
- * live count to match them.
+ * Line numbers count logical lines (a wrapped line is one) since the pane opened or was
+ * last cleared, so they keep counting when old lines are trimmed. As in WindTerm, a clear
+ * (`clear` sends ESC[3J; the Clear menu items) starts them over: the lines left are
+ * renumbered from 1, and the backend drops the full history before it. Rows loaded from
+ * the full history (services/historyScroll.ts) carry the backend's own numbers;
+ * `alignNumbers` shifts the live count to match them.
  */
 interface Block {
   /** First line of the block. */
@@ -46,6 +48,21 @@ export interface LineStamp {
 const MAX_STAMPS = 20000;
 /** Lines covered by one marker. */
 const BLOCK_LINES = 512;
+
+/**
+ * The stamps that survive ESC[3J, numbered from 1: xterm.js drops the rows above `top`
+ * (the scrollback), and rows from `lastText` down are blank (`clear` erased the screen
+ * first), so they are not lines any more. A row stamped twice keeps its later stamp.
+ */
+export function clearSurvivors(
+  stamps: { line: number; time: number }[],
+  top: number,
+  lastText: number
+): { line: number; time: number; no: number }[] {
+  const byLine = new Map<number, number>();
+  for (const s of stamps) if (s.line >= top && s.line <= lastText) byLine.set(s.line, s.time);
+  return [...byLine.entries()].sort((a, b) => a[0] - b[0]).map(([line, time], i) => ({ line, time, no: i + 1 }));
+}
 
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n);
@@ -104,6 +121,11 @@ export class TimestampGutter implements IDisposable {
         this.schedule();
       }),
       term.buffer.onBufferChange(() => this.schedule()),
+      // ESC[3J: runs before xterm.js's own handler (return false lets it run next).
+      term.parser.registerCsiHandler({ final: "J" }, (params) => {
+        if (params[0] === 3) this.clearScrollback();
+        return false;
+      }),
     ];
     this.setWidth(0);
   }
@@ -193,6 +215,48 @@ export class TimestampGutter implements IDisposable {
         return;
       }
     }
+  }
+
+  /** The user cleared the terminal (menu, shortcut; after `term.clear()`): numbers start over. */
+  restart(): void {
+    this.clear();
+    this.lastMarker?.dispose();
+    this.lastMarker = null;
+    this.lastLine = -1;
+    this.nextNo = 1;
+    this.numberOffset = 0;
+    this.schedule();
+  }
+
+  /**
+   * ESC[3J (what `clear` sends after ESC[H ESC[2J): the scrollback goes, and like WindTerm
+   * the numbering starts over. Called before xterm.js trims the scrollback; the lines left
+   * on screen are renumbered from 1.
+   */
+  private clearScrollback(): void {
+    const buf = this.term.buffer.active;
+    if (buf.type !== "normal" || this.suspended) return;
+    const top = Math.max(0, buf.length - this.term.rows);
+    let lastText = top - 1;
+    for (let r = buf.length - 1; r >= top; r--) {
+      if ((buf.getLine(r)?.translateToString(true) ?? "") !== "") {
+        lastText = r;
+        break;
+      }
+    }
+    const stamps: { line: number; time: number }[] = [];
+    for (const b of this.live()) {
+      if (b.abs) continue;
+      this.rowsOf(b, Infinity).forEach((line, i) => stamps.push({ line, time: b.times[i] }));
+    }
+    const cursorLine = buf.baseY + buf.cursorY;
+    const last = this.lastStamped();
+    this.clear();
+    this.nextNo = 1;
+    this.numberOffset = 0;
+    for (const s of clearSurvivors(stamps, top, lastText)) this.add(s.line, cursorLine, s.time, s.no);
+    this.setLastStamped(Math.min(last, lastText), cursorLine);
+    this.schedule();
   }
 
   /** Stamp time of an absolute buffer line, if any. */

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
 
-use super::line::{decode, BlockBuilder, Line, LineRef, KIND_CLEARED};
+use super::line::{decode, BlockBuilder, Line, LineRef};
 
 /// A block is sealed at this many lines or this many bytes of line data.
 pub const BLOCK_LINES: usize = 2000;
@@ -186,8 +186,10 @@ impl BlockCache {
 pub struct Archive {
     /// Number of the oldest line still kept.
     first: u64,
-    /// Lines dropped from the front (limits, or cleared by the user).
+    /// Lines dropped from the front (limits, or cleared).
     dropped: u64,
+    /// The line numbered 1 in the margin: where the last clear left off (0: never cleared).
+    base: u64,
     blocks: VecDeque<BlockRef>,
     hot: BlockBuilder,
     mem_bytes: usize,
@@ -212,6 +214,7 @@ impl Archive {
         Archive {
             first: 0,
             dropped: 0,
+            base: 0,
             blocks: VecDeque::new(),
             hot: BlockBuilder::default(),
             mem_bytes: 0,
@@ -251,11 +254,14 @@ impl Archive {
         }
     }
 
-    /// Add a "cleared" marker unless the previous line already is one.
-    pub fn mark_cleared(&mut self, ts: i64) {
-        if self.end() > self.first && self.last_kind() != Some(KIND_CLEARED) {
-            self.push(Line::marker(KIND_CLEARED, ts).as_ref());
-        }
+    /// Margin number of line `n` (1-based, starting over at each clear; lines dropped for
+    /// the size limits keep counting).
+    pub fn number(&self, n: u64) -> u64 {
+        n.saturating_sub(self.base) + 1
+    }
+
+    pub fn number_base(&self) -> u64 {
+        self.base
     }
 
     fn seal(&mut self) {
@@ -323,6 +329,8 @@ impl Archive {
         let end = self.end();
         self.dropped += end - self.first;
         self.first = end;
+        // Line numbers start over with the next line.
+        self.base = end;
         self.blocks.clear();
         self.hot = BlockBuilder::default();
         self.mem_bytes = 0;
@@ -450,12 +458,22 @@ mod tests {
         for i in 0..2500 {
             a.push(line(i).as_ref());
         }
+        assert_eq!(a.number(2499), 2500);
         a.clear();
         assert_eq!((a.first(), a.end()), (2500, 2500));
         a.push(line(1).as_ref());
-        a.mark_cleared(7);
-        a.mark_cleared(8);
-        assert_eq!(a.end(), 2502);
-        assert_eq!(read(&a, 2500, 2502)[1].kind, KIND_CLEARED);
+        assert_eq!(a.end(), 2501);
+        // The margin numbers start over: the first line after the clear is number 1.
+        assert_eq!(a.number(2500), 1);
+    }
+
+    #[test]
+    fn numbers_keep_counting_past_dropped_blocks() {
+        let mut a = Archive::new(Limits { memory: 1, disk: 0 }, None, "t");
+        for i in 0..4500 {
+            a.push(line(i).as_ref());
+        }
+        assert_eq!(a.first(), 4000);
+        assert_eq!(a.number(4000), 4001);
     }
 }

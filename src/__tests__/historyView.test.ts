@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { COLOR_DEFAULT, COLOR_RGB, F_BOLD, F_INVERSE, KIND_CLEARED, lineKey, linesToAnsi, segments, sgr, type HistoryLine } from "../utils/historyView";
+import { COLOR_DEFAULT, COLOR_RGB, F_BOLD, F_INVERSE, KIND_CLEARED, lineKey, linesToAnsi, liveNumber, segments, sgr, type HistoryLine } from "../utils/historyView";
 
-const line = (text: string, runs: [number, number][] = [], kind = 0): HistoryLine => ({ text, runs, ts: 0, kind });
+const line = (text: string, runs: [number, number][] = [], kind = 0): HistoryLine => ({ text, runs, ts: 0, kind, no: 0 });
+
+describe("liveNumber", () => {
+  it("numbers lines from the last clear", () => {
+    expect(liveNumber(41, { base: 0 })).toBe(42);
+    // Cleared at line 1048: it is number 1 again.
+    expect(liveNumber(1048, { base: 1048 })).toBe(1);
+    expect(liveNumber(1050, { base: 1048 })).toBe(3);
+    // Before the clear: not a live line.
+    expect(liveNumber(1000, { base: 1048 })).toBeNull();
+  });
+});
 
 describe("historyView", () => {
   it("splits style segments", () => {

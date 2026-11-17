@@ -424,7 +424,7 @@ export const TerminalSearch: React.FC<{
                 className={`search-result ${fullActive?.line === m.line && fullActive.start === m.start ? "selected" : ""}`}
                 onClick={() => void revealFull(m, ++stepSeq.current)}
               >
-                <span className="search-line-no">{m.line + 1}</span>
+                <span className="search-line-no">{m.no}</span>
                 <span className="search-line-text">{snippetOf(m.ctx, m.start - m.ctxOffset, m.end - m.ctxOffset, m.ctxOffset > 0)}</span>
               </button>
             ))}

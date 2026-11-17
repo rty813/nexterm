@@ -1,6 +1,6 @@
 import type { IDisposable, Terminal } from "@xterm/xterm";
 import { backend, type HistoryQuery } from "./backend";
-import { lineKey, linesToAnsi, type HistoryInfo, type HistoryPage } from "../utils/historyView";
+import { lineKey, linesToAnsi, liveNumber, type HistoryInfo, type HistoryPage } from "../utils/historyView";
 
 /**
  * Seamless full scrollback: xterm.js holds only its recent lines (settings.scrollback),
@@ -108,7 +108,7 @@ interface LayerState {
 export interface HistoryScrollOptions {
   /** Label of the "screen cleared" marker line. */
   clearedLabel: string;
-  /** History lines just inserted: absolute buffer row, line number (1-based) and time of each. */
+  /** History lines just inserted: absolute buffer row, line number (1-based; 0: none) and time of each. */
   onInserted?: (stamps: { line: number; no: number; time: number }[]) => void;
   /** The logical line at buffer row `line` is line number `no` (1-based) of the history. */
   onAligned?: (line: number, no: number) => void;
@@ -166,6 +166,12 @@ export class HistoryScroll implements IDisposable {
         this.check();
       }),
       term.buffer.onBufferChange(() => this.check()),
+      // ESC[3J (`clear`): the backend drops the full history too. Forget what was loaded
+      // once xterm.js has trimmed its scrollback (after this chunk is parsed).
+      term.parser.registerCsiHandler({ final: "J" }, (params) => {
+        if (params[0] === 3 && term.buffer.active.type === "normal") queueMicrotask(() => !this.disposed && this.reset());
+        return false;
+      }),
     ];
     this.check();
   }
@@ -543,7 +549,8 @@ export class HistoryScroll implements IDisposable {
     const logical = this.nativeLogical(core);
     const hint = Math.max(info.first, total - logical);
     const found = await backend.historyLocate(this.paneId, sig, hint, Math.max(5000, logical * 2));
-    if (found !== null) this.opts.onAligned?.(this.segRowCount + this.nativePartial(core), found + 1);
+    const no = found === null ? null : liveNumber(found, info);
+    if (no !== null) this.opts.onAligned?.(this.segRowCount + this.nativePartial(core), no);
     return found;
   }
 
@@ -600,7 +607,7 @@ export class HistoryScroll implements IDisposable {
     const out: { line: number; no: number; time: number }[] = [];
     let row = at;
     perLine.forEach((n, k) => {
-      out.push({ line: row, no: page.first + k + 1, time: page.lines[k].ts });
+      out.push({ line: row, no: page.lines[k].no, time: page.lines[k].ts });
       row += n;
     });
     this.opts.onInserted(out);

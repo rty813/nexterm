@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatStamp, gutterChars } from "../utils/timestampGutter";
+import { clearSurvivors, formatStamp, gutterChars } from "../utils/timestampGutter";
 
 describe("timestampGutter", () => {
   it("sizes the margin for the numbers and the time", () => {
@@ -14,6 +14,24 @@ describe("timestampGutter", () => {
     const t = new Date(2026, 10, 16, 9, 5, 7, 42).getTime();
     expect(formatStamp(t, false)).toBe("09:05:07");
     expect(formatStamp(t, true)).toBe("09:05:07.042");
+  });
+
+  it("renumbers the lines a clear leaves from 1", () => {
+    const stamps = [
+      { line: 990, time: 1 },
+      { line: 1000, time: 2 },
+      { line: 1001, time: 3 },
+      { line: 1002, time: 4 },
+      // Stamped again later (after an earlier clear moved the cursor up): the later one wins.
+      { line: 1001, time: 5 },
+    ];
+    // Scrollback above row 1000 goes; rows past 1001 were blanked.
+    expect(clearSurvivors(stamps, 1000, 1001)).toEqual([
+      { line: 1000, time: 2, no: 1 },
+      { line: 1001, time: 5, no: 2 },
+    ]);
+    // `clear` erased the whole screen first: nothing is left, the prompt will be line 1.
+    expect(clearSurvivors(stamps, 1000, 999)).toEqual([]);
   });
 });
 
