@@ -1411,12 +1411,14 @@ struct Endpoint {
     pid: u32,
 }
 
-/// Where the bridge looks for the running app (Tauri's app_data_dir on Windows).
+/// Where the bridge looks for the running app: its data folder (Tauri's app_data_dir on
+/// Windows, unless storage-location.json moved it next to the exe or elsewhere).
 fn endpoint_path_for_bridge() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("NEXTERM_MCP_ENDPOINT") {
         return Some(PathBuf::from(p));
     }
-    dirs::data_dir().map(|d| d.join("com.nexterm.app").join(ENDPOINT_FILE))
+    let user_dir = dirs::data_dir()?.join("com.nexterm.app");
+    Some(crate::storage_location::data_dir_for(user_dir).join(ENDPOINT_FILE))
 }
 
 pub fn start(app: AppHandle) {

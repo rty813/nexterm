@@ -3684,6 +3684,51 @@ html.ctxmenu-host #root {
 .xserver-actions {
   margin-left: auto;
 }
+
+/* Configuration storage location (settings + startup prompt) */
+.storage-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0;
+}
+.storage-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.storage-option:hover {
+  background: var(--bg-hover);
+}
+.storage-option.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.storage-option.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.storage-option input[type="radio"] {
+  margin-top: 2px;
+  flex: none;
+}
+.storage-option > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.storage-option .mono {
+  overflow-wrap: anywhere;
+}
+.storage-current {
+  overflow-wrap: anywhere;
+}
 .hook-custom::before { background: #4fa3ff; }
 
 /* Fold markers stay visible (dim); hovering the margin shows fold-all / unfold-all. */

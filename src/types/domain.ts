@@ -235,6 +235,27 @@ export interface ThemeDefinition {
   ];
 }
 
+/** Where the configuration is stored (Rust `storage_location`). */
+export type StorageMode = "app" | "user" | "custom";
+
+export interface StorageLocationInfo {
+  mode: StorageMode;
+  /** The data folder this run uses. */
+  currentDir: string;
+  appDir: string;
+  userDir: string;
+  customPath: string;
+  askAtStartup: boolean;
+  appDirWritable: boolean;
+  firstRun: boolean;
+  fallbackError?: string | null;
+}
+
+export interface StorageApplyOutcome {
+  restartRequired: boolean;
+  keptExisting: boolean;
+}
+
 /** A font family installed on this computer (Rust `fonts::SystemFont`). */
 export interface SystemFont {
   name: string;

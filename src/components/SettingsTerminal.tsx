@@ -6,6 +6,7 @@ import { backend, type XServerStatus } from "../services/backend";
 import { autoCompleteOf, historyOf, modemOf, mouseOf, sftpOf, xserverOf } from "../utils/settingsDefaults";
 import { commandHistory } from "../utils/commandHistory";
 import { confirmAsk } from "../utils/confirm";
+import { StorageLocationSettings } from "./StorageLocation";
 
 type Props = { draft: AppSettings; onChange: (next: AppSettings) => void };
 
@@ -162,6 +163,8 @@ export const TerminalSettings: React.FC<Props & { sessions: SessionConfig[] }> =
         </div>
       )}
       <p className="adv-hint">{t("st.lockHint")}</p>
+
+      <StorageLocationSettings />
 
       <h4 className="section-heading">{t("st.ssh")}</h4>
       <Check checked={draft.reuseSshConnection !== false} onChange={(v) => set({ reuseSshConnection: v })} label={t("st.reuseSsh")} />

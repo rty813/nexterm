@@ -69,6 +69,8 @@ import { useAgentHooks } from "./hooks/useAgentHooks";
 import { compactMenu, ContextMenuProvider, type MenuItem } from "./components/ContextMenu";
 import { HostKeyDialog, ZmodemDialog } from "./components/TransferDialogs";
 import { ConfirmDialog, PasteDialog, type ConfirmAnswer, type ConfirmRequest } from "./components/ConfirmDialog";
+import { StorageLocationPrompt } from "./components/StorageLocation";
+import type { StorageLocationInfo } from "./types/domain";
 import { ShareDialog } from "./components/ShareDialog";
 import { shareStore, useShareStore } from "./services/shares";
 import { SenderPanel } from "./components/SenderPanel";
@@ -853,6 +855,12 @@ export const App: React.FC = () => {
   const [zoomedGroupId, setZoomedGroupId] = useState<string | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const isMainWindow = currentWindowLabel() === "main";
+
+  // Where to store the configuration: asked on a first run or with "ask at every startup".
+  const [storagePrompt, setStoragePrompt] = useState<StorageLocationInfo | null>(null);
+  useEffect(() => {
+    if (isMainWindow) void backend.storageLocationPrompt().then(setStoragePrompt);
+  }, [isMainWindow]);
 
   // Window options: always on top + opacity.
   useEffect(() => {
@@ -2925,6 +2933,7 @@ export const App: React.FC = () => {
           }}
         />
       )}
+      {storagePrompt && <StorageLocationPrompt info={storagePrompt} onClose={() => setStoragePrompt(null)} />}
 
       {myAiRequests.length > 0 &&
         (() => {

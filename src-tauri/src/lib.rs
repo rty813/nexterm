@@ -26,6 +26,7 @@ pub mod sftp;
 pub mod shell_integration;
 pub mod ssh_conn;
 pub mod storage;
+pub mod storage_location;
 pub mod sync;
 pub mod tcp_conn;
 pub mod telnet_conn;
@@ -589,6 +590,39 @@ fn open_external(url: String) -> Result<(), String> {
         let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
         std::process::Command::new(opener).arg(&url).spawn().map(|_| ()).map_err(|e| e.to_string())
     }
+}
+
+/// Where the configuration is stored (program folder, user folder or a chosen one).
+#[tauri::command]
+fn storage_location_info() -> Option<crate::storage_location::StorageLocationInfo> {
+    crate::storage_location::info()
+}
+
+/// The storage chooser to show at startup, if any (once per run).
+#[tauri::command]
+fn storage_location_prompt() -> Option<crate::storage_location::StorageLocationInfo> {
+    crate::storage_location::startup_prompt()
+}
+
+/// Save where the configuration is stored; copies it there when `migrate` and the new
+/// folder has none. A changed folder takes effect after `restart_app`.
+#[tauri::command]
+async fn set_storage_location(
+    mode: crate::storage_location::StorageMode,
+    path: String,
+    ask_at_startup: bool,
+    migrate: bool,
+) -> Result<crate::storage_location::ApplyOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::storage_location::apply(mode, &path, ask_at_startup, migrate))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Restart the app (after the storage folder changed).
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    crate::xserver::stop();
+    app.request_restart();
 }
 
 /// Newest GitHub release compared with this build.
@@ -1536,10 +1570,12 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let data_dir = app
+            let user_dir = app
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::env::current_dir().unwrap().join("data"));
+            // Program folder, user folder or a chosen one (storage-location.json).
+            let data_dir = crate::storage_location::init(user_dir);
             notify::init(&data_dir);
             crate::app_paths::init(
                 app.path().resource_dir().unwrap_or_else(|_| crate::app_paths::resource_dir()),
@@ -1669,6 +1705,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             check_update,
+            storage_location_info,
+            storage_location_prompt,
+            set_storage_location,
+            restart_app,
             config_export,
             config_inspect,
             config_import,

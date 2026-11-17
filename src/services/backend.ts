@@ -28,6 +28,9 @@ import type {
   SyncOutcome,
   SyncSettings,
   SyncStateInfo,
+  StorageApplyOutcome,
+  StorageLocationInfo,
+  StorageMode,
   SystemFont,
   UpdateInfo,
 } from "../types/domain";
@@ -1388,6 +1391,27 @@ export const backend = {
   },
 
   /** Compare this build with the newest GitHub release (throws when offline / outside Tauri). */
+  /** Where the configuration is stored (null outside Tauri). */
+  async storageLocationInfo(): Promise<StorageLocationInfo | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke<StorageLocationInfo | null>("storage_location_info");
+  },
+
+  /** The storage chooser to show at startup (first run / "ask at startup"), once per run. */
+  async storageLocationPrompt(): Promise<StorageLocationInfo | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke<StorageLocationInfo | null>("storage_location_prompt").catch(() => null);
+  },
+
+  async setStorageLocation(mode: StorageMode, path: string, askAtStartup: boolean, migrate: boolean): Promise<StorageApplyOutcome> {
+    return invoke<StorageApplyOutcome>("set_storage_location", { mode, path, askAtStartup, migrate });
+  },
+
+  async restartApp(): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("restart_app");
+  },
+
   async checkUpdate(): Promise<UpdateInfo> {
     if (!isTauriRuntime()) throw new Error("not in Tauri");
     return invoke<UpdateInfo>("check_update");
