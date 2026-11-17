@@ -22,6 +22,7 @@ Windows 10 / 11 only. Current version: `0.1.4`.
 ### Connections
 
 - **SSH** (`russh`): Password, `keyboard-interactive`, and private-key auth (OpenSSH / PEM, Ed25519 / RSA, passphrase support), ProxyJump, keep-alive, post-login scripts, and first-connect host key verification.
+- **Anti-Idle**: After a set number of seconds without input, a session sends a string (`\0` by default; escapes such as `\n` and `\xHH` work) so servers that log out inactive users (`TMOUT`, `autologout`, `exec-timeout`) keep you in. SSH keep-alives cannot do this. The timer runs in the backend, so it keeps working while the window is minimized, and it holds off while a full-screen program (vim, top …) or a command is running. Works with every protocol; turn it on under **More** in the session settings.
 - **Local & Hardware Protocols**: Native ConPTY local shells (PowerShell / CMD / WSL / custom commands), Telnet, raw TCP, and Serial ports.
 - **Shell Integration**: Automatically tracks prompts, commands, and working directories (OSC 133 / 633 / 7) in SSH `bash` / `zsh` / `fish` and local `PowerShell`. The context menu's **Load shell integration** installs scripts and startup configuration for the current `bash` / `zsh` / `fish` user, taking effect immediately and in future sessions, including WSL, SSH, nested shells, and serial consoles. Existing startup files are backed up as `.nexterm-si.bak` before changes.
 - **Forwarding & In-Band Transfers**: Port forwarding, one-click X11 forwarding via bundled VcXsrv, **ZMODEM / XMODEM / YMODEM** transfers, and session logging.
@@ -100,7 +101,7 @@ Patterns recognized in terminal output, like WindTerm's triggers. Every match on
 ### Config Sync & Backup
 
 - **Cloud Sync Across PCs**: Under **Settings → Sync & Backup**, sync sessions, quick commands, custom themes, settings, senders, and command history to **S3-compatible storage** (AWS S3, Cloudflare R2, MinIO, Aliyun OSS, Tencent COS, ...), **WebDAV** (Nextcloud, Synology, Jianguoyun, ...), a **GitHub Gist** (secret, with revision history), or a **local / network folder** (OneDrive, Dropbox, SMB shares, ...). Optional auto sync at startup and on an interval.
-- **Conflict Handling & Machine-Local Settings**: Detects whether to upload or download; when both sides changed, choose to merge (by ID), keep local, or keep remote. Each PC keeps its own sync target, log folder, X server, and remote access settings.
+- **Conflict Handling & Machine-Local Settings**: Detects whether to upload or download; when both sides changed, choose to merge (by ID), keep local, or keep remote. Each PC keeps its own sync target, log folder, X server, and remote access on/off and read-only switches; the relay address and token are synced.
 - **Encrypted Export / Import**: Export selected categories to a single JSON file, optionally password-protected (PBKDF2 + AES-256-GCM), and import by merging or replacing. The current config is backed up to `backups/` in the data folder before every import or download (last 10 kept).
 
 ### Other

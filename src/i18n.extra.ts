@@ -243,7 +243,7 @@ const SFTP_EN: typeof SFTP_ZH = {
 /** Settings > Sync & Backup (SettingsSync). */
 const CFG_SYNC_ZH = {
   title: "配置同步",
-  hint: "把会话、快速命令、主题和设置保存到云存储，在多台电脑之间保持一致。各电脑的同步目标、日志目录、X 服务器和远程访问设置不会被同步。",
+  hint: "把会话、快速命令、主题和设置保存到云存储，在多台电脑之间保持一致。各电脑的同步目标、日志目录、X 服务器以及远程访问的开关和只读选项不会被同步；中继地址和令牌会同步。",
   lastSync: "上次同步：{{time}}（{{result}}）",
   neverSynced: "还没有同步过",
   provider: "同步位置",
@@ -366,7 +366,7 @@ const CFG_SYNC_ZH = {
 
 const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
   title: "Config Sync",
-  hint: "Keep sessions, quick commands, themes and settings in cloud storage and the same on all your computers. Each computer keeps its own sync target, log folder, X server and remote access settings.",
+  hint: "Keep sessions, quick commands, themes and settings in cloud storage and the same on all your computers. Each computer keeps its own sync target, log folder, X server and remote access switches (on/off, read-only); the relay address and token are synced.",
   lastSync: "Last sync: {{time}} ({{result}})",
   neverSynced: "Never synced",
   provider: "Sync to",

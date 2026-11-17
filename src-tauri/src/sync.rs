@@ -48,7 +48,10 @@ pub const CATEGORIES: &[(&str, &[&str])] = &[
 ];
 
 /// Settings that belong to this computer: never exported, kept when importing.
-const LOCAL_SETTING_KEYS: &[&str] = &["sync", "remote", "logDir", "zmodemDownloadDir", "xserver"];
+const LOCAL_SETTING_KEYS: &[&str] = &["sync", "logDir", "zmodemDownloadDir", "xserver"];
+/// Remote access: the relay (address + token) is shared, the rest (`enabled`, `readOnly`) stays local.
+/// The pairing secret lives in `remote_pairing.json` and is never synced.
+const REMOTE_KEY: &str = "remote";
 
 /// Error codes the frontend translates (`sync.err.<code>`).
 pub mod code {
@@ -176,11 +179,30 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
+/// `relayUrl` + `hostToken` of `settings.remote`; none without a relay address.
+fn shared_remote(settings: &Value) -> Option<Map<String, Value>> {
+    let remote = settings.get(REMOTE_KEY)?;
+    let url = remote.get("relayUrl").and_then(Value::as_str).unwrap_or("").trim();
+    if url.is_empty() {
+        return None;
+    }
+    let token = remote.get("hostToken").and_then(Value::as_str).unwrap_or("");
+    let mut out = Map::new();
+    out.insert("relayUrl".into(), Value::String(url.into()));
+    out.insert("hostToken".into(), Value::String(token.into()));
+    Some(out)
+}
+
 fn strip_local_settings(value: &mut Value) {
+    let shared = shared_remote(value);
     if let Some(obj) = value.as_object_mut() {
         for key in LOCAL_SETTING_KEYS {
             obj.remove(*key);
         }
+        match shared {
+            Some(r) => obj.insert(REMOTE_KEY.into(), Value::Object(r)),
+            None => obj.remove(REMOTE_KEY),
+        };
     }
 }
 
@@ -365,7 +387,8 @@ pub fn merge_lists(local: &Value, incoming: &Value) -> Value {
     Value::Array(out)
 }
 
-/// Incoming settings on top of local ones; this computer's own keys always stay local.
+/// Incoming settings on top of local ones; this computer's own keys always stay local,
+/// and of `remote` only the relay comes in (an incoming one without an address changes nothing).
 pub fn merge_settings(local: &Value, incoming: &Value, mode: ImportMode) -> Value {
     let local_obj = local.as_object().cloned().unwrap_or_default();
     let mut out = match mode {
@@ -373,7 +396,7 @@ pub fn merge_settings(local: &Value, incoming: &Value, mode: ImportMode) -> Valu
         ImportMode::Replace => Map::new(),
     };
     for (k, v) in incoming.as_object().into_iter().flatten() {
-        if !LOCAL_SETTING_KEYS.contains(&k.as_str()) {
+        if !LOCAL_SETTING_KEYS.contains(&k.as_str()) && k != REMOTE_KEY {
             out.insert(k.clone(), v.clone());
         }
     }
@@ -383,6 +406,16 @@ pub fn merge_settings(local: &Value, incoming: &Value, mode: ImportMode) -> Valu
             None => out.remove(*key),
         };
     }
+    let mut remote = local_obj.get(REMOTE_KEY).cloned();
+    if let Some(shared) = shared_remote(incoming) {
+        let mut r = remote.and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        r.extend(shared);
+        remote = Some(Value::Object(r));
+    }
+    match remote {
+        Some(v) => out.insert(REMOTE_KEY.into(), v),
+        None => out.remove(REMOTE_KEY),
+    };
     Value::Object(out)
 }
 
@@ -1100,6 +1133,40 @@ mod tests {
         assert_eq!(merged, json!({ "fontSize": 16, "sync": { "provider": "s3" }, "logDir": "D:/logs", "keep": 1 }));
         let replaced = merge_settings(&local, &incoming, ImportMode::Replace);
         assert_eq!(replaced, json!({ "fontSize": 16, "sync": { "provider": "s3" }, "logDir": "D:/logs" }));
+    }
+
+    #[test]
+    fn settings_share_only_the_relay() {
+        let mut exported = json!({
+            "fontSize": 12,
+            "remote": { "enabled": true, "readOnly": true, "relayUrl": " https://r.example.com ", "hostToken": "t1" }
+        });
+        strip_local_settings(&mut exported);
+        assert_eq!(exported, json!({ "fontSize": 12, "remote": { "relayUrl": "https://r.example.com", "hostToken": "t1" } }));
+
+        let mut no_relay = json!({ "remote": { "enabled": true, "relayUrl": "", "hostToken": "t" } });
+        strip_local_settings(&mut no_relay);
+        assert_eq!(no_relay, json!({}));
+
+        // The relay comes in; this computer's switches stay.
+        let local = json!({ "remote": { "enabled": false, "readOnly": true, "relayUrl": "https://old", "hostToken": "old" } });
+        for mode in [ImportMode::Merge, ImportMode::Replace] {
+            let merged = merge_settings(&local, &exported, mode);
+            assert_eq!(
+                merged["remote"],
+                json!({ "enabled": false, "readOnly": true, "relayUrl": "https://r.example.com", "hostToken": "t1" })
+            );
+        }
+        // The token belongs to the relay: a missing one clears the old.
+        let incoming = json!({ "remote": { "enabled": true, "relayUrl": "https://new" } });
+        let merged = merge_settings(&local, &incoming, ImportMode::Merge);
+        assert_eq!(merged["remote"], json!({ "enabled": false, "readOnly": true, "relayUrl": "https://new", "hostToken": "" }));
+        // No relay incoming: local remote kept as is, or still absent.
+        assert_eq!(merge_settings(&local, &json!({}), ImportMode::Replace)["remote"], local["remote"]);
+        assert!(merge_settings(&json!({}), &json!({ "remote": { "enabled": true } }), ImportMode::Merge).get("remote").is_none());
+        // A computer without remote settings gets the relay, still switched off.
+        let fresh = merge_settings(&json!({}), &exported, ImportMode::Merge);
+        assert_eq!(fresh["remote"], json!({ "relayUrl": "https://r.example.com", "hostToken": "t1" }));
     }
 
     #[test]
