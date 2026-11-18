@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentHooks";
 import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
-import { X } from "lucide-react";
+import { Globe, Highlighter, Keyboard, Monitor, Mouse, PanelTop, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
 import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
@@ -15,6 +15,20 @@ import { SyncSettingsEditor } from "./SettingsSync";
 import { useCloseGuard } from "./useCloseGuard";
 import { FontFamilyField } from "./FontFamilyField";
 
+const settingsSections = [
+  { id: "general", icon: Settings2 },
+  { id: "terminal", icon: TerminalSquare },
+  { id: "mouse", icon: Mouse },
+  { id: "logs", icon: ScrollText },
+  { id: "xserver", icon: Monitor },
+  { id: "remote", icon: Globe },
+  { id: "sync", icon: RefreshCw },
+  { id: "highlight", icon: Highlighter },
+  { id: "triggers", icon: Zap },
+  { id: "keys", icon: Keyboard },
+  { id: "toolbar", icon: PanelTop },
+] as const;
+
 interface SettingsModalProps {
   settings: AppSettings;
   themes: ThemeDefinition[];
@@ -22,6 +36,7 @@ interface SettingsModalProps {
   onSave: (next: AppSettings) => void;
   /** Open on a given tab (e.g. "toolbar" from the toolbar's context menu). */
   initialTab?: SettingsTab;
+  navigationVersion?: number;
   /** Saved sessions, for "open at startup". */
   sessions?: SessionConfig[];
   /** Install / remove the Claude Code and Codex status hooks on this computer. */
@@ -39,6 +54,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onSave,
   initialTab = "general",
+  navigationVersion = 0,
   onAgentHooksLocal,
   localHookStatus,
   onTestNotification,
@@ -54,6 +70,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   useEffect(() => refreshHooks(), []);
   const hooksOn = anyInstalled(hookStatus);
   const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const settingsId = useId();
+  const navigation = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLFormElement>(null);
+  useEffect(() => setTab(initialTab), [initialTab, navigationVersion]);
+  useEffect(() => {
+    navigation.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (content.current) content.current.scrollTop = 0;
+  }, [tab]);
   const { t } = useTranslation();
   const [draft, setDraft] = useState<AppSettings>({
     ...settings,
@@ -64,25 +88,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return (
     <div className="modal-backdrop" onMouseDown={requestClose}>
-      <div className="modal-panel modal-lg settings-panel" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="modal-panel modal-lg settings-panel" role="dialog" aria-modal="true" aria-labelledby={`${settingsId}-title`} onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3>{t("settingsModal.title")}</h3>
-          <button type="button" className="icon-btn" onClick={requestClose}>
+          <h3 id={`${settingsId}-title`}>{t("settingsModal.title")}</h3>
+          <button type="button" className="icon-btn" aria-label={t("settingsModal.cancel")} onClick={requestClose}>
             <X size={16} />
           </button>
         </div>
         {prompt}
 
-        <div className="adv-tabs settings-tabs">
-          {(["general", "terminal", "mouse", "logs", "xserver", "remote", "sync", "highlight", "triggers", "keys", "toolbar"] as const).map((id) => (
-            <button key={id} type="button" className={`adv-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
+        <div className="settings-layout">
+        <div ref={navigation} className="adv-tabs settings-tabs" role="tablist" aria-label={t("settingsModal.title")} aria-orientation="vertical" onKeyDown={(event) => {
+          if (event.altKey || event.ctrlKey || event.metaKey) return;
+          const currentIndex = settingsSections.findIndex(section => section.id === tab);
+          let nextIndex: number;
+          switch (event.key) {
+            case "ArrowDown": nextIndex = (currentIndex + 1) % settingsSections.length; break;
+            case "ArrowUp": nextIndex = (currentIndex + settingsSections.length - 1) % settingsSections.length; break;
+            case "Home": nextIndex = 0; break;
+            case "End": nextIndex = settingsSections.length - 1; break;
+            default: return;
+          }
+          event.preventDefault();
+          setTab(settingsSections[nextIndex].id);
+          event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]?.focus();
+        }}>
+          {settingsSections.map(({ id, icon: Icon }) => (
+            <button key={id} id={`${settingsId}-${id}`} type="button" role="tab" aria-selected={tab === id} aria-controls={`${settingsId}-panel`} tabIndex={tab === id ? 0 : -1} className={`adv-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
+              <Icon size={16} aria-hidden="true" />
+              <span>
               {t(`settingsModal.tab.${id}`)}
+              </span>
             </button>
           ))}
         </div>
 
         <form
+          ref={content}
+          id={`${settingsId}-panel`}
           className="modal-body"
+          role="tabpanel"
+          aria-labelledby={`${settingsId}-${tab}`}
+          tabIndex={0}
           onSubmit={(e) => {
             e.preventDefault();
             onSave(draft);
@@ -463,6 +510,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </button>
           </div>
         </form>
+        </div>
       </div>
     </div>
   );
