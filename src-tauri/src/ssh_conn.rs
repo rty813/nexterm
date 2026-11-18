@@ -804,13 +804,51 @@ fn map_connect_error(err: russh::Error, host: &str, port: u16) -> anyhow::Error 
     }
 }
 
+/// russh 的默认算法加上旧设备（防火墙、交换机等）常用的 SHA-1 / NIST ECDH 密钥交换、CBC 加密和 hmac-sha1。
+/// 旧算法排在最后：协商取客户端列表里第一个双方都支持的，新服务器仍会选到安全算法。
+fn compat_preferred() -> russh::Preferred {
+    use russh::{cipher, kex, mac};
+    let base = russh::Preferred::DEFAULT;
+    let is_ext = |n: &kex::Name| {
+        [
+            kex::EXTENSION_SUPPORT_AS_CLIENT,
+            kex::EXTENSION_SUPPORT_AS_SERVER,
+            kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
+            kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
+        ]
+        .contains(n)
+    };
+    let mut kexes: Vec<kex::Name> = base.kex.iter().copied().filter(|n| !is_ext(n)).collect();
+    kexes.extend([
+        kex::ECDH_SHA2_NISTP256,
+        kex::ECDH_SHA2_NISTP384,
+        kex::ECDH_SHA2_NISTP521,
+        kex::DH_G14_SHA1,
+        kex::DH_GEX_SHA1,
+        kex::DH_G1_SHA1,
+    ]);
+    kexes.extend(base.kex.iter().copied().filter(|n| is_ext(n)));
+
+    let mut ciphers = base.cipher.to_vec();
+    ciphers.extend([cipher::AES_128_GCM, cipher::AES_256_CBC, cipher::AES_192_CBC, cipher::AES_128_CBC]);
+    let mut macs = base.mac.to_vec();
+    macs.extend([mac::HMAC_SHA1_ETM, mac::HMAC_SHA1]);
+
+    russh::Preferred {
+        kex: kexes.into(),
+        cipher: ciphers.into(),
+        mac: macs.into(),
+        ..base
+    }
+}
+
 async fn establish_ssh_session(
     instance_id: &str,
     session: &SessionConfig,
     sink: &Arc<dyn TerminalSink>,
     x11: Option<Arc<X11Target>>,
 ) -> Result<Established> {
-    let mut cfg = client::Config::default();
+    let mut cfg = client::Config { preferred: compat_preferred(), ..Default::default() };
     if session.keep_alive_secs > 0 {
         cfg.keepalive_interval = Some(Duration::from_secs(session.keep_alive_secs));
         cfg.keepalive_max = 3;
@@ -1014,6 +1052,25 @@ mod exec_wrap_tests {
         let w = super::posix_wrap("if [ -f x ]; then echo 'a'; fi");
         assert!(w.starts_with("echo ") && w.ends_with(" | base64 -d | sh"));
         assert!(!w[5..w.len() - 18].contains(|c: char| " ;'\"$&|<>".contains(c)));
+    }
+}
+
+#[cfg(test)]
+mod algorithm_tests {
+    use russh::{cipher, kex, mac};
+
+    #[test]
+    fn legacy_algorithms_follow_the_safe_defaults() {
+        let p = super::compat_preferred();
+        let pos = |n: kex::Name| p.kex.iter().position(|k| *k == n).unwrap();
+        // 安全算法仍然优先，旧算法排在后面，扩展标记仍在末尾
+        assert_eq!(p.kex[0], russh::Preferred::DEFAULT.kex[0]);
+        assert!(pos(kex::DH_G14_SHA256) < pos(kex::ECDH_SHA2_NISTP256));
+        assert!(pos(kex::DH_G1_SHA1) < pos(kex::EXTENSION_SUPPORT_AS_CLIENT));
+        assert!(p.cipher.contains(&cipher::AES_128_CBC));
+        assert!(p.mac.contains(&mac::HMAC_SHA1));
+        assert_eq!(p.cipher[0], russh::Preferred::DEFAULT.cipher[0]);
+        assert_eq!(p.mac[0], russh::Preferred::DEFAULT.mac[0]);
     }
 }
 
