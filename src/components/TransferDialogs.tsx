@@ -6,6 +6,8 @@ import {
   currentWindowLabel,
   isTauriRuntime,
   type HostKeyPromptPayload,
+  type ZmodemConflictAnswer,
+  type ZmodemConflictPayload,
   type ZmodemProgressPayload,
   type ZmodemRequestPayload,
 } from "../services/backend";
@@ -82,12 +84,50 @@ export const HostKeyDialog: React.FC<{ labelFor: (instanceId: string) => string;
   );
 };
 
+const ReceiveConflict: React.FC<{ conflict: ZmodemConflictPayload }> = ({ conflict }) => {
+  const { t } = useTranslation();
+  const [name, setName] = useState(conflict.suggestedName);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const answer = async (choice: ZmodemConflictAnswer) => {
+    setBusy(true);
+    setError("");
+    try {
+      await backend.zmodemAnswer(conflict.instanceId, conflict.requestId, choice);
+    } catch (cause) {
+      setError(String(cause));
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <p className="zmodem-text">{t("zmodem.exists", { path: conflict.path })}</p>
+      <label>
+        {t("zmodem.newName")}
+        <input className="text-input" value={name} disabled={busy} onChange={(event) => setName(event.target.value)} />
+      </label>
+      {error && <p className="zmodem-text warn" role="alert">{error}</p>}
+      <div className="zmodem-actions">
+        <button type="button" className="btn-ghost btn-sm" disabled={busy} onClick={() => void answer({ action: "cancel" })}>
+          {t("zmodem.cancel")}
+        </button>
+        <button type="button" className="btn-secondary btn-sm" disabled={busy || !conflict.canOverwrite} onClick={() => void answer({ action: "overwrite" })}>
+          {t("zmodem.overwrite")}
+        </button>
+        <button type="button" className="btn-primary btn-sm" disabled={busy || !name.trim()} onClick={() => void answer({ action: "rename", name })}>
+          {t("zmodem.rename")}
+        </button>
+      </div>
+    </>
+  );
+};
+
 interface TransferView {
   instanceId: string;
   direction: "receive" | "send";
-  /** ask: waiting for the user (no system dialogs, or the dialog failed); staging: copying dropped files. */
-  phase: "ask" | "staging" | "running" | "finished";
+  phase: "ask" | "staging" | "running" | "conflict" | "finished";
   progress?: ZmodemProgressPayload;
+  conflict?: ZmodemConflictPayload;
   /** Dropped files being copied: bytes done / total. */
   staged?: { done: number; total: number };
   /** Temporary folder of dropped files, removed when the transfer ends. */
@@ -101,11 +141,6 @@ function fmtBytes(n = 0): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-/**
- * ZModem: when the remote runs `rz` / `sz`, ask for the files to send / the folder to
- * save in right away (system dialog), or send the files dropped on that terminal; then
- * show the progress.
- */
 export const ZmodemDialog: React.FC<{
   labelFor: (instanceId: string) => string;
   owns: (instanceId: string) => boolean;
@@ -116,8 +151,7 @@ export const ZmodemDialog: React.FC<{
   const [views, setViews] = useState<Record<string, TransferView>>({});
   const ownsRef = React.useRef(owns);
   ownsRef.current = owns;
-  const dirRef = React.useRef({ downloadDir, onDownloadDirChange });
-  dirRef.current = { downloadDir, onDownloadDirChange };
+  const startingReceives = React.useRef(new Set<string>());
 
   const put = (id: string, patch: Partial<TransferView>) =>
     setViews((v) => (v[id] ? { ...v, [id]: { ...v[id], ...patch } } : v));
@@ -162,17 +196,21 @@ export const ZmodemDialog: React.FC<{
     await backend.zmodemStart(id, files, null);
   };
 
-  /** sz: pick the folder to save in now (starts at the last one). */
   const startReceive = async (id: string) => {
-    const dir = await backend.pickDirectory(t("zmodem.saveTo"), dirRef.current.downloadDir);
-    if (!dir) return refuse(id);
-    if (dir !== dirRef.current.downloadDir) dirRef.current.onDownloadDirChange(dir);
+    if (startingReceives.current.has(id)) return;
+    startingReceives.current.add(id);
     put(id, { phase: "running" });
-    await backend.zmodemStart(id, [], dir);
+    try {
+      await backend.zmodemStart(id, [], downloadDir || null);
+    } catch (error) {
+      put(id, { phase: "finished", progress: { instanceId: id, state: "error", message: String(error) } });
+    } finally {
+      startingReceives.current.delete(id);
+    }
   };
 
-  const startRef = React.useRef({ startSend, startReceive });
-  startRef.current = { startSend, startReceive };
+  const startSendRef = React.useRef(startSend);
+  startSendRef.current = startSend;
 
   useEffect(() => {
     // Files dropped before a crash or quit.
@@ -180,18 +218,18 @@ export const ZmodemDialog: React.FC<{
     const un1 = backend.onZmodemRequest((p: ZmodemRequestPayload) => {
       if (!ownsRef.current(p.instanceId)) return;
       setViews((v) => ({ ...v, [p.instanceId]: { instanceId: p.instanceId, direction: p.direction, phase: "ask" } }));
-      // Desktop: straight to the system dialog (or the dropped files); the card shows progress.
-      if (!isTauriRuntime()) return;
-      const run = p.direction === "send" ? startRef.current.startSend : startRef.current.startReceive;
-      void run(p.instanceId).catch(() => undefined);
+      if (p.direction === "send" && isTauriRuntime()) {
+        void startSendRef.current(p.instanceId).catch(() => undefined);
+      }
     });
     const un2 = backend.onZmodemProgress((p) =>
       setViews((v) => {
         const cur = v[p.instanceId];
         if (!cur) return v;
+        if (p.state === "conflict") return { ...v, [p.instanceId]: { ...cur, phase: "conflict", conflict: p } };
         const phase = p.state === "running" ? "running" : "finished";
         if (phase === "finished" && cur.dropToken) void backend.zmodemUnstage(cur.dropToken);
-        return { ...v, [p.instanceId]: { ...cur, phase, progress: p } };
+        return { ...v, [p.instanceId]: { ...cur, phase, progress: p, conflict: undefined } };
       })
     );
     return () => {
@@ -245,7 +283,7 @@ export const ZmodemDialog: React.FC<{
                       className="icon-btn-xs"
                       title={t("zmodem.changeDir")}
                       onClick={async () => {
-                        const dir = await backend.pickDirectory(t("zmodem.changeDir"));
+                        const dir = await backend.pickDirectory(t("zmodem.changeDir"), downloadDir);
                         if (dir) onDownloadDirChange(dir);
                       }}
                     >
@@ -278,6 +316,8 @@ export const ZmodemDialog: React.FC<{
                 </div>
               </>
             )}
+
+            {view.phase === "conflict" && view.conflict && <ReceiveConflict key={view.conflict.requestId} conflict={view.conflict} />}
 
             {view.phase === "running" && (
               <>

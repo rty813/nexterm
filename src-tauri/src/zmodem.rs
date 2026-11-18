@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::fs::File;
+use std::io::ErrorKind;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -122,6 +123,72 @@ impl From<std::io::Error> for ZError {
 }
 
 type ZResult<T> = Result<T, ZError>;
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+pub enum ConflictAnswer {
+    Overwrite,
+    Rename { name: String },
+    Cancel,
+}
+
+pub fn valid_receive_name(name: &str) -> bool {
+    let device = name.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    !name.is_empty() && !name.ends_with([' ', '.'])
+        && !name.chars().any(|ch| ch.is_control() || r#"/\<>:"|?*"#.contains(ch))
+        && !matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        && !device.strip_prefix("COM").or_else(|| device.strip_prefix("LPT"))
+            .is_some_and(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
+}
+
+type AskConflict<'a> = dyn FnMut(&Path, &str, bool) -> ZResult<ConflictAnswer> + 'a;
+
+struct ReceiveTarget {
+    path: PathBuf,
+    overwrite: bool,
+}
+
+impl ReceiveTarget {
+    fn choose(dir: &Path, mut name: String, ask: &mut AskConflict<'_>) -> ZResult<Self> {
+        loop {
+            if !valid_receive_name(&name) {
+                return Err(ZError::Protocol("无效的接收文件名".into()));
+            }
+            let path = dir.join(&name);
+            let metadata = match path.symlink_metadata() {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Self { path, overwrite: false }),
+                Err(error) => return Err(error.into()),
+            };
+            let suggested = suggested_name(dir, &name)?;
+            match ask(&path, &suggested, metadata.is_file())? {
+                ConflictAnswer::Overwrite if metadata.is_file() => return Ok(Self { path, overwrite: true }),
+                ConflictAnswer::Overwrite => return Err(ZError::Protocol("只能覆盖普通文件".into())),
+                ConflictAnswer::Rename { name: new_name } => name = new_name,
+                ConflictAnswer::Cancel => return Err(ZError::Cancelled),
+            }
+        }
+    }
+
+    fn save(mut self, file: tempfile::NamedTempFile, ask: &mut AskConflict<'_>) -> ZResult<PathBuf> {
+        let mut temp = file.into_temp_path();
+        loop {
+            if self.overwrite {
+                temp.persist(&self.path).map_err(|err| err.error)?;
+                return Ok(self.path);
+            }
+            match temp.persist_noclobber(&self.path) {
+                Ok(()) => return Ok(self.path),
+                Err(err) if err.error.kind() == ErrorKind::AlreadyExists => {
+                    temp = err.path;
+                    let name = self.path.file_name().unwrap().to_string_lossy().into_owned();
+                    self = Self::choose(self.path.parent().unwrap(), name, ask)?;
+                }
+                Err(err) => return Err(err.error.into()),
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------- CRC
 
@@ -503,13 +570,15 @@ impl Transfer {
     // ------------------------------------------------------------ receive
 
     /// Receive every file the remote `sz` sends into `dir`. Returns the saved paths.
-    pub fn receive(&mut self, dir: &Path) -> ZResult<Vec<PathBuf>> {
+    pub fn receive(
+        &mut self, dir: &Path, mut ask: impl FnMut(&Path, &str, bool) -> ZResult<ConflictAnswer>,
+    ) -> ZResult<Vec<PathBuf>> {
         std::fs::create_dir_all(dir)?;
         let zrinit = hex_header(Header::new(ZRINIT, [0, 0, 0, CANFDX | CANOVIO | CANFC32]));
         self.send(&zrinit);
         let mut last_zrinit = Instant::now();
         let mut saved = Vec::new();
-        let mut current: Option<(File, PathBuf, String, u64)> = None; // file, path, name, size
+        let mut current: Option<(tempfile::NamedTempFile, ReceiveTarget, String, u64)> = None;
         let mut offset: u64 = 0;
         let mut index = 0usize;
         let mut retries = 0;
@@ -550,20 +619,19 @@ impl Transfer {
                         self.send(&hex_header(Header::new(ZNAK, [0; 4])));
                         continue;
                     };
-                    if let Some((_, path, name, _)) = &current {
+                    if let Some((_, _, name, _)) = &current {
                         // Duplicate ZFILE for the file we already opened: just resync.
                         if offset == 0 && file_name_of(&info) == *name {
-                            let _ = path;
                             self.send(&hex_header(Header::pos(ZRPOS, 0)));
                             continue;
                         }
                     }
                     let name = file_name_of(&info);
                     let size = file_size_of(&info);
-                    let path = unique_path(dir, &name);
-                    let file = File::create(&path)?;
+                    let target = ReceiveTarget::choose(dir, name.clone(), &mut ask)?;
+                    let file = tempfile::NamedTempFile::new_in(dir)?;
                     index += 1;
-                    current = Some((file, path, name.clone(), size));
+                    current = Some((file, target, name.clone(), size));
                     offset = 0;
                     self.report(
                         Progress { file_name: name, file_index: index, file_count: 0, transferred: 0, total: size },
@@ -607,9 +675,9 @@ impl Transfer {
                 }
                 ZEOF => {
                     if current.is_some() && h.position() as u64 == offset {
-                        let (mut file, path, name, size) = current.take().unwrap();
+                        let (mut file, target, name, size) = current.take().unwrap();
                         file.flush()?;
-                        drop(file);
+                        let path = target.save(file, &mut ask)?;
                         self.report(
                             Progress { file_name: name, file_index: index, file_count: 0, transferred: offset, total: size.max(offset) },
                             true,
@@ -625,9 +693,6 @@ impl Transfer {
                         if self.peek(Duration::from_millis(500)) == Some(b'O') {
                             self.buf.pop_front();
                         }
-                    }
-                    if let Some((_, path, _, _)) = current.take() {
-                        let _ = std::fs::remove_file(path);
                     }
                     return Ok(saved);
                 }
@@ -876,13 +941,28 @@ pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
     if !first.exists() {
         return first;
     }
-    let p = Path::new(name);
-    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| name.into());
-    let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-    for i in 1.. {
-        let candidate = dir.join(format!("{} ({}){}", stem, i, ext));
+    for numbered in numbered_names(name) {
+        let candidate = dir.join(numbered);
         if !candidate.exists() {
             return candidate;
+        }
+    }
+    unreachable!()
+}
+
+fn numbered_names(name: &str) -> impl Iterator<Item = String> + '_ {
+    let path = Path::new(name);
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or(name);
+    let ext = path.extension().map(|ext| format!(".{}", ext.to_string_lossy())).unwrap_or_default();
+    (1u64..).map(move |index| format!("{stem} ({index}){ext}"))
+}
+
+fn suggested_name(dir: &Path, name: &str) -> std::io::Result<String> {
+    for candidate in numbered_names(name) {
+        match dir.join(&candidate).symlink_metadata() {
+            Ok(_) => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => return Err(error),
         }
     }
     unreachable!()
@@ -916,6 +996,87 @@ mod tests {
         assert_eq!((off, dir), (5, Direction::Send));
     }
 
+    fn receive_fixture(
+        dir: &Path, finish: bool, ask: impl FnMut(&Path, &str, bool) -> ZResult<ConflictAnswer>,
+    ) -> ZResult<Vec<PathBuf>> {
+        let mut wire = bin_header(Header::new(ZFILE, [0; 4]), true);
+        wire.extend(subpacket(b"log.txt\x003", ZCRCW, true));
+        wire.extend(bin_header(Header::pos(ZDATA, 0), true));
+        wire.extend(subpacket(b"new", ZCRCE, true));
+        if finish {
+            wire.extend(bin_header(Header::pos(ZEOF, 3), true));
+            wire.extend(bin_header(Header::pos(ZFIN, 0), true));
+            wire.extend(b"OO");
+        } else {
+            wire.extend(bin_header(Header::pos(ZABORT, 0), true));
+        }
+        let (_, receiver) = mpsc::channel();
+        Transfer::new(receiver, wire, Box::new(|_| {}), Arc::default(), Box::new(|_| {})).receive(dir, ask)
+    }
+
+    #[test]
+    fn receive_overwrites_only_on_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.txt");
+        std::fs::write(&path, b"old").unwrap();
+        let overwrite = |existing: &Path, _: &str, allowed: bool| {
+            assert_eq!(existing, path);
+            assert!(allowed);
+            assert_eq!(std::fs::read(existing).unwrap(), b"old");
+            Ok(ConflictAnswer::Overwrite)
+        };
+        assert!(matches!(receive_fixture(dir.path(), false, overwrite), Err(ZError::Cancelled)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+        assert_eq!(dir.path().read_dir().unwrap().count(), 1);
+        assert_eq!(receive_fixture(dir.path(), true, overwrite).unwrap(), [path.clone()]);
+        assert_eq!(std::fs::read(path).unwrap(), b"new");
+    }
+
+    #[test]
+    fn receive_cancel_and_rename_preserve_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["log.txt", "log (1).txt", "taken.txt"] {
+            std::fs::write(dir.path().join(name), b"old").unwrap();
+        }
+        assert!(matches!(receive_fixture(dir.path(), true, |_, _, _| Ok(ConflictAnswer::Cancel)), Err(ZError::Cancelled)));
+        assert_eq!(dir.path().read_dir().unwrap().count(), 3);
+        let saved = receive_fixture(dir.path(), true, |existing, suggested, _| {
+            let name = if existing.ends_with("log.txt") {
+                assert_eq!(suggested, "log (2).txt");
+                "taken.txt"
+            } else {
+                assert!(existing.ends_with("taken.txt"));
+                "my log.txt"
+            };
+            Ok(ConflictAnswer::Rename { name: name.into() })
+        }).unwrap();
+        assert_eq!(saved, [dir.path().join("my log.txt")]);
+        assert_eq!(std::fs::read(&saved[0]).unwrap(), b"new");
+        for name in ["log.txt", "log (1).txt", "taken.txt"] {
+            assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), b"old");
+        }
+    }
+
+    #[test]
+    fn receive_rechecks_a_collision_at_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.txt");
+        let target = ReceiveTarget::choose(dir.path(), "log.txt".into(), &mut |_, _, _| panic!("no conflict yet")).unwrap();
+        let file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+        std::fs::write(&path, b"another transfer").unwrap();
+        assert!(matches!(target.save(file, &mut |_, _, _| Ok(ConflictAnswer::Cancel)), Err(ZError::Cancelled)));
+        assert_eq!(std::fs::read(path).unwrap(), b"another transfer");
+        assert_eq!(dir.path().read_dir().unwrap().count(), 1);
+    }
+
+    #[test]
+    fn receive_names_cannot_escape_the_directory() {
+        for name in ["", ".", "..", "../elsewhere", "C:\\out", "a:b", "NUL.txt", "LPT1", "a.", "a "] {
+            assert!(!valid_receive_name(name), "{name}");
+        }
+        assert!(valid_receive_name("日志 (1).txt"));
+    }
+
     /// Our sender against our receiver through lossless pipes, with bytes that need escaping.
     #[test]
     fn test_loopback_transfer() {
@@ -944,7 +1105,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
                 Box::new(|_| {}),
             );
-            t.receive(&dst2).map_err(|e| e.to_string())
+            t.receive(&dst2, |_, _, _| panic!("unexpected conflict")).map_err(|e| e.to_string())
         });
         let mut sender = Transfer::new(
             to_send_rx,

@@ -315,6 +315,17 @@ export interface ZmodemProgressPayload {
   dir?: string;
 }
 
+export interface ZmodemConflictPayload {
+  state: "conflict";
+  instanceId: string;
+  requestId: string;
+  path: string;
+  suggestedName: string;
+  canOverwrite: boolean;
+}
+
+export type ZmodemConflictAnswer = { action: "rename"; name: string } | { action: "overwrite" | "cancel" };
+
 /** Label of the window this page runs in ("main", "term-...", "ctx-menu"). */
 export function currentWindowLabel(): string {
   if (!isTauriRuntime()) return "main";
@@ -906,6 +917,10 @@ export const backend = {
     await invoke("zmodem_cancel", { instanceId });
   },
 
+  async zmodemAnswer(instanceId: string, requestId: string, answer: ZmodemConflictAnswer): Promise<void> {
+    await invoke("zmodem_answer", { instanceId, requestId, answer });
+  },
+
   async listCharsets(): Promise<string[]> {
     if (!isTauriRuntime()) return ["UTF-8", "GBK", "GB18030", "Big5", "Shift_JIS", "EUC-KR", "ISO-8859-1"];
     return invoke<string[]>("list_charsets");
@@ -956,9 +971,9 @@ export const backend = {
     return listen<ZmodemRequestPayload>("zmodem-request", (e) => handler(e.payload));
   },
 
-  async onZmodemProgress(handler: (p: ZmodemProgressPayload) => void): Promise<UnlistenFn> {
+  async onZmodemProgress(handler: (p: ZmodemProgressPayload | ZmodemConflictPayload) => void): Promise<UnlistenFn> {
     if (!isTauriRuntime()) return () => {};
-    return listen<ZmodemProgressPayload>("zmodem-progress", (e) => handler(e.payload));
+    return listen<ZmodemProgressPayload | ZmodemConflictPayload>("zmodem-progress", (e) => handler(e.payload));
   },
 
   // ---------------- multiple windows ----------------

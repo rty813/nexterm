@@ -901,6 +901,11 @@ fn zmodem_unstage(ctx: State<'_, AppContext>, token: Option<String>) -> Result<(
 }
 
 #[tauri::command]
+fn zmodem_answer(ctx: State<'_, AppContext>, instance_id: String, request_id: String, answer: zmodem::ConflictAnswer) -> Result<(), String> {
+    ctx.connections.zmodem_answer(&instance_id, &request_id, answer).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn zmodem_cancel(ctx: State<'_, AppContext>, instance_id: String) {
     ctx.connections.zmodem_cancel(&instance_id);
 }
@@ -1770,6 +1775,7 @@ pub fn run() {
             tunnel_stop,
             server_stats_sample,
             zmodem_cancel,
+            zmodem_answer,
             zmodem_stage_chunk,
             zmodem_unstage,
             list_charsets,

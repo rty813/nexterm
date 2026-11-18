@@ -211,6 +211,25 @@ enum ZState {
     Active { tx: std_mpsc::Sender<Vec<u8>>, cancel: Arc<AtomicBool> },
 }
 
+impl ZState {
+    fn start_pending(
+        &mut self,
+        files: &[PathBuf],
+        tx: std_mpsc::Sender<Vec<u8>>,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<(Direction, Vec<u8>)> {
+        let Self::Pending { direction, buffered } = self else {
+            anyhow::bail!("没有等待开始的 ZModem 传输");
+        };
+        if *direction == Direction::Send && files.is_empty() {
+            anyhow::bail!("请选择要发送的文件");
+        }
+        let pending = (*direction, std::mem::take(buffered));
+        *self = Self::Active { tx, cancel };
+        Ok(pending)
+    }
+}
+
 /// Per-connection output path: drops output after disconnect, diverts ZModem
 /// transfers, converts the remote charset to UTF-8, and writes the session log.
 struct ScopedSink {
@@ -219,6 +238,7 @@ struct ScopedSink {
     log: SharedLog,
     codec: Mutex<Codec>,
     zmodem: Mutex<ZState>,
+    zmodem_conflict: Mutex<Option<(String, std_mpsc::Sender<zmodem::ConflictAnswer>)>>,
     zmodem_enabled: bool,
     /// Manual shell integration in progress: output held back until the script is loaded.
     inject: Mutex<Option<ManualInject>>,
@@ -263,6 +283,33 @@ pub enum InjectOutcome {
 }
 
 impl ScopedSink {
+    fn ask_zmodem_conflict(
+        &self, id: &str, path: &std::path::Path, suggested: &str, can_overwrite: bool, cancel: &AtomicBool,
+    ) -> Result<zmodem::ConflictAnswer, zmodem::ZError> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (answer, receiver) = std_mpsc::channel();
+        *lock(&self.zmodem_conflict) = Some((request_id.clone(), answer));
+        self.inner.emit_event("zmodem-progress", serde_json::json!({
+            "instanceId": id, "state": "conflict", "requestId": request_id, "path": path,
+            "suggestedName": suggested, "canOverwrite": can_overwrite,
+        }));
+        let result = loop {
+            if cancel.load(Ordering::Acquire) || self.cancelled.load(Ordering::Acquire) {
+                break Err(zmodem::ZError::Cancelled);
+            }
+            if matches!(lock(&self.status).as_str(), "disconnected" | "error") {
+                break Err(zmodem::ZError::Closed);
+            }
+            match receiver.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(answer) => break Ok(answer),
+                Err(std_mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => break Err(zmodem::ZError::Closed),
+            }
+        };
+        lock(&self.zmodem_conflict).take();
+        result
+    }
+
     fn emit_terminal(&self, instance_id: &str, data: &[u8]) {
         if data.is_empty() {
             return;
@@ -498,6 +545,7 @@ impl ConnectionManager {
             log: Arc::clone(&log),
             codec: Mutex::new(Codec::new(&config.charset)),
             zmodem: Mutex::new(ZState::Idle(Detector::default())),
+            zmodem_conflict: Mutex::default(),
             // Local ConPTY shells are not 8-bit clean, so only network / serial links.
             zmodem_enabled: !binary
                 && matches!(
@@ -758,20 +806,9 @@ impl ConnectionManager {
                 .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
             (Arc::clone(&entry.sink), entry.control.clone(), entry.label.clone())
         };
-        let (direction, buffered, rx, cancel) = {
-            let mut z = lock(&sink.zmodem);
-            let ZState::Pending { direction, buffered } = std::mem::replace(&mut *z, ZState::Idle(Detector::default())) else {
-                anyhow::bail!("没有等待开始的 ZModem 传输");
-            };
-            if direction == Direction::Send && files.is_empty() {
-                *z = ZState::Pending { direction, buffered };
-                anyhow::bail!("请选择要发送的文件");
-            }
-            let (tx, rx) = std_mpsc::channel();
-            let cancel = Arc::new(AtomicBool::new(false));
-            *z = ZState::Active { tx, cancel: Arc::clone(&cancel) };
-            (direction, buffered, rx, cancel)
-        };
+        let (tx, rx) = std_mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (direction, buffered) = lock(&sink.zmodem).start_pending(&files, tx, Arc::clone(&cancel))?;
 
         let id = instance_id.to_string();
         let dir = dir.unwrap_or_else(default_download_dir);
@@ -792,7 +829,9 @@ impl ConnectionManager {
                 }),
             );
             let result = match direction {
-                Direction::Receive => transfer.receive(&dir),
+                Direction::Receive => transfer.receive(&dir, |path, suggested, can_overwrite| {
+                    sink.ask_zmodem_conflict(&id, path, suggested, can_overwrite, &cancel)
+                }),
                 Direction::Send => transfer.send_files(&files).map(|_| files.clone()),
             };
             if result.is_err() {
@@ -943,6 +982,22 @@ impl ConnectionManager {
         Ok(())
     }
 
+    pub fn zmodem_answer(&self, instance_id: &str, request_id: &str, answer: zmodem::ConflictAnswer) -> Result<()> {
+        let sessions = lock(&self.sessions);
+        let entry = sessions.get(instance_id).ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+        let mut conflict = lock(&entry.sink.zmodem_conflict);
+        if !conflict.as_ref().is_some_and(|(id, _)| id == request_id) {
+            anyhow::bail!("此文件冲突已失效");
+        }
+        if let zmodem::ConflictAnswer::Rename { name } = &answer {
+            if !zmodem::valid_receive_name(name) {
+                anyhow::bail!("请输入有效的文件名，不含路径或保留字符");
+            }
+        }
+        let (_, sender) = conflict.take().unwrap();
+        sender.send(answer).map_err(|_| anyhow::anyhow!("传输已结束"))
+    }
+
     /// Refuse a pending transfer or stop a running one.
     pub fn zmodem_cancel(&self, instance_id: &str) {
         let Some((sink, control)) = lock(&self.sessions)
@@ -1087,6 +1142,22 @@ mod tests {
     use std::io::{Read as _, Write as _};
     use std::net::TcpListener;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn duplicate_zmodem_start_preserves_active_receiver() {
+        let mut state = ZState::Pending { direction: Direction::Receive, buffered: vec![1, 2] };
+        let (original_tx, original_rx) = std_mpsc::channel();
+        let original_cancel = Arc::new(AtomicBool::new(false));
+        let pending = state.start_pending(&[], original_tx, Arc::clone(&original_cancel)).unwrap();
+        assert_eq!(pending, (Direction::Receive, vec![1, 2]));
+
+        let (duplicate_tx, _) = std_mpsc::channel();
+        assert!(state.start_pending(&[], duplicate_tx, Arc::default()).is_err());
+        let ZState::Active { tx, cancel } = state else { panic!("transfer no longer active") };
+        assert!(Arc::ptr_eq(&cancel, &original_cancel));
+        tx.send(vec![3]).unwrap();
+        assert_eq!(original_rx.try_recv().unwrap(), vec![3]);
+    }
 
     #[derive(Default)]
     struct MockSink {

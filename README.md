@@ -35,6 +35,7 @@ Windows 10 / 11 only. Current version: `0.1.5`.
 - **Edit Locally, Auto-Upload**: Open remote files in your local editor—every save automatically uploads back to the server.
 - **Zero-Download Previews**: Preview code/text, JSON, Markdown, CSV/TSV tables, images (zoom/rotate), and PDFs directly.
 - **Transfer Queue**: Drag-and-drop folders/files, edit permissions (checkboxes or octal), pause / resume / retry parallel transfers with conflict rules, and track ZMODEM transfers in one place.
+- **ZMODEM Filename Conflicts**: When the host runs `sz`, the transfer card shows where the files will be saved (the Downloads folder unless you changed it); change the folder there or accept. If a received file already exists locally, save it under another name, explicitly overwrite it, or cancel the transfer. Existing files are not silently replaced.
 
 ### Windows & Input
 
