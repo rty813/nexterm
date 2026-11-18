@@ -154,8 +154,10 @@ export const uiResources = {
       openHint: "已打开 {{count}} 个标签，双击切换过去，Ctrl+双击再开一个",
       switchToTabHint: "切换到已打开的标签（Ctrl+单击再开一个）",
       recent: "最近使用",
-      quickHistoryHint: "双击重新连接",
+      quickHistoryHint: "双击重新连接，右键可保存为会话",
       quickConnected: "快速连接",
+      saveQuick: "保存为会话",
+      forgetQuick: "从历史中移除",
     },
     interp: {
       title: "数据解释器",
@@ -445,8 +447,10 @@ export const uiResources = {
       openHint: "{{count}} tab(s) open. Double-click to switch, Ctrl+double-click to open another",
       switchToTabHint: "Switch to the open tab (Ctrl+click opens another)",
       recent: "Recent",
-      quickHistoryHint: "Double-click to connect again",
+      quickHistoryHint: "Double-click to connect again, right-click to save as a session",
       quickConnected: "Quick connect",
+      saveQuick: "Save as session",
+      forgetQuick: "Remove from history",
     },
     plugin: {
       title: "Plugins",

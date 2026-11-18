@@ -190,6 +190,8 @@ export const App: React.FC = () => {
   const [sessionModalState, setSessionModalState] = useState<{
     open: boolean;
     editing: SessionConfig | null;
+    /** `editing` only prefills a new session. */
+    isNew?: boolean;
   }>({ open: false, editing: null });
   const [settingsPaneId, setSettingsPaneId] = useState<string | null>(null);
   const settingsPane = settingsPaneId ? findLeaf(ws.root, settingsPaneId) : undefined;
@@ -451,6 +453,18 @@ export const App: React.FC = () => {
       void backend.saveDataFile("quick_connect_history", next);
       return next;
     });
+  };
+  const forgetQuickConnect = (raw: string) => {
+    setQuickHistory((prev) => {
+      const next = prev.filter((x) => x !== raw);
+      void backend.saveDataFile("quick_connect_history", next);
+      return next;
+    });
+  };
+  const saveQuickConnect = (raw: string) => {
+    const parsed = parseQuickConnectInput(raw);
+    if (!parsed) return;
+    setSessionModalState({ open: true, editing: { ...parsed, group: t("sessionModal.defaultGroup") }, isNew: true });
   };
   useEffect(() => {
     void backend.loadDataFile<Record<string, { count: number; lastUsed: number }>>("session_usage").then((u) => u && setSessionUsage(u));
@@ -2637,6 +2651,8 @@ export const App: React.FC = () => {
                 recentIds={recentSessionIds}
                 quickHistory={quickHistory}
                 onQuickConnect={(raw) => handleQuickConnect(raw, false)}
+                onSaveQuickConnect={saveQuickConnect}
+                onForgetQuickConnect={forgetQuickConnect}
                 recentOpen={ui.sidebarRecentOpen}
                 onToggleRecent={() => setSidebarRecentOpen((v) => !v)}
                 onOpenInSplit={(s) => openSessionInSplit(s, "horizontal")}
@@ -2829,6 +2845,7 @@ export const App: React.FC = () => {
       {sessionModalState.open && (
         <SessionModal
           initial={sessionModalState.editing}
+          isNew={sessionModalState.isNew}
           groups={Array.from(new Set(sessions.map((x) => x.group).filter(Boolean))).sort()}
           onClose={() => setSessionModalState({ open: false, editing: null })}
           onSave={handleSaveSessionModal}

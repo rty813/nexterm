@@ -13,8 +13,10 @@ import {
   LayoutList,
   Play,
   Plus,
+  Save,
   Search,
   Trash2,
+  X,
 } from "lucide-react";
 import { buildSessionTree, type SessionSortMode, type SessionTreeNode, type SessionUsage } from "../utils/sessionTree";
 import type { SessionConfig } from "../types/domain";
@@ -45,6 +47,10 @@ interface SessionSidebarProps {
   recentIds: string[];
   quickHistory: string[];
   onQuickConnect: (raw: string) => void;
+  /** Open the session editor prefilled from a quick connect address, to save it as a new session. */
+  onSaveQuickConnect: (raw: string) => void;
+  /** Drop an address from the quick connect history. */
+  onForgetQuickConnect: (raw: string) => void;
   recentOpen: boolean;
   onToggleRecent: () => void;
   onOpenInSplit: (session: SessionConfig) => void;
@@ -72,6 +78,8 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   recentIds,
   quickHistory,
   onQuickConnect,
+  onSaveQuickConnect,
+  onForgetQuickConnect,
   recentOpen,
   onToggleRecent,
   onOpenInSplit,
@@ -306,6 +314,14 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     title={t("sidebar.quickHistoryHint")}
                     onDoubleClick={() => onQuickConnect(raw)}
                     onKeyDown={(e) => e.key === "Enter" && onQuickConnect(raw)}
+                    onContextMenu={(e) =>
+                      openMenu(e, [
+                        { label: t("sidebar.connectTab"), onClick: () => onQuickConnect(raw) },
+                        { type: "separator" },
+                        { label: t("sidebar.saveQuick"), onClick: () => onSaveQuickConnect(raw) },
+                        { label: t("sidebar.forgetQuick"), danger: true, onClick: () => onForgetQuickConnect(raw) },
+                      ])
+                    }
                   >
                     <span className="session-icon">
                       <History size={13} className="muted-icon" />
@@ -317,6 +333,12 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
                     <div className="session-row-actions" onClick={(e) => e.stopPropagation()}>
                       <button type="button" className="icon-btn-xs" title={t("sidebar.connectTab")} onClick={() => onQuickConnect(raw)}>
                         <Play size={11} />
+                      </button>
+                      <button type="button" className="icon-btn-xs" title={t("sidebar.saveQuick")} onClick={() => onSaveQuickConnect(raw)}>
+                        <Save size={11} />
+                      </button>
+                      <button type="button" className="icon-btn-xs danger-hover" title={t("sidebar.forgetQuick")} onClick={() => onForgetQuickConnect(raw)}>
+                        <X size={11} />
                       </button>
                     </div>
                   </div>

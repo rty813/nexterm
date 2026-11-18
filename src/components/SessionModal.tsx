@@ -26,6 +26,8 @@ const LOCAL: ProtocolType[] = ["powershell", "cmd", "wsl", "custom"];
 
 interface SessionModalProps {
   initial?: SessionConfig | null;
+  /** `initial` only prefills the form of a new session (e.g. from a quick connect address). */
+  isNew?: boolean;
   /** Groups of the saved sessions, offered while typing a group. */
   groups?: string[];
   onClose: () => void;
@@ -40,6 +42,7 @@ function makeUuid(): string {
 
 export const SessionModal: React.FC<SessionModalProps> = ({
   initial,
+  isNew = false,
   groups = [],
   onClose,
   onSave,
@@ -199,7 +202,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     <div className="modal-backdrop" onMouseDown={requestClose}>
       <div className="modal-panel modal-lg session-form" onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3>{initial ? t("sessionModal.editTitle") : t("sessionModal.newTitle")}</h3>
+          <h3>{initial && !isNew ? t("sessionModal.editTitle") : t("sessionModal.newTitle")}</h3>
           <button type="button" className="icon-btn" onClick={requestClose} title={t("sessionModal.cancel")}>
             <X size={16} />
           </button>
