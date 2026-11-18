@@ -4,6 +4,8 @@ pub mod app_paths;
 pub mod charset;
 pub mod commands;
 pub mod fonts;
+mod plugin_http;
+mod plugin_credentials;
 pub mod hexdump;
 pub mod history;
 pub mod importer;
@@ -404,14 +406,19 @@ fn sync_state(ctx: State<'_, AppContext>) -> Result<sync::SyncState, String> {
 
 #[tauri::command]
 async fn connect_terminal(
+    window: tauri::WebviewWindow,
     app: AppHandle,
     ctx: State<'_, AppContext>,
     instance_id: String,
-    session: SessionConfig,
+    mut session: SessionConfig,
     cols: u16,
     rows: u16,
     reuse_from: Option<String>,
 ) -> Result<Option<String>, String> {
+    if let Some(password) = plugin_http::take_ssh_password(window.label(), &session.id, &session.host, session.port, &session.username) {
+        session.password = Some(password);
+        session.auth_type = crate::models::AuthType::Password;
+    }
     let sink = Arc::new(TauriSink { app });
     // Before connecting, so the first output is recorded; a reconnect keeps the pane's history.
     crate::history::ensure(&instance_id, cols, rows);
@@ -1708,6 +1715,7 @@ pub fn run() {
                 }
             }
             WindowEvent::Destroyed => {
+                crate::plugin_http::forget_window(window.label());
                 if let Ok(mut m) = locked_counts().lock() {
                     m.remove(window.label());
                 }
@@ -1722,6 +1730,14 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            plugin_http::plugin_grant,
+            plugin_http::plugin_allow_origin,
+            plugin_http::plugin_revoke,
+            plugin_http::plugin_secret,
+            plugin_http::plugin_credential,
+            plugin_http::plugin_forget_credentials,
+            plugin_http::plugin_http,
+            plugin_http::plugin_stage_ssh,
             check_update,
             storage_location_info,
             storage_location_prompt,

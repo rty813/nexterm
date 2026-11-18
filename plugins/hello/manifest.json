@@ -1,0 +1,13 @@
+{
+  "apiVersion": 1,
+  "id": "example.hello",
+  "name": "Hello Nexterm",
+  "version": "0.1.0",
+  "main": "main.js",
+  "permissions": {"network": []},
+  "contributes": {
+    "commands": [{"id": "show", "title": "Hello Nexterm"}],
+    "views": [{"id": "hello", "title": "Hello Nexterm", "location": "tab", "file": "view.html"}],
+    "statusBar": [{"id": "hello-status", "text": "Hello", "command": "show"}]
+  }
+}

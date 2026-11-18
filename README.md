@@ -12,6 +12,7 @@ It keeps WindTerm's familiar workflow (session tree, nested split panes, quick c
 - **AI Agent Awareness & Control**: Live tab badges for **Claude Code / Codex / Gemini CLI**; desktop notifications when an agent **finishes, needs permission approval, or errors out** (click to jump straight to the pane); plus a built-in MCP server for human-approved terminal delegation.
 - **E2EE Remote Access & Session Sharing**: Scan a QR code or open a link to view and control desktop terminals from any browser (phone or computer), adapt terminal dimensions to a phone screen, manage sessions, transfer files, or share a single session through a one-off link (read-only until you grant control), all with zero-knowledge encryption.
 - **Full Scrollback History**: Every line a pane ever printed stays available, compressed in the background. Scroll, search and export all of it, back to the start of the session.
+- **Installable Plugins**: Extend Nexterm with your own commands, views and dynamic session lists without modifying the host. [Start with the Hello counter](#plugins-experimental).
 
 Windows 10 / 11 only. Current version: `0.1.5`.
 
@@ -44,6 +45,21 @@ Windows 10 / 11 only. Current version: `0.1.5`.
 - **Fast Input**: **Broadcast input** (to current tab panes or all tabs), timed multi-session Sender (text or **hex bytes**), Command Palette, grouped Quick Commands, and **history/dictionary auto-completion**.
 - **Quick-Connect Bar**: Connect instantly with `ssh user@host:22`, `ssh -p 2222 -i key user@host`, `powershell`, or `wsl`.
 - **Command Alerts & Readability**: One-shot **"Notify When Command Finishes"** alerts (with duration and exit code), output folding, highlight rules, Focus Mode (`F11`), and workspace lock.
+
+### Plugins (experimental)
+
+Open **Settings → Plugins** and choose a local `.nexterm-plugin` file. The installer shows when it is reading and validating the package, then lets you review the plugin's name and permissions before authorizing installation. To update, select a package with the same ID and approve the replacement. From the plugin list you can enable, disable, reload, reorder or uninstall plugins, hide individual entries, and open a plugin's settings dialog using the gear on its row.
+
+The platform is available in the current source tree. If your installed version has no Plugins entry, [build Nexterm from source](#building). Only local Nexterm packages are supported, not VS Code `.vsix` files. Plugins and their settings are not included in cloud sync. **Install only plugins you trust**: the permission checks are not an audited sandbox for hostile code.
+
+**Build your first plugin: the Hello counter**
+
+1. Start with the [Hello template](plugins/hello/): `manifest.json` declares permissions and entry points, `main.js` handles commands and keeps the count, and `view.html` renders the button. No network, credential or SSH permissions are needed.
+2. From the repository root, run `node scripts/pack-plugin.mjs plugins/hello`, then install the resulting `plugins/hello.nexterm-plugin` as described above.
+3. Click **Hello** on the right of the title bar to open the plugin tab, then click `0`. The button changes to `1` and the title bar to **Hello 1**, confirming that the view and background worker can communicate.
+4. To start your own plugin, copy the template to a separate directory and change the manifest `id` and `name`. Plugins can also contribute toolbar buttons, sidebars, bottom panels, tabs, content or settings dialogs, shortcuts, terminal context menus and dynamic session sources. After editing, repack the directory and approve the replacement; **Reload** only restarts the installed copy.
+
+[Plugin development guide (Chinese)](docs/plugin-sdk.zh-CN.md) · [SDK type definitions](plugins/sdk/nexterm.d.ts) · [Platform design (Chinese)](docs/plugin-platform.zh-CN.md)
 
 ### Triggers
 
@@ -177,6 +193,7 @@ cd relay; npm test                                       # relay & E2EE protocol
 | `src/` | Front end (React + TypeScript); `utils/` holds UI-independent logic and core unit tests |
 | `src-tauri/` | Rust backend: connections, protocols and proxies, port forwarding, SFTP / SCP, session import, shell integration, full scrollback history, server resources, MCP, remote access, session sharing |
 | `relay/` | Self-hosted relay server, remote access PWA and session share page (Node.js) |
+| `plugins/` | Hello starter plugin and installable package, SDK type definitions |
 | `bench/` | Throughput and memory benchmark scripts |
 
 ## Contributing

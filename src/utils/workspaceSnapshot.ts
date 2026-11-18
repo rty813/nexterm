@@ -26,7 +26,7 @@ export interface WorkspaceSnapshot {
 }
 
 function stripSecrets(session: SessionConfig): SessionConfig {
-  const { password: _p, passphrase: _pp, ...rest } = session;
+  const { password: _p, passphrase: _pp, credentialHandoff: _h, ...rest } = session;
   const jump = rest.jumpHost ? { ...rest.jumpHost, password: undefined } : rest.jumpHost;
   return { ...rest, jumpHost: jump };
 }

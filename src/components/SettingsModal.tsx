@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentHooks";
 import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
-import { Globe, Highlighter, Keyboard, Monitor, Mouse, PanelTop, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
+import { Globe, Highlighter, Keyboard, Monitor, Mouse, PanelTop, Puzzle, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
 import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
-export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "highlight" | "triggers" | "keys" | "toolbar";
+import { PluginManager } from "./StatusPlugins";
+export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "highlight" | "triggers" | "keys" | "toolbar" | "plugins";
 import { KeymapEditor, ToolbarEditor } from "./SettingsExtra";
 import { HighlightEditor } from "./HighlightEditor";
 import { TriggerEditor } from "./TriggerEditor";
@@ -27,6 +28,7 @@ const settingsSections = [
   { id: "triggers", icon: Zap },
   { id: "keys", icon: Keyboard },
   { id: "toolbar", icon: PanelTop },
+  { id: "plugins", icon: Puzzle },
 ] as const;
 
 interface SettingsModalProps {
@@ -136,6 +138,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           }}
         >
           {tab === "keys" && <KeymapEditor draft={draft} onChange={setDraft} />}
+          {tab === "plugins" && <PluginManager />}
           {tab === "toolbar" && <ToolbarEditor draft={draft} onChange={setDraft} />}
           {tab === "highlight" && <HighlightEditor draft={draft} onChange={setDraft} />}
           {tab === "triggers" && <TriggerEditor draft={draft} onChange={setDraft} />}

@@ -616,7 +616,7 @@ export const extraResources = {
       showStatusBar: "显示底部状态栏",
       serverMonitor: "状态栏显示服务器资源",
       serverMonitorTip: "SSH 会话处于活动状态时，在状态栏显示 CPU、内存和网络速率（仅 Linux 服务器）。",
-      tab: { terminal: "终端", mouse: "鼠标", logs: "日志与传输", xserver: "X 服务器", remote: "远程访问", sync: "同步与备份", triggers: "触发器" },
+      tab: { terminal: "终端", mouse: "鼠标", logs: "日志与传输", xserver: "X 服务器", remote: "远程访问", sync: "同步与备份", triggers: "触发器", plugins: "插件" },
     },
     actions: {
       "view.sender": "发送器面板",
@@ -1125,7 +1125,7 @@ export const extraResources = {
       showStatusBar: "Show Status Bar",
       serverMonitor: "Server Resources in Status Bar",
       serverMonitorTip: "Show CPU, memory and network rates of the active SSH session in the status bar (Linux servers only).",
-      tab: { terminal: "Terminal", mouse: "Mouse", logs: "Logs & Transfers", xserver: "X Server", remote: "Remote Access", sync: "Sync & Backup", triggers: "Triggers" },
+      tab: { terminal: "Terminal", mouse: "Mouse", logs: "Logs & Transfers", xserver: "X Server", remote: "Remote Access", sync: "Sync & Backup", triggers: "Triggers", plugins: "Plugins" },
     },
     actions: {
       "view.sender": "Sender Panel",

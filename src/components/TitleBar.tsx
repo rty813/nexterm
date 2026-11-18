@@ -13,7 +13,7 @@ const INTERACTIVE = "button, input, select, textarea, a, [role='button'], .no-dr
  * Our own window title bar (the native frame is off): drag to move, double-click to
  * maximize, and minimize / maximize / close buttons. `children` (the toolbar) sit in it.
  */
-export const TitleBar: React.FC<{ title: string; children?: React.ReactNode }> = ({ title, children }) => {
+export const TitleBar: React.FC<{ title: string; children?: React.ReactNode; status?: React.ReactNode }> = ({ title, children, status }) => {
   const { t } = useTranslation();
   const [maximized, setMaximized] = useState(false);
   const desktop = isTauriRuntime();
@@ -49,6 +49,7 @@ export const TitleBar: React.FC<{ title: string; children?: React.ReactNode }> =
     <div className="app-titlebar" onMouseDown={onMouseDown} onContextMenu={(e) => e.preventDefault()}>
       <div className="titlebar-logo">&gt;_</div>
       <div className="titlebar-content">{children ?? <span className="titlebar-title">{title}</span>}</div>
+      {status}
       {desktop && (
         <div className="titlebar-controls">
           <button type="button" className="titlebar-btn" title={t("titlebar.minimize")} onClick={() => withWindow((w) => w.minimize())}>

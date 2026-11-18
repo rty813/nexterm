@@ -97,6 +97,8 @@ import { ACTIONS, DEFAULT_TOOLBAR_HIDDEN, TOOLBAR_LAYOUT_VERSION } from "./utils
 import { restoreWorkspace, snapshotWorkspace, type WorkspaceSnapshot } from "./utils/workspaceSnapshot";
 import { UPDATE_CHECK_DELAY_MS, shouldPromptUpdate, updateCheckEnabled } from "./utils/updateCheck";
 import { ReleaseNotes } from "./components/ReleaseNotes";
+import { PluginActivity, PluginBadges, PluginHost, PluginToolbar, PluginViews, usePluginPlatform } from "./components/StatusPlugins";
+import { plugins } from "./plugins/platform";
 
 function sameDropHint(a: DropHint | null, b: DropHint | null): boolean {
   if (!a || !b) return a === b;
@@ -858,6 +860,17 @@ export const App: React.FC = () => {
   const [zoomedGroupId, setZoomedGroupId] = useState<string | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const isMainWindow = currentWindowLabel() === "main";
+  const pluginVersion = usePluginPlatform().snapshot();
+  useEffect(() => {
+    if (!isMainWindow) return;
+    plugins.onSession = session => {
+      delete plugins.active.tab;
+      plugins.emit();
+      return openSessionInNewTab(session);
+    };
+    return () => {plugins.onSession = undefined;};
+  }, [isMainWindow, openSessionInNewTab]);
+  useEffect(() => {plugins.locked = locked;}, [locked]);
 
   // Where to store the configuration: asked on a first run or with "ask at every startup".
   const [storagePrompt, setStoragePrompt] = useState<StorageLocationInfo | null>(null);
@@ -1565,7 +1578,7 @@ export const App: React.FC = () => {
   const isAppShortcut = useCallback((ev: KeyboardEvent) => {
     const combo = comboFromEvent(ev);
     return Boolean(
-      combo && (actionForCombo(keymapRef.current, combo) || quickCommandsRef.current.some((q) => q.shortcut === combo))
+      combo && (actionForCombo(keymapRef.current, combo) || quickCommandsRef.current.some((q) => q.shortcut === combo) || plugins.commands().some(command => command.shortcut === combo))
     );
   }, []);
 
@@ -1600,7 +1613,10 @@ export const App: React.FC = () => {
         e.preventDefault();
         e.stopPropagation();
         runQuickCommandRef.current(quick);
+        return;
       }
+      const pluginCommand = plugins.commands().find(command => command.shortcut === combo);
+      if (pluginCommand) {e.preventDefault(); e.stopPropagation(); plugins.run(pluginCommand.pluginId, pluginCommand.id);}
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
@@ -1701,12 +1717,25 @@ export const App: React.FC = () => {
     const out: Record<string, SessionOpenState> = {};
     for (const l of allLeaves(ws.root)) {
       const status = (l.status in rank ? l.status : "disconnected") as SessionOpenState["status"];
-      const cur = out[l.session.id];
-      if (!cur) out[l.session.id] = { count: 1, status };
-      else out[l.session.id] = { count: cur.count + 1, status: rank[status] > rank[cur.status] ? status : cur.status };
+      const key = plugins.sessionKey(l.session.id);
+      const cur = out[key];
+      if (!cur) out[key] = { count: 1, status };
+      else out[key] = { count: cur.count + 1, status: rank[status] > rank[cur.status] ? status : cur.status };
     }
     return out;
-  }, [ws.root]);
+  }, [ws.root, pluginVersion]);
+
+  useEffect(() => {plugins.pruneSessionOrigins(new Set(allLeaves(ws.root).map(leaf => leaf.session.id)));}, [ws.root]);
+
+  const focusPluginSession = (key: string) => {
+    const leaves = allLeaves(wsRef.current.root).filter(leaf => plugins.sessionKey(leaf.session.id) === key);
+    const target = leaves.find(leaf => visibleRef.current.has(leaf.paneId)) ?? leaves[0];
+    if (!target) return false;
+    delete plugins.active.tab; plugins.emit();
+    activatePane(target.paneId);
+    requestAnimationFrame(() => paneApis.current.get(target.paneId)?.focus());
+    return true;
+  };
 
   /** Bring up a tab of the session: one already on screen, else the first one. */
   const focusSessionTab = (session: SessionConfig) => {
@@ -2506,8 +2535,10 @@ export const App: React.FC = () => {
   return (
     <ContextMenuProvider>
     <div className={`app-shell ${focusMode ? "focus-mode" : ""}`}>
-      <TitleBar title={windowTitle}>
+      {isMainWindow && <PluginHost locked={locked} />}
+      <TitleBar title={windowTitle} status={isMainWindow && !locked && <PluginBadges />}>
         {!focusMode && isMainWindow ? (
+          <>
           <Toolbar
             sidebarOpen={sidebarOpen}
             quickBarOpen={quickBarOpen}
@@ -2586,6 +2617,8 @@ export const App: React.FC = () => {
               setSettingsModalOpen(true);
             }}
           />
+          <PluginToolbar />
+          </>
         ) : focusMode && !settings.showStatusBar ? (
           <div className="titlebar-focus">
             <span className="titlebar-title">{windowTitle}</span>
@@ -2597,6 +2630,7 @@ export const App: React.FC = () => {
       </TitleBar>
 
       <div className="main-body">
+        {!focusMode && isMainWindow && <PluginActivity />}
         {!focusMode && sidebarOpen && isMainWindow && (
           <>
             <div style={{ width: `${sidebarWidth}px`, flexShrink: 0, display: "flex" }}>
@@ -2609,6 +2643,7 @@ export const App: React.FC = () => {
                 onSelectSession={setSelectedSessionId}
                 onOpenSession={(s) => openSessionInNewTab(s)}
                 onFocusSession={focusSessionTab}
+                onFocusPluginSession={focusPluginSession}
                 openState={sessionOpenState}
                 recentIds={recentSessionIds}
                 quickHistory={quickHistory}
@@ -2635,7 +2670,10 @@ export const App: React.FC = () => {
           </>
         )}
 
+        {!focusMode && isMainWindow && <PluginViews location="sidebar" />}
         <main className="center-column">
+          {isMainWindow && <PluginViews location="tab" />}
+          <div className="plugin-terminal-workspace" hidden={isMainWindow && Boolean(plugins.active.tab)}>
           <SplitWorkspace
             root={ws.root}
             activeGroupId={activeGroup?.id ?? null}
@@ -2666,6 +2704,8 @@ export const App: React.FC = () => {
             onSessionDrop={handleSessionDrop}
             hideWelcome={!isMainWindow}
           />
+          </div>
+          {!focusMode && isMainWindow && <PluginViews location="panel" />}
 
           {!focusMode && quickBarOpen && (
             <QuickBar
@@ -2880,6 +2920,7 @@ export const App: React.FC = () => {
       {paletteOpen && (
         <CommandPalette
           actions={[
+            ...plugins.commands().map(command => ({id: `plugin:${command.pluginId}:${command.id}`, label: `${command.pluginName}: ${command.title}`, shortcut: command.shortcut})),
             ...quickCommands.map((q) => ({
               id: `quick:${q.id}`,
               label: `${t("quickbar.badge")}: ${q.label}`,
@@ -2902,7 +2943,10 @@ export const App: React.FC = () => {
             })
           )}
           quickHistory={quickHistory}
-          onRunAction={(id) => void runActionRef.current(id)}
+          onRunAction={(id) => {
+            if (id.startsWith("plugin:")) {const [, pluginId, command] = id.split(":"); plugins.run(pluginId, command);}
+            else void runActionRef.current(id);
+          }}
           onOpenSession={(s) => openSessionInNewTab(s)}
           onFocusTab={(paneId) => {
             activatePane(paneId);

@@ -42,6 +42,7 @@ cd relay; npm test                    # 中继 + 加密协议（node:test；vite
 - `net.rs`：出站连接，SOCKS5 / SOCKS4(a) / HTTP CONNECT 代理和 SSH 的 ProxyCommand（`connect_stream`）；`socks.rs`：动态转发（`-D`）的 SOCKS4/4a/5 服务端，解析是纯函数。
 - `server_stats.rs`：服务器资源监控的采样脚本（`/proc` + `df`），经窗格已有 SSH 连接的 exec 通道运行；解析和速率计算在前端 `utils/serverStats.ts`，轮询在 `services/serverMonitor.ts`（只在显示且窗口可见时）。
 - `sftp.rs` / `scp.rs`：SSH 窗格的文件面板（前端是 `SftpPanel.tsx`）。目录书签存在 `settings.sftp.bookmarks`（参与同步，逻辑在 `utils/sftpBookmarks.ts`，界面是 `SftpBookmarks.tsx`）；最近访问的目录只存本机 localStorage（`nexterm.sftp.recent`）。
+- `plugin_http.rs` / `plugin_credentials.rs`：插件平台的原生能力。每个运行中的插件实例由 `plugin_grant` 拿到一个 capability（绑定窗口），之后的调用都凭它：`plugin_http` 代理 HTTPS JSON 请求，只允许清单声明或经 `plugin_allow_origin` 批准的 origin；`plugin_secret` 在内存里保管密钥；`plugin_credential` 按插件 + origin + 键名读写 Windows 凭据管理器。插件打开 SSH 时密码经 `plugin_stage_ssh` 暂存，`connect_terminal` 按窗口、会话 ID、主机、端口、用户名一次性取走（30 秒过期），前端会话上只留 `credentialHandoff` 标记，不带密码。
 
 ### 前端（`src/`）
 
@@ -50,5 +51,6 @@ cd relay; npm test                    # 中继 + 加密协议（node:test；vite
 - `services/terminalBus.ts`：按 paneId 分发输出字节，窗格未挂载时先暂存。`services/mcpScreen.ts` 应答 MCP 读屏请求。
 - `App.tsx` 持有标签、分屏布局（`utils/layout.ts` 是递归的分屏树）、广播输入等全局状态；`components/TerminalPane.tsx` 封装单个 xterm.js 实例及各种附加功能。
 - `utils/` 是与 UI 解耦的纯逻辑（快速连接解析、会话树、输出折叠/高亮、命令历史、自动补全、agent 状态识别等），也是 vitest 的主要测试对象。新逻辑尽量放在这里，方便测试。
+- 插件（实验性）：`plugins/platform.ts` 管理安装、启停、权限和与插件之间的 RPC（`Endpoint`，基于 MessageChannel），`plugins/model.ts` 校验清单和插件包，`plugins/sandbox.ts` 生成后台（隐藏 iframe 里起的 Worker）和视图（opaque origin + CSP 的 iframe）的文档。界面挂载在 `components/StatusPlugins.tsx`（标题栏状态项、工具栏按钮、侧栏 / 面板 / 标签页视图、设置弹窗、设置里的插件管理）和 `PluginSessions.tsx`（会话栏里的动态会话来源）。安装包和插件配置存在 localStorage（`nexterm.plugins.v1`），不参与同步。示例插件和 SDK 类型在 `plugins/`，打包脚本是 `scripts/pack-plugin.mjs`，开发文档是 `docs/plugin-sdk.zh-CN.md`。
 - i18n：`i18n.ts` 是基础资源，`i18n.extra.ts`（WindTerm 对齐功能）和 `i18n.ui.ts`（布局重做相关）在运行时依次深度合并进去。
 - 主题在 `constants/themes.ts`，样式集中在 `styles/app.css`（SFTP 的样式在 `styles/sftp.css`）。

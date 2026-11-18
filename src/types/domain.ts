@@ -39,6 +39,7 @@ export interface SessionConfig {
   username: string;
   authType: AuthType;
   password?: string;
+  credentialHandoff?: boolean;
   privateKeyPath?: string;
   passphrase?: string;
   jumpHost?: JumpHostConfig | null;

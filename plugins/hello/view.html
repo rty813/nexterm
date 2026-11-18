@@ -1,0 +1,8 @@
+<html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hello Nexterm</title>
+<style>:root{color-scheme:dark;font:13px system-ui;background:#242424;color:#ddd}body{margin:20px}h1{font-size:18px}button{font:inherit;padding:6px 12px;color:inherit;background:#333;border:1px solid #666;border-radius:4px}</style>
+<h1>Hello Nexterm</h1><button id="count" type="button">0</button>
+<script>
+const button = document.getElementById("count");
+nexterm.on("count", count => {button.textContent = String(count);});
+button.onclick = async () => {button.textContent = String(await nexterm.request("increment"));};
+</script></html>

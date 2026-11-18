@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { remoteMirror } from "../services/remoteMirror";
+import { pluginContextMenu } from "./StatusPlugins";
 import { shareStore, useShareStore } from "../services/shares";
 import { shareOfPane, summarizeShare } from "../utils/share";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -320,7 +321,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const needsUsername = isSsh && !leaf.session.username.trim();
   const usesPassword = isSsh && leaf.session.authType === "password";
   const needsInitialPassword =
-    needsUsername || (usesPassword && !leaf.session.password);
+    needsUsername || (usesPassword && !leaf.session.password && !leaf.session.credentialHandoff);
 
   const [awaitingPassword, setAwaitingPassword] =
     useState<boolean>(needsInitialPassword);
@@ -334,7 +335,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   /** Older lines from the backend's full history, loaded as the view nears the top. */
   const historyRef = useRef<HistoryScroll | null>(null);
   const [showTimestamps, setShowTimestamps] = useState<boolean>(Boolean(settings.showTimestamps));
-  const [rememberPwd, setRememberPwd] = useState<boolean>(true);
+  const [rememberPwd, setRememberPwd] = useState<boolean>(!leaf.session.credentialHandoff);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [searchSeed, setSearchSeed] = useState<string>("");
   /** Binary data type: output is a hex dump and the selection feeds the data interpreter. */
@@ -1251,6 +1252,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           },
         },
         { label: t("menu.selectAll"), onClick: () => term.selectAll() },
+        ...pluginContextMenu(term.getSelection()),
         { type: "separator" },
         {
           type: "colors",

@@ -22,6 +22,8 @@ import { ProtocolBadge } from "./ProtocolBadge";
 import { sessionTargetSummary } from "../utils/sessionSummary";
 import { useContextMenu } from "./ContextMenu";
 import { SESSION_MIME } from "./TabBar";
+import { PluginSessionSources } from "./PluginSessions";
+import { plugins } from "../plugins/platform";
 
 /** Tabs of a saved session open in this window: how many, and the best status among them. */
 export interface SessionOpenState {
@@ -37,6 +39,7 @@ interface SessionSidebarProps {
   onOpenSession: (session: SessionConfig) => void;
   /** Bring up the session's open tab. */
   onFocusSession: (session: SessionConfig) => void;
+  onFocusPluginSession: (key: string) => boolean;
   openState: Record<string, SessionOpenState>;
   /** Saved sessions, most recently opened first. */
   recentIds: string[];
@@ -64,6 +67,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onSelectSession,
   onOpenSession,
   onFocusSession,
+  onFocusPluginSession,
   openState,
   recentIds,
   quickHistory,
@@ -239,7 +243,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     <aside className="session-sidebar">
       <div className="sidebar-header">
         <span className="sidebar-title">
-          {t("sidebar.title")} ({sessions.length})
+          {t("sidebar.title")} ({sessions.length + plugins.sessionSources().reduce((total, source) => total + source.catalog.items.length, 0)})
         </span>
         <button
           type="button"
@@ -321,11 +325,12 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
             )}
           </div>
         )}
-        {tree.length === 0 ? (
+        {tree.length === 0 && !plugins.sessionSources().length ? (
           <div className="sidebar-empty">{t("sidebar.empty")}</div>
         ) : (
           tree.map((node) => renderNode(node, 0))
         )}
+        <PluginSessionSources filter={filter} selectedId={selectedSessionId} onSelect={onSelectSession} openState={openState} onFocus={onFocusPluginSession} />
       </div>
 
       <div className="sidebar-footer">
