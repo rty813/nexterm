@@ -53,7 +53,15 @@ export function initialAdvanced(s?: Partial<{
 export function advancedToSession(a: AdvancedState, protocol: ProtocolType) {
   const network = protocol === "ssh" || protocol === "telnet" || protocol === "tcp";
   return {
-    proxy: network && a.proxy.kind !== "none" && a.proxy.host.trim() ? a.proxy : null,
+    proxy: !network || a.proxy.kind === "none"
+      ? null
+      : a.proxy.kind === "command"
+      ? protocol === "ssh" && a.proxy.command?.trim()
+        ? { ...a.proxy, command: a.proxy.command.trim() }
+        : null
+      : a.proxy.host.trim()
+      ? { ...a.proxy, command: null }
+      : null,
     tunnels: protocol === "ssh" ? a.tunnels.filter((t) => t.listenPort > 0) : [],
     x11: protocol === "ssh" && a.x11.enabled ? a.x11 : null,
     charset: a.charset,
@@ -150,8 +158,22 @@ export const SessionAdvanced: React.FC<{
                     <option value="socks5">SOCKS5</option>
                     <option value="socks4">SOCKS4</option>
                     <option value="http">HTTP</option>
+                    {(isSsh || v.proxy.kind === "command") && <option value="command">{t("adv.proxyCommand")}</option>}
                   </select>
                 </label>
+                {v.proxy.kind === "command" ? (
+                  <label className="field" style={{ gridColumn: "span 2" }}>
+                    <span>{t("adv.proxyCommandLabel")}</span>
+                    <input
+                      type="text"
+                      className="text-input mono"
+                      value={v.proxy.command ?? ""}
+                      placeholder="ssh -W %h:%p bastion"
+                      onChange={(e) => set({ proxy: { ...v.proxy, command: e.target.value } })}
+                    />
+                  </label>
+                ) : (
+                <>
                 <label className="field">
                   <span>{t("adv.proxyHost")}</span>
                   <input
@@ -175,8 +197,25 @@ export const SessionAdvanced: React.FC<{
                     onChange={(e) => set({ proxy: { ...v.proxy, port: Number(e.target.value) } })}
                   />
                 </label>
+                </>
+                )}
               </div>
-              {v.proxy.kind !== "none" && v.proxy.kind !== "socks4" && (
+              {v.proxy.kind === "command" && <p className="adv-hint">{t("adv.proxyCommandTip")}</p>}
+              {v.proxy.kind === "socks4" && (
+                <div className="form-grid-2">
+                  <label className="field">
+                    <span>{t("adv.proxyUserId")}</span>
+                    <input
+                      type="text"
+                      className="text-input"
+                      value={v.proxy.username ?? ""}
+                      onChange={(e) => set({ proxy: { ...v.proxy, username: e.target.value || null } })}
+                    />
+                  </label>
+                </div>
+              )}
+              {isSsh && v.proxy.kind !== "none" && <p className="adv-hint">{t("adv.proxyJumpHint")}</p>}
+              {v.proxy.kind !== "none" && v.proxy.kind !== "socks4" && v.proxy.kind !== "command" && (
                 <div className="form-grid-2">
                   <label className="field">
                     <span>{t("adv.proxyUser")}</span>
@@ -297,7 +336,7 @@ export const SessionAdvanced: React.FC<{
                   />
                 </>
               ) : (
-                <span className="tunnel-arrow muted">SOCKS5</span>
+                <span className="tunnel-arrow muted">SOCKS4/5</span>
               )}
               <button
                 type="button"

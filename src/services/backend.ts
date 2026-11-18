@@ -743,6 +743,12 @@ export const backend = {
     await invoke("zmodem_unstage", { token }).catch(() => undefined);
   },
 
+  /** Raw /proc + df sample of the SSH host behind a pane (parsed by utils/serverStats.ts). */
+  async serverStatsSample(instanceId: string): Promise<string> {
+    if (!isTauriRuntime()) throw new Error("Browser preview mode");
+    return invoke<string>("server_stats_sample", { instanceId });
+  },
+
   // ------------------------------------------------------------ SFTP file browser / transfer queue
 
   async sftpHome(instanceId: string): Promise<string> {

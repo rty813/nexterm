@@ -4,6 +4,7 @@ import { Lock, Minimize2, Radio } from "lucide-react";
 import type { SyncInputScope, TerminalLeafNode } from "../types/domain";
 import { sessionTargetSummary } from "../utils/sessionSummary";
 import { ProtocolBadge } from "./ProtocolBadge";
+import { ServerMonitorBadge } from "./ServerMonitor";
 
 interface StatusBarProps {
   activeLeaf: TerminalLeafNode | null;
@@ -21,6 +22,9 @@ interface StatusBarProps {
   loggingCount: number;
   /** The active pane writes a session log. */
   activeLogging: boolean;
+  /** SSH pane whose host resources are shown (null: none / turned off in settings). */
+  monitorPaneId: string | null;
+  onOpenMonitor: () => void;
 }
 
 /** 0:42, 12:05, 1:02:03 */
@@ -58,6 +62,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onToggleSyncPause,
   loggingCount,
   activeLogging,
+  monitorPaneId,
+  onOpenMonitor,
 }) => {
   const { t } = useTranslation();
   const leaf = activeLeaf;
@@ -113,6 +119,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
 
       <div className="statusbar-right">
+        {monitorPaneId && <ServerMonitorBadge key={monitorPaneId} paneId={monitorPaneId} onClick={onOpenMonitor} />}
         {leaf && (
           <>
             <span className="status-seg" title={t("statusbar.sizeTip")}>

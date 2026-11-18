@@ -20,6 +20,7 @@ export const ACTIONS: ActionDef[] = [
   { id: "view.sender", group: "view", defaultKey: "Alt+S" },
   { id: "view.history", group: "view", defaultKey: "Alt+H" },
   { id: "view.files", group: "view", defaultKey: "Ctrl+Shift+O" },
+  { id: "view.serverMonitor", group: "view", defaultKey: "" },
   { id: "view.toggleStatusBar", group: "view", defaultKey: "" },
 
   { id: "terminal.copy", group: "terminal", defaultKey: "Ctrl+Shift+C" },
@@ -141,6 +142,7 @@ export const TOOLBAR_ITEMS = [
   "history",
   "tmux",
   "files",
+  "monitor",
   "remote",
   "settings",
   "focusMode",
@@ -161,5 +163,6 @@ export const DEFAULT_TOOLBAR_HIDDEN: ToolbarItem[] = [
   "portForward",
   "sender",
   "history",
+  "monitor",
 ];
 export const TOOLBAR_LAYOUT_VERSION = 2;

@@ -2,7 +2,28 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CheckCircle2, Download, FolderOpen, RefreshCw, X } from "lucide-react";
 import { backend } from "../services/backend";
+import type { TFunction } from "i18next";
 import type { DiscoveryCandidate, ImportResult } from "../types/domain";
+
+/** Result line: localized for the session importers that report counts, else the backend text. */
+function importFeedback(res: ImportResult, sourceType: string, t: TFunction): string {
+  if (sourceType !== "xshell_sessions" && sourceType !== "mobaxterm") return res.summary;
+  const parts = [t("importModal.importedSessions", { count: res.sessions.length })];
+  if (res.skipped) parts.push(t("importModal.skipped", { count: res.skipped }));
+  if (res.passwordsSkipped) parts.push(t("importModal.passwordsSkipped", { count: res.passwordsSkipped }));
+  if (res.keysMissing) parts.push(t("importModal.keysMissing", { count: res.keysMissing }));
+  return parts.join(" · ");
+}
+
+/** Program each import source type comes from (shown as a tag on discovered sources). */
+const SOURCE_NAME: Record<string, string> = {
+  windterm_sessions: "WindTerm",
+  windterm_quickbar: "WindTerm",
+  windterm_theme: "WindTerm",
+  xshell_sessions: "Xshell",
+  mobaxterm: "MobaXterm",
+  openssh_config: "OpenSSH",
+};
 
 interface ImportModalProps {
   onClose: () => void;
@@ -41,7 +62,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     setFeedback(null);
     try {
       const res = await backend.executeImport(sourceType, path);
-      setFeedback(res.summary);
+      setFeedback(importFeedback(res, sourceType, t));
       onImported(res);
     } catch (err) {
       setError(String(err));
@@ -78,6 +99,20 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     }
   };
 
+  const browseXshellDir = async () => {
+    const picked = await backend.pickDirectory(t("importModal.browseXshellDir"));
+    if (picked) await runImport("xshell_sessions", picked);
+  };
+
+  const browseOther = async (sourceType: "xshell_sessions" | "mobaxterm") => {
+    const xshell = sourceType === "xshell_sessions";
+    const picked = await backend.pickFile(
+      t(xshell ? "importModal.browseXshellFile" : "importModal.browseMoba"),
+      xshell ? ["xsh", "xts"] : ["ini", "mxtsessions"],
+    );
+    if (picked) await runImport(sourceType, picked);
+  };
+
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
@@ -92,43 +127,46 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         </div>
 
         <div className="modal-body">
-          <div className="import-manual-row">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => void browseFile("windterm_sessions")}
-            >
-              <FolderOpen size={14} /> {t("importModal.browseSessions")}
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => void browseFile("windterm_quickbar")}
-            >
-              <FolderOpen size={14} /> {t("importModal.browseQuickbar")}
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => void browseFile("openssh_config")}
-            >
-              <FolderOpen size={14} /> {t("importModal.browseSsh")}
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => void browseFile("windterm_theme")}
-            >
-              <FolderOpen size={14} /> {t("importModal.browseTheme")}
-            </button>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => void refreshCandidates()}
-            >
-              <RefreshCw size={13} /> {t("importModal.rescan")}
-            </button>
+          <h4 className="section-heading">{t("importModal.manualHeading")}</h4>
+          <div className="import-sources">
+            <span className="import-source-name">WindTerm</span>
+            <div className="import-source-actions">
+              <button type="button" className="btn-secondary btn-sm" onClick={() => void browseFile("windterm_sessions")}>
+                <FolderOpen size={13} /> {t("importModal.pick.sessions")}
+              </button>
+              <button type="button" className="btn-secondary btn-sm" onClick={() => void browseFile("windterm_quickbar")}>
+                <FolderOpen size={13} /> {t("importModal.pick.quickbar")}
+              </button>
+              <button type="button" className="btn-secondary btn-sm" onClick={() => void browseFile("windterm_theme")}>
+                <FolderOpen size={13} /> {t("importModal.pick.theme")}
+              </button>
+            </div>
+
+            <span className="import-source-name">Xshell</span>
+            <div className="import-source-actions">
+              <button type="button" className="btn-secondary btn-sm" onClick={() => void browseXshellDir()}>
+                <FolderOpen size={13} /> {t("importModal.pick.xshellDir")}
+              </button>
+              <button type="button" className="btn-secondary btn-sm" onClick={() => void browseOther("xshell_sessions")}>
+                <FolderOpen size={13} /> {t("importModal.pick.xshellFile")}
+              </button>
+            </div>
+
+            <span className="import-source-name">MobaXterm</span>
+            <div className="import-source-actions">
+              <button type="button" className="btn-secondary btn-sm" onClick={() => void browseOther("mobaxterm")}>
+                <FolderOpen size={13} /> {t("importModal.pick.moba")}
+              </button>
+            </div>
+
+            <span className="import-source-name">OpenSSH</span>
+            <div className="import-source-actions">
+              <button type="button" className="btn-secondary btn-sm" onClick={() => void browseFile("openssh_config")}>
+                <FolderOpen size={13} /> {t("importModal.pick.ssh")}
+              </button>
+            </div>
           </div>
+          <p className="adv-hint">{t("importModal.credentialsNote")}</p>
 
           {feedback && (
             <div className="alert-success">
@@ -139,9 +177,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
           {error && <div className="alert-error">{error}</div>}
 
-          <h4 className="section-heading">
-            {t("importModal.discoveredHeading")}
-          </h4>
+          <div className="import-discovered-head">
+            <h4 className="section-heading">{t("importModal.discoveredHeading")}</h4>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => void refreshCandidates()}>
+              <RefreshCw size={13} /> {t("importModal.rescan")}
+            </button>
+          </div>
           {loading ? (
             <div className="muted-box">{t("importModal.scanning")}</div>
           ) : candidates.length === 0 ? (
@@ -151,7 +192,10 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               {candidates.map((c) => (
                 <div key={`${c.sourceType}-${c.path}`} className="candidate-row">
                   <div className="candidate-info">
-                    <strong>{c.label}</strong>
+                    <strong>
+                      <span className="import-source-tag">{SOURCE_NAME[c.sourceType] ?? c.sourceType}</span>
+                      {t(`importModal.kind.${c.sourceType}`, { defaultValue: c.label })}
+                    </strong>
                     <span className="candidate-path">{c.path}</span>
                   </div>
                   <div className="candidate-right">

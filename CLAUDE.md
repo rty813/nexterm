@@ -38,7 +38,9 @@ cd relay; npm test                    # 中继 + 加密协议（node:test；vite
 - `share.rs`：单次会话分享。每个分享一个内存里的新密钥和独立房间（单独一条 `relay_link` 连接），只转发一个窗格的画面；访客默认只读，`in` 和接管尺寸（`take`，同样走 `remote-size`）只接受持有控制权的访客，控制权一变尺寸就还给电脑。画面同样来自 `remoteMirror`：`remote::watched()` 是远程访问和分享的并集，不含回滚的分享用 `F_SCREEN` 快照。访客页是 `relay/public/share.html` + `share.js`（路由 `/s`），前端是 `components/ShareDialog.tsx` + `services/shares.ts`。
 - `storage.rs`：JSON 文件持久化（`sessions.json`、`quick_commands.json`、`settings.json`、`custom_themes.json`），位于 Tauri `app_data_dir`。`app_paths.rs` 给出数据目录和打包资源目录（`resources/vcxsrv` 是 X11 转发用的 VcXsrv；`resources/commands` 是补全目录，由 `commands.rs` 加载）。
 - `sync.rs`：配置导出/导入与云同步（S3 兼容存储用自写 SigV4 签名、WebDAV、GitHub Gist、本地/网络文件夹）。打包格式 `nexterm-config` v1，可选 PBKDF2 + AES-256-GCM 加密；`hash` 明文保留用于变更判断。`sync_state.json` 记录上次同步两侧的哈希，决定上传/下载/冲突。`settings` 中的 `sync`、`logDir`、`zmodemDownloadDir`、`xserver` 属于本机，不导出也不被覆盖；`remote` 只同步 `relayUrl` + `hostToken`（有地址时成对覆盖），`enabled`、`readOnly` 和配对密钥留在本机。写入前备份到 `<data>/backups/`（保留 10 份），完成后发 `config-applied` 事件让各窗口重新加载。前端界面是 `components/SettingsSync.tsx`。
-- `importer.rs`：从 `~/.wind/profiles/*/terminal/user.sessions`、`~/.ssh/config`、WindTerm 的 `scheme.theme` 导入。
+- `importer.rs`：从 `~/.wind/profiles/*/terminal/user.sessions`、`~/.ssh/config`、WindTerm 的 `scheme.theme` 导入；`importer_xshell.rs`（`.xsh` 目录 / `.xts` 包）和 `importer_mobaxterm.rs`（`MobaXterm.ini` / `.mxtsessions` 的 Bookmarks）共用其中的 `decode_text`（BOM / UTF-16LE / GBK）和 `parse_ini`。
+- `net.rs`：出站连接，SOCKS5 / SOCKS4(a) / HTTP CONNECT 代理和 SSH 的 ProxyCommand（`connect_stream`）；`socks.rs`：动态转发（`-D`）的 SOCKS4/4a/5 服务端，解析是纯函数。
+- `server_stats.rs`：服务器资源监控的采样脚本（`/proc` + `df`），经窗格已有 SSH 连接的 exec 通道运行；解析和速率计算在前端 `utils/serverStats.ts`，轮询在 `services/serverMonitor.ts`（只在显示且窗口可见时）。
 - `sftp.rs` / `scp.rs`：SSH 窗格的文件面板（前端是 `SftpPanel.tsx`）。
 
 ### 前端（`src/`）

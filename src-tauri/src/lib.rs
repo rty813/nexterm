@@ -7,6 +7,8 @@ pub mod fonts;
 pub mod hexdump;
 pub mod history;
 pub mod importer;
+pub mod importer_mobaxterm;
+pub mod importer_xshell;
 pub mod local_pty;
 pub mod manager;
 pub mod mcp;
@@ -21,7 +23,9 @@ pub mod remote_crypto;
 pub mod remote_ops;
 pub mod scp;
 pub mod serial_conn;
+pub mod server_stats;
 pub mod share;
+pub mod socks;
 pub mod session_log;
 pub mod sftp;
 pub mod shell_integration;
@@ -1079,6 +1083,14 @@ async fn sftp_edit_start(
         .map_err(|e| format!("{:#}", e))
 }
 
+/// Raw resource sample (/proc + df) of the SSH host behind a pane, on an exec channel of
+/// its existing connection. Parsed by the frontend (utils/serverStats.ts).
+#[tauri::command]
+async fn server_stats_sample(ctx: State<'_, AppContext>, instance_id: String) -> Result<String, String> {
+    let link = ctx.connections.ssh_link(&instance_id).map_err(|e| format!("{:#}", e))?;
+    crate::server_stats::sample(&link).await.map_err(|e| format!("{:#}", e))
+}
+
 #[tauri::command]
 fn sftp_edit_stop(app: AppHandle, id: String) {
     crate::sftp::edit_stop(&app, &id);
@@ -1756,6 +1768,7 @@ pub fn run() {
             tunnel_list,
             tunnel_start,
             tunnel_stop,
+            server_stats_sample,
             zmodem_cancel,
             zmodem_stage_chunk,
             zmodem_unstage,

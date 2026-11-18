@@ -116,15 +116,19 @@ export interface TriggerRule {
 }
 
 export interface ProxyConfig {
-  kind: "none" | "socks5" | "socks4" | "http";
+  /** "command" = OpenSSH-style ProxyCommand (SSH only): `command`'s stdin / stdout carry the first hop. */
+  kind: "none" | "socks5" | "socks4" | "http" | "command";
   host: string;
   port: number;
   username?: string | null;
   password?: string | null;
+  /** ProxyCommand with %h / %p / %r placeholders. */
+  command?: string | null;
 }
 
 export interface TunnelConfig {
   name: string;
+  /** dynamic = local SOCKS4/4a/5 server, each connection a direct-tcpip channel (ssh -D). */
   kind: "local" | "remote" | "dynamic";
   listenHost: string;
   listenPort: number;
@@ -303,6 +307,8 @@ export interface AppSettings {
   toolbarHidden?: string[];
   /** Show the status bar at the bottom of the window (default off). */
   showStatusBar?: boolean;
+  /** Status bar: CPU / memory / network of the active SSH host (default on; settings.extra on the Rust side). */
+  serverMonitor?: boolean;
   /** Quick bar layout and group order (kept in settings.extra on the Rust side). */
   quickBar?: QuickBarSettings;
   /** Toolbar defaults applied (see DEFAULT_TOOLBAR_HIDDEN); missing on older settings. */
@@ -625,6 +631,12 @@ export interface ImportResult {
   themes: ThemeDefinition[];
   quickCommands: QuickCommand[];
   summary: string;
+  /** Entries left out (unsupported protocol / type, malformed). */
+  skipped?: number;
+  /** Sessions whose saved, encrypted password was not imported. */
+  passwordsSkipped?: number;
+  /** Sessions using a key that was not found as a file. */
+  keysMissing?: number;
 }
 
 export type ConnectionStatus =

@@ -16,7 +16,7 @@ use crate::manager::{
     TunnelStatus,
 };
 use crate::models::{AuthType, JumpHostConfig, SessionConfig, TunnelConfig};
-use crate::net::connect_tcp;
+use crate::net::connect_stream;
 use crate::shell_integration::{Injector, Step};
 
 /// Where X11 channels opened by the server are delivered.
@@ -375,7 +375,7 @@ async fn start_tunnel(
                 sink,
                 instance_id,
                 &if dynamic {
-                    format!("[动态转发{}] SOCKS5 代理已在 {}:{} 启动", label, listen_host, bound)
+                    format!("[动态转发{}] SOCKS4/5 代理已在 {}:{} 启动", label, listen_host, bound)
                 } else {
                     format!("[本地转发{}] {}:{} → {}:{}", label, listen_host, bound, target_host, t.target_port)
                 },
@@ -391,28 +391,35 @@ async fn start_tunnel(
                     let guard = track(&a, &tot);
                     tokio::spawn(async move {
                         let _guard = guard;
-                        let dest = if dynamic {
-                            match socks5_accept(&mut sock).await {
-                                Ok(d) => d,
-                                Err(_) => return,
+                        // Dynamic: the SOCKS handshake names the destination; bytes the client
+                        // sent past it are forwarded first.
+                        let (dest, socks, early) = if dynamic {
+                            match tokio::time::timeout(Duration::from_secs(10), crate::socks::accept(&mut sock)).await {
+                                Ok(Ok((req, early))) => ((req.host, req.port), Some(req.version), early),
+                                _ => return,
                             }
                         } else {
-                            target
+                            (target, None, Vec::new())
                         };
                         let opened = handle
                             .channel_open_direct_tcpip(dest.0.clone(), dest.1 as u32, peer.ip().to_string(), peer.port() as u32)
                             .await;
                         match opened {
                             Ok(ch) => {
-                                if dynamic {
-                                    let _ = sock.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+                                if let Some(v) = socks {
+                                    if sock.write_all(&crate::socks::final_reply(v, true)).await.is_err() {
+                                        return;
+                                    }
                                 }
                                 let mut stream = ch.into_stream();
+                                if !early.is_empty() && stream.write_all(&early).await.is_err() {
+                                    return;
+                                }
                                 let _ = tokio::io::copy_bidirectional(&mut sock, &mut stream).await;
                             }
                             Err(_) => {
-                                if dynamic {
-                                    let _ = sock.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+                                if let Some(v) = socks {
+                                    let _ = sock.write_all(&crate::socks::final_reply(v, false)).await;
                                 }
                             }
                         }
@@ -472,7 +479,7 @@ async fn stop_tunnel(handle: &SharedHandle, forwards: &RemoteForwards, t: Runnin
 fn describe(t: &TunnelStatus) -> String {
     let c = &t.config;
     match c.kind.as_str() {
-        "dynamic" => format!("SOCKS5 {}:{}", c.listen_host, t.bound_port),
+        "dynamic" => format!("SOCKS {}:{}", c.listen_host, t.bound_port),
         "remote" => format!("服务器 {}:{} → 本机 {}:{}", c.listen_host, t.bound_port, c.target_host, c.target_port),
         _ => format!("{}:{} → {}:{}", c.listen_host, t.bound_port, c.target_host, c.target_port),
     }
@@ -487,47 +494,6 @@ fn snapshot(tunnels: &[RunningTunnel]) -> Vec<TunnelStatus> {
             ..t.info.clone()
         })
         .collect()
-}
-
-/// Server side of a SOCKS5 CONNECT (no auth); returns the requested destination.
-async fn socks5_accept(sock: &mut TcpStream) -> Result<(String, u16)> {
-    let mut head = [0u8; 2];
-    sock.read_exact(&mut head).await?;
-    if head[0] != 5 {
-        anyhow::bail!("not socks5");
-    }
-    let mut methods = vec![0u8; head[1] as usize];
-    sock.read_exact(&mut methods).await?;
-    sock.write_all(&[5, 0]).await?;
-    let mut req = [0u8; 4];
-    sock.read_exact(&mut req).await?;
-    if req[1] != 1 {
-        sock.write_all(&[5, 7, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
-        anyhow::bail!("only CONNECT is supported");
-    }
-    let host = match req[3] {
-        1 => {
-            let mut ip = [0u8; 4];
-            sock.read_exact(&mut ip).await?;
-            std::net::Ipv4Addr::from(ip).to_string()
-        }
-        4 => {
-            let mut ip = [0u8; 16];
-            sock.read_exact(&mut ip).await?;
-            std::net::Ipv6Addr::from(ip).to_string()
-        }
-        3 => {
-            let mut len = [0u8; 1];
-            sock.read_exact(&mut len).await?;
-            let mut name = vec![0u8; len[0] as usize];
-            sock.read_exact(&mut name).await?;
-            String::from_utf8_lossy(&name).to_string()
-        }
-        _ => anyhow::bail!("bad address type"),
-    };
-    let mut port = [0u8; 2];
-    sock.read_exact(&mut port).await?;
-    Ok((host, u16::from_be_bytes(port)))
 }
 
 /// Login shells differ (fish, csh ...), so the POSIX script is sent base64-encoded and
@@ -886,7 +852,8 @@ async fn establish_ssh_session(
             (handle, Some(jump_handle))
         }
         None => {
-            let stream = connect_tcp(session.host.trim(), session.port, proxy, Duration::from_secs(20)).await?;
+            let stream =
+                connect_stream(session.host.trim(), session.port, &username, proxy, Duration::from_secs(20)).await?;
             let handle = client::connect_stream(Arc::clone(&cfg), stream, handler)
                 .await
                 .map_err(|e| map_connect_error(e, &session.host, session.port))?;
@@ -919,7 +886,7 @@ async fn connect_and_authenticate_jump(
     jump: &JumpHostConfig,
     sink: &Arc<dyn TerminalSink>,
 ) -> Result<client::Handle<SshHandler>> {
-    let stream = connect_tcp(jump.host.trim(), jump.port, session.proxy.as_ref(), Duration::from_secs(20))
+    let stream = connect_stream(jump.host.trim(), jump.port, jump.username.trim(), session.proxy.as_ref(), Duration::from_secs(20))
         .await
         .with_context(|| format!("无法连接到跳板机 {}:{}", jump.host, jump.port))?;
     let handler = SshHandler::new(instance_id, &jump.host, jump.port, session.skip_host_key_check, Arc::clone(sink));

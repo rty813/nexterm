@@ -278,6 +278,7 @@ fn parse_windterm_proxy(obj: &serde_json::Map<String, Value>) -> Option<ProxyCon
         port,
         username: obj.get("session.proxyUsername").and_then(|v| v.as_str()).map(str::to_string),
         password: None,
+        command: None,
     })
 }
 
@@ -689,6 +690,35 @@ pub fn discover_import_sources() -> Vec<DiscoveryCandidate> {
         }
     }
 
+    // Xshell session folders (Documents/NetSarang Computer/<version>/Xshell/Sessions).
+    for dir in crate::importer_xshell::xshell_data_dirs() {
+        let sessions = dir.join("Sessions");
+        let count = crate::importer_xshell::count_sessions(&sessions);
+        if count > 0 {
+            let version = dir.parent().and_then(|v| v.file_name()).map(|v| v.to_string_lossy().to_string()).unwrap_or_default();
+            candidates.push(DiscoveryCandidate {
+                source_type: "xshell_sessions".to_string(),
+                label: format!("Xshell {} 会话", version).replace("  ", " "),
+                path: sessions.to_string_lossy().to_string(),
+                item_count: count,
+            });
+        }
+    }
+
+    // MobaXterm.ini of an installed MobaXterm (the portable one is picked by hand).
+    for ini in crate::importer_mobaxterm::mobaxterm_ini_paths() {
+        if let Ok(r) = crate::importer_mobaxterm::import_path(&ini) {
+            if !r.sessions.is_empty() {
+                candidates.push(DiscoveryCandidate {
+                    source_type: "mobaxterm".to_string(),
+                    label: "MobaXterm 会话 (MobaXterm.ini)".to_string(),
+                    path: ini.to_string_lossy().to_string(),
+                    item_count: r.sessions.len(),
+                });
+            }
+        }
+    }
+
     // 3. Check sibling/parent WindTerm 2.7.0 installation if running inside workspace
     if let Ok(cwd) = std::env::current_dir() {
         for ancestor in cwd.ancestors().take(4) {
@@ -790,6 +820,9 @@ pub fn import_from_path(source_type: &str, path_str: &str) -> Result<ImportResul
                 themes: Vec::new(),
                 quick_commands: Vec::new(),
                 summary: format!("已从 WindTerm user.sessions 成功导入 {} 个会话", count),
+                skipped: 0,
+                passwords_skipped: 0,
+                keys_missing: 0,
             })
         }
         "windterm_quickbar" => {
@@ -802,6 +835,9 @@ pub fn import_from_path(source_type: &str, path_str: &str) -> Result<ImportResul
                 themes: Vec::new(),
                 quick_commands,
                 summary: format!("已从 WindTerm quickbar.config 成功导入 {} 条快捷命令", count),
+                skipped: 0,
+                passwords_skipped: 0,
+                keys_missing: 0,
             })
         }
         "openssh_config" => {
@@ -814,6 +850,9 @@ pub fn import_from_path(source_type: &str, path_str: &str) -> Result<ImportResul
                 themes: Vec::new(),
                 quick_commands: Vec::new(),
                 summary: format!("已从 OpenSSH 配置成功导入 {} 个主机", count),
+                skipped: 0,
+                passwords_skipped: 0,
+                keys_missing: 0,
             })
         }
         "windterm_theme" => {
@@ -829,6 +868,33 @@ pub fn import_from_path(source_type: &str, path_str: &str) -> Result<ImportResul
                 themes: vec![theme],
                 quick_commands: Vec::new(),
                 summary: format!("已成功导入 WindTerm 配色主题 '{}'", name),
+                skipped: 0,
+                passwords_skipped: 0,
+                keys_missing: 0,
+            })
+        }
+        "xshell_sessions" => {
+            let r = crate::importer_xshell::import_path(path)?;
+            Ok(ImportResult {
+                summary: format!("已从 Xshell 导入 {} 个会话", r.sessions.len()),
+                sessions: r.sessions,
+                themes: Vec::new(),
+                quick_commands: Vec::new(),
+                skipped: r.skipped,
+                passwords_skipped: r.passwords_skipped,
+                keys_missing: r.keys_missing,
+            })
+        }
+        "mobaxterm" => {
+            let r = crate::importer_mobaxterm::import_path(path)?;
+            Ok(ImportResult {
+                summary: format!("已从 MobaXterm 导入 {} 个会话", r.sessions.len()),
+                sessions: r.sessions,
+                themes: Vec::new(),
+                quick_commands: Vec::new(),
+                skipped: r.skipped,
+                passwords_skipped: 0,
+                keys_missing: 0,
             })
         }
         _ => anyhow::bail!("不支持的导入源类型: {}", source_type),
@@ -863,6 +929,92 @@ fn split_host_port(input: &str, default_port: u16) -> (String, u16) {
         }
     }
     (input.to_string(), default_port)
+}
+
+/// Largest session / config file read for import.
+pub(crate) const IMPORT_FILE_MAX: u64 = 16 * 1024 * 1024;
+
+/// Read a file for import, refusing anything over `max` bytes.
+pub(crate) fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let file = fs::File::open(path).with_context(|| format!("读取文件失败: {}", path.display()))?;
+    let mut raw = Vec::new();
+    file.take(max + 1).read_to_end(&mut raw).with_context(|| format!("读取文件失败: {}", path.display()))?;
+    if raw.len() as u64 > max {
+        anyhow::bail!("文件过大（超过 {} MB）: {}", max / (1024 * 1024), path.display());
+    }
+    Ok(raw)
+}
+
+/// Text of a Windows config file: UTF-8 / UTF-16 (LE or BE) by BOM, UTF-16LE without BOM
+/// when it looks like it, else UTF-8, else the GBK code page.
+pub(crate) fn decode_text(raw: &[u8]) -> String {
+    fn utf16(raw: &[u8], le: bool) -> String {
+        let units: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
+            .collect();
+        String::from_utf16_lossy(&units)
+    }
+    if let Some(rest) = raw.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    if let Some(rest) = raw.strip_prefix(&[0xFF, 0xFE]) {
+        return utf16(rest, true);
+    }
+    if let Some(rest) = raw.strip_prefix(&[0xFE, 0xFF]) {
+        return utf16(rest, false);
+    }
+    // ASCII-heavy UTF-16LE without a BOM: most odd bytes are zero.
+    if raw.len() >= 4 && raw.len() % 2 == 0 {
+        let odd_zero = raw.iter().skip(1).step_by(2).filter(|&&b| b == 0).count();
+        if odd_zero * 10 >= (raw.len() / 2) * 6 {
+            return utf16(raw, true);
+        }
+    }
+    match std::str::from_utf8(raw) {
+        Ok(s) => s.to_string(),
+        Err(_) => crate::charset::decode_codepage(936, raw),
+    }
+}
+
+/// One `[section]` of an INI file, keys in file order.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct IniSection {
+    pub name: String,
+    pub entries: Vec<(String, String)>,
+}
+
+impl IniSection {
+    /// Case-insensitive lookup; the trimmed value, None when missing or empty.
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+            .filter(|v| !v.is_empty())
+    }
+}
+
+/// Sections in file order. Lines before the first section, comments and lines without
+/// `=` are ignored; only the first `=` splits key and value.
+pub(crate) fn parse_ini(text: &str) -> Vec<IniSection> {
+    let mut out: Vec<IniSection> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            out.push(IniSection { name: line[1..line.len() - 1].trim().to_string(), entries: Vec::new() });
+            continue;
+        }
+        let (Some(sec), Some((k, v))) = (out.last_mut(), line.split_once('=')) else {
+            continue;
+        };
+        sec.entries.push((k.trim().to_string(), v.trim().to_string()));
+    }
+    out
 }
 
 pub fn expand_tilde(path_str: &str) -> String {

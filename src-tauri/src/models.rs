@@ -107,7 +107,7 @@ pub struct SessionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyConfig {
-    /// "none" | "socks5" | "socks4" | "http"
+    /// "none" | "socks5" | "socks4" | "http" | "command" (OpenSSH ProxyCommand, SSH only)
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
@@ -118,6 +118,10 @@ pub struct ProxyConfig {
     pub username: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
+    /// For kind "command": a local program whose stdin / stdout carry the first SSH hop
+    /// (`%h` / `%p` / `%r` become host, port and user, as in OpenSSH).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -125,7 +129,7 @@ pub struct ProxyConfig {
 pub struct TunnelConfig {
     #[serde(default)]
     pub name: String,
-    /// "local" (-L) | "remote" (-R) | "dynamic" (-D, SOCKS5)
+    /// "local" (-L) | "remote" (-R) | "dynamic" (-D, SOCKS4/4a/5 server)
     pub kind: String,
     #[serde(default = "default_listen_host")]
     pub listen_host: String,
@@ -352,6 +356,15 @@ pub struct ImportResult {
     #[serde(default)]
     pub quick_commands: Vec<QuickCommand>,
     pub summary: String,
+    /// Entries left out (unsupported protocol / session type, malformed).
+    #[serde(default)]
+    pub skipped: usize,
+    /// Sessions whose saved (encrypted) password was not imported.
+    #[serde(default)]
+    pub passwords_skipped: usize,
+    /// Sessions using a key that could not be found as a file (pick it again).
+    #[serde(default)]
+    pub keys_missing: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -122,6 +122,59 @@ const SFTP_ZH = {
   },
 };
 
+/** SSH host resource monitor (ServerMonitor.tsx). */
+const MONITOR_ZH = {
+  title: "服务器资源",
+  close: "关闭",
+  session: "SSH 会话",
+  noSsh: "没有已连接的 SSH 会话。连接一个 SSH 会话后即可查看服务器的 CPU、内存、网络和磁盘。",
+  preview: "浏览器预览模式下不可用。",
+  loading: "正在读取…",
+  unsupported: "不支持：资源监控只支持 Linux 服务器。",
+  unsupportedOs: "不支持：资源监控只支持 Linux 服务器，这台是 {{os}}。",
+  stale: "暂时读不到数据，显示的是上一次的结果。",
+  cpu: "CPU",
+  cores: "{{count}} 核",
+  memory: "内存",
+  memShort: "内存",
+  swap: "交换分区",
+  load: "负载",
+  uptime: "运行时间",
+  network: "网络",
+  nic: "网卡",
+  rx: "接收",
+  tx: "发送",
+  nicTotal: "累计 接收 {{rx}} / 发送 {{tx}}",
+  disks: "磁盘",
+  openPanel: "点击打开服务器资源面板",
+};
+
+const MONITOR_EN: typeof MONITOR_ZH = {
+  title: "Server Resources",
+  close: "Close",
+  session: "SSH session",
+  noSsh: "No connected SSH session. Connect one to see the server's CPU, memory, network and disks.",
+  preview: "Not available in browser preview mode.",
+  loading: "Reading…",
+  unsupported: "Not supported: resource monitoring works on Linux servers only.",
+  unsupportedOs: "Not supported: resource monitoring works on Linux servers only; this one runs {{os}}.",
+  stale: "No fresh data right now; showing the last reading.",
+  cpu: "CPU",
+  cores: "{{count}} cores",
+  memory: "Memory",
+  memShort: "MEM",
+  swap: "Swap",
+  load: "Load",
+  uptime: "Uptime",
+  network: "Network",
+  nic: "Interface",
+  rx: "In",
+  tx: "Out",
+  nicTotal: "Total in {{rx}} / out {{tx}}",
+  disks: "Disks",
+  openPanel: "Click to open the Server Resources panel",
+};
+
 const SFTP_EN: typeof SFTP_ZH = {
   title: "File Browser",
   openHere: "Open in File Browser (SFTP)",
@@ -491,12 +544,15 @@ export const extraResources = {
   "zh-CN": {
     settingsModal: {
       showStatusBar: "显示底部状态栏",
+      serverMonitor: "状态栏显示服务器资源",
+      serverMonitorTip: "SSH 会话处于活动状态时，在状态栏显示 CPU、内存和网络速率（仅 Linux 服务器）。",
       tab: { terminal: "终端", mouse: "鼠标", logs: "日志与传输", xserver: "X 服务器", remote: "远程访问", sync: "同步与备份", triggers: "触发器" },
     },
     actions: {
       "view.sender": "发送器面板",
       "view.history": "命令历史面板",
       "view.files": "文件浏览器 (SFTP)",
+      "view.serverMonitor": "服务器资源面板",
       "terminal.reset": "重置终端",
       "terminal.saveToFile": "保存输出到文件",
       "terminal.foldAll": "折叠全部输出",
@@ -588,8 +644,9 @@ export const extraResources = {
         },
       },
     },
-    toolbarEdit: { item: { sender: "发送器", history: "命令历史", files: "文件浏览器", tmux: "tmux 会话", remote: "远程访问" } },
+    toolbarEdit: { item: { sender: "发送器", history: "命令历史", files: "文件浏览器", monitor: "服务器资源", tmux: "tmux 会话", remote: "远程访问" } },
     sftp: SFTP_ZH,
+    monitor: MONITOR_ZH,
     cfgSync: CFG_SYNC_ZH,
     sidebar: {
       sortBy: "排序",
@@ -996,12 +1053,15 @@ export const extraResources = {
   "en-US": {
     settingsModal: {
       showStatusBar: "Show Status Bar",
+      serverMonitor: "Server Resources in Status Bar",
+      serverMonitorTip: "Show CPU, memory and network rates of the active SSH session in the status bar (Linux servers only).",
       tab: { terminal: "Terminal", mouse: "Mouse", logs: "Logs & Transfers", xserver: "X Server", remote: "Remote Access", sync: "Sync & Backup", triggers: "Triggers" },
     },
     actions: {
       "view.sender": "Sender Panel",
       "view.history": "Command History Panel",
       "view.files": "File Browser (SFTP)",
+      "view.serverMonitor": "Server Resources Panel",
       "terminal.reset": "Reset Terminal",
       "terminal.saveToFile": "Save Output to File",
       "terminal.foldAll": "Fold All Output",
@@ -1093,8 +1153,9 @@ export const extraResources = {
         },
       },
     },
-    toolbarEdit: { item: { sender: "Sender", history: "Command History", files: "File Browser", tmux: "tmux Sessions", remote: "Remote Access" } },
+    toolbarEdit: { item: { sender: "Sender", history: "Command History", files: "File Browser", monitor: "Server Resources", tmux: "tmux Sessions", remote: "Remote Access" } },
     sftp: SFTP_EN,
+    monitor: MONITOR_EN,
     cfgSync: CFG_SYNC_EN,
     sidebar: {
       sortBy: "Sort",

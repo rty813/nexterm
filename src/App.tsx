@@ -82,6 +82,7 @@ import { historyOf, modemOf, remoteOf, sftpOf, syncOf } from "./utils/settingsDe
 import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem, UpdateInfo } from "./types/domain";
 import { AiRequestDialog } from "./components/AiRequestDialog";
 import { PortForwardPanel, type ForwardTarget } from "./components/PortForwardPanel";
+import { ServerMonitorPanel } from "./components/ServerMonitor";
 import { SftpPanel, type SftpTarget } from "./components/SftpPanel";
 import { FilePreview, type PreviewRequest } from "./components/FilePreview";
 import { paneCwd } from "./utils/paneCwd";
@@ -178,6 +179,7 @@ export const App: React.FC = () => {
   const [logPaths, setLogPaths] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<string | null>(null);
   const [portForwardOpen, setPortForwardOpen] = useState(false);
+  const [monitorOpen, setMonitorOpen] = useState(false);
   /** Pane the forwarding panel was opened for (pane menu); falls back to the active pane. */
   const [forwardPaneId, setForwardPaneId] = useState<string | null>(null);
 
@@ -1381,6 +1383,9 @@ export const App: React.FC = () => {
       case "view.portForward":
         setPortForwardOpen((v) => !v);
         return true;
+      case "view.serverMonitor":
+        setMonitorOpen((v) => !v);
+        return true;
       case "view.settings":
       case "view.highlights":
         if (!isMainWindow) {
@@ -2541,6 +2546,8 @@ export const App: React.FC = () => {
             keymap={keymap}
             portForwardOpen={portForwardOpen}
             onTogglePortForward={() => setPortForwardOpen((v) => !v)}
+            monitorOpen={monitorOpen}
+            onToggleMonitor={() => setMonitorOpen((v) => !v)}
             senderOpen={senderOpen}
             onToggleSender={() => {
               setSenderPaneId(null);
@@ -2670,6 +2677,13 @@ export const App: React.FC = () => {
           )}
         </main>
 
+        {monitorOpen && (
+          <ServerMonitorPanel
+            targets={forwardTargets}
+            preferredPaneId={activeLeaf?.session.protocol === "ssh" && activeLeaf.status === "connected" ? activeLeaf.paneId : null}
+            onClose={() => setMonitorOpen(false)}
+          />
+        )}
         {portForwardOpen && (
           <PortForwardPanel
             targets={forwardTargets}
@@ -2776,6 +2790,12 @@ export const App: React.FC = () => {
         onToggleSyncPause={toggleSyncPause}
         loggingCount={Object.keys(logPaths).length}
         activeLogging={Boolean(activeLeaf && logPaths[activeLeaf.paneId])}
+        monitorPaneId={
+          settings.serverMonitor !== false && activeLeaf?.session.protocol === "ssh" && activeLeaf.status === "connected"
+            ? activeLeaf.paneId
+            : null
+        }
+        onOpenMonitor={() => setMonitorOpen(true)}
         syncOnToolbar={!focusMode && isMainWindow && !(settings.toolbarHidden ?? DEFAULT_TOOLBAR_HIDDEN).includes("sync")}
       />
       )}

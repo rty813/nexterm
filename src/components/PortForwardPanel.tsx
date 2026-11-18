@@ -34,7 +34,7 @@ function sameRule(a: TunnelConfig, b: TunnelConfig): boolean {
 
 function describe(c: TunnelConfig, boundPort?: number): { from: string; to: string } {
   const port = boundPort ?? c.listenPort;
-  if (c.kind === "dynamic") return { from: `${c.listenHost || "127.0.0.1"}:${port}`, to: "SOCKS5" };
+  if (c.kind === "dynamic") return { from: `${c.listenHost || "127.0.0.1"}:${port}`, to: "SOCKS4/5" };
   if (c.kind === "remote") return { from: `⇠ ${c.listenHost || "localhost"}:${port}`, to: `${c.targetHost}:${c.targetPort}` };
   return { from: `${c.listenHost || "127.0.0.1"}:${port}`, to: `${c.targetHost}:${c.targetPort}` };
 }

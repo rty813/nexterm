@@ -159,6 +159,11 @@ fn gb18030_complete_len(data: &[u8]) -> usize {
     data.len()
 }
 
+/// Decode bytes in Windows code page `cp` (936 = GBK). Lossy UTF-8 on other systems.
+pub fn decode_codepage(cp: u32, bytes: &[u8]) -> String {
+    decode_cp(cp, bytes)
+}
+
 fn is_dbcs(cp: u32) -> bool {
     matches!(cp, 932 | 936 | 949 | 950 | 20932)
 }

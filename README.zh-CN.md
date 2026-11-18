@@ -6,7 +6,7 @@
 
 **Nexterm** 是一款高性能 Windows 终端客户端，支持 SSH、本地 Shell（PowerShell / CMD / WSL）、Telnet、TCP 与串口，基于 Rust + Tauri v2 + React + [xterm.js](https://xtermjs.org) 构建。
 
-延续 WindTerm 的交互习惯（会话树、嵌套分屏、快捷命令、一键导入 WindTerm 配置），并内置了几项特色能力：
+延续 WindTerm 的交互习惯（会话树、嵌套分屏、快捷命令、一键导入 WindTerm、Xshell、MobaXterm 配置），并内置了几项特色能力：
 
 - **远程文件管理**：SFTP 侧边栏（无 SFTP 自动降级 SCP），支持并发队列、免下载预览与**本地编辑保存自动回传**。
 - **AI Agent 协同**：标签页实时显示 **Claude Code / Codex / Gemini CLI** 状态；**任务完成、等待权限审批或出错**时即时弹窗通知，点击直达对应窗格；内置 MCP 服务可将窗格受控授权给 AI 操作。
@@ -22,10 +22,11 @@
 ### 连接
 
 - **SSH**（`russh`）：密码、交互式、私钥认证（OpenSSH / PEM，Ed25519 / RSA，支持口令），支持跳板机（ProxyJump）、保活、登录后脚本与首次连接主机密钥确认。
+- **代理**：SSH、Telnet 和 Raw TCP 会话可以经 **SOCKS5**（支持用户名/密码）、**SOCKS4 / 4a** 或 **HTTP CONNECT**（支持 Basic 认证）代理连接；SSH 会话还可以用 OpenSSH 风格的 **ProxyCommand**（`%h` / `%p` / `%r`），例如 `ssh -W %h:%p bastion`。设置了跳板机时，经代理连接的是跳板机。
 - **防空闲断开**：会话超过设定秒数没有输入时自动发送一段内容（默认 `\0`，可用 `\n`、`\xHH` 等转义），防止服务器因无操作注销（`TMOUT`、`autologout`、`exec-timeout`），SSH 保活包管不到这种情况。由后端计时，窗口最小化时照常工作；全屏程序（vim、top 等）或命令运行中不发送。适用于所有协议，在会话设置的“更多”里开启。
 - **本地与硬件协议**：ConPTY 本地终端（PowerShell / CMD / WSL / 自定义命令），以及 Telnet、Raw TCP、串口。
 - **Shell 集成**：SSH 的 `bash` / `zsh` / `fish` 和本地 `PowerShell` 支持自动注入目录与命令追踪（OSC 133 / 633 / 7）。右键“加载 Shell 集成”会为当前 `bash` / `zsh` / `fish` 用户安装脚本并写入启动配置，立即生效，重开会话后自动加载；适用于 WSL、SSH、嵌套 Shell 和串口，修改已有启动文件前会保留 `.nexterm-si.bak` 备份。
-- **转发与终端传输**：支持端口转发、一键开启内置 VcXsrv 的 X11 转发、终端内 **ZMODEM / XMODEM / YMODEM** 收发文件及会话日志。
+- **转发与终端传输**：支持本地（`-L`）、远程（`-R`）和动态（`-D`，本机开一个 SOCKS4 / 4a / 5 代理，经服务器访问任意地址）端口转发，可保存在会话里或在端口转发面板中临时开启；一键开启内置 VcXsrv 的 X11 转发、终端内 **ZMODEM / XMODEM / YMODEM** 收发文件及会话日志。
 
 ### 文件浏览器
 
@@ -106,7 +107,8 @@
 
 ### 其他
 
-- **无缝迁移**：支持从 **WindTerm** 导入会话、快捷命令与配色，从 `~/.ssh/config` 导入主机。
+- **服务器资源**：Linux 服务器的 SSH 会话可以在「服务器资源」面板（从「更多」或命令面板打开，也可以加到工具栏）查看 CPU、内存和交换分区、负载、各网卡收发速率、磁盘使用和运行时间；状态栏显示当前会话的 CPU、内存和网速（可在「设置 → 常规」关闭）。使用会话已有的连接，不需要再次登录；其它系统显示“不支持”。
+- **无缝迁移**：支持从 **WindTerm** 导入会话、快捷命令与配色，从 `~/.ssh/config` 导入主机，从 **Xshell**（自动找到 `Sessions` 目录，也可以选 `.xsh` 或导出的 `.xts` 文件）和 **MobaXterm**（`MobaXterm.ini` 或导出的 `.mxtsessions`）导入会话。文件夹对应会话分组；SSH、Telnet、串口和本地 Shell 会话会被导入，其它类型（RDP、VNC、FTP 等）跳过并计数。保存的密码不会导入，首次连接时输入即可。
 - **个性化**：内置 4 套主题并支持自定义配色、快捷键与工具栏；支持简体中文与英文界面。
 - **检查更新**：启动时自动检查 GitHub 上是否有新版本，可一键打开下载页或跳过该版本；可在「设置 → 常规」中关闭或手动检查。
 
@@ -171,7 +173,7 @@ cd relay; npm test                                       # 中继与加密协议
 | 路径 | 内容 |
 | --- | --- |
 | `src/` | 前端（React + TypeScript），`utils/` 存放与 UI 解耦的纯逻辑与主要测试 |
-| `src-tauri/` | Rust 后端：连接管理、各协议、SFTP / SCP、Shell 集成、完整回滚历史、MCP、远程访问、会话分享 |
+| `src-tauri/` | Rust 后端：连接管理、各协议与代理、端口转发、SFTP / SCP、会话导入、Shell 集成、完整回滚历史、服务器资源、MCP、远程访问、会话分享 |
 | `relay/` | 远程访问自建中继、PWA 与会话分享页（Node.js） |
 | `bench/` | 吞吐与内存基准测试脚本 |
 

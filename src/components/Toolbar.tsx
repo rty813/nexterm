@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  Activity,
   ArrowRightLeft,
   ArrowRight,
   History,
@@ -63,6 +64,8 @@ interface ToolbarProps {
   onOpenSettings: () => void;
   portForwardOpen: boolean;
   onTogglePortForward: () => void;
+  monitorOpen: boolean;
+  onToggleMonitor: () => void;
   senderOpen: boolean;
   onToggleSender: () => void;
   historyOpen: boolean;
@@ -110,6 +113,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onOpenSettings,
   portForwardOpen,
   onTogglePortForward,
+  monitorOpen,
+  onToggleMonitor,
   senderOpen,
   onToggleSender,
   historyOpen,
@@ -203,6 +208,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     history: { label: t("history.title"), shortcut: keymap["view.history"], checked: historyOpen, onClick: onToggleHistory },
     tmux: { label: t("tmux.title"), shortcut: keymap["terminal.tmux"], checked: tmuxOpen, onClick: onToggleTmux },
     files: { label: t("sftp.title"), shortcut: keymap["view.files"], checked: filesOpen, onClick: onToggleFiles },
+    monitor: { label: t("monitor.title"), shortcut: keymap["view.serverMonitor"], checked: monitorOpen, onClick: onToggleMonitor },
     remote: { label: t("remote.enabled"), checked: remoteEnabled, onClick: onToggleRemote },
     settings: { label: t("toolbar.settings"), shortcut: keymap["view.settings"], onClick: onOpenSettings },
     focusMode: { label: t("toolbar.focusMode"), shortcut: keymap["view.focusMode"], checked: focusMode, onClick: onToggleFocusMode },
@@ -428,6 +434,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             title={tip(t("sftp.title"), "view.files")}
           >
             <HardDrive size={15} />
+          </button>
+        )}
+        {show("monitor") && (
+          <button
+            type="button"
+            className={`icon-btn ${monitorOpen ? "active" : ""}`}
+            onClick={onToggleMonitor}
+            title={tip(t("monitor.title"), "view.serverMonitor")}
+          >
+            <Activity size={15} />
           </button>
         )}
         {show("remote") && (

@@ -1437,11 +1437,6 @@ input[type="radio"] {
 }
 
 /* Import Modal Specific */
-.import-manual-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
 .section-heading {
   font-size: 12px;
   color: var(--fg-strong);
@@ -1478,6 +1473,43 @@ input[type="radio"] {
 }
 .candidate-info strong {
   color: var(--fg-strong);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Import dialog: one row per program (WindTerm / Xshell / ...) with its file pickers. */
+.import-sources {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-app);
+}
+.import-source-name {
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.import-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.import-discovered-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.import-source-tag {
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 17px;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .candidate-path {
   font-size: 11px;
@@ -4965,4 +4997,86 @@ html.ctxmenu-host #root {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Server resource monitor (ServerMonitor.tsx) */
+.mon-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mon-meter-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--fg-muted);
+}
+.mon-meter-head span:first-child {
+  color: var(--fg-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mon-meter-head .mono {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.mon-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.mon-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.mon-bar-fill.warn {
+  background: var(--warning);
+}
+.mon-bar-fill.crit {
+  background: var(--danger);
+}
+.mon-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  color: var(--fg-muted);
+}
+.mon-kv .mono {
+  color: var(--fg-strong);
+  text-align: right;
+}
+.mon-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.mon-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--fg-muted);
+  padding: 2px 4px;
+}
+.mon-table td {
+  padding: 3px 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+.mon-table th:not(:first-child),
+.mon-table td:not(:first-child) {
+  text-align: right;
+}
+.mon-badge {
+  gap: 8px;
+}
+.mon-badge .warn {
+  color: var(--warning);
+}
+.mon-badge .crit {
+  color: var(--danger);
+}
+.mon-badge.stale {
+  opacity: 0.55;
 }

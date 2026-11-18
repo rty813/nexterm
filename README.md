@@ -6,7 +6,7 @@ English | [简体中文](README.zh-CN.md)
 
 **Nexterm** is a fast, modern Windows terminal client supporting SSH, local shells (PowerShell / CMD / WSL), Telnet, raw TCP, and serial ports—built with Rust, Tauri v2, React, and [xterm.js](https://xtermjs.org).
 
-It keeps WindTerm's familiar workflow (session tree, nested split panes, quick commands, one-click WindTerm import) and adds several built-in capabilities:
+It keeps WindTerm's familiar workflow (session tree, nested split panes, quick commands, one-click import from WindTerm, Xshell and MobaXterm) and adds several built-in capabilities:
 
 - **Remote File Workflow**: Side-by-side SFTP browser (with automatic SCP fallback), parallel transfer queue, instant previews, and **local edit with auto-upload on save**.
 - **AI Agent Awareness & Control**: Live tab badges for **Claude Code / Codex / Gemini CLI**; desktop notifications when an agent **finishes, needs permission approval, or errors out** (click to jump straight to the pane); plus a built-in MCP server for human-approved terminal delegation.
@@ -22,10 +22,11 @@ Windows 10 / 11 only. Current version: `0.1.5`.
 ### Connections
 
 - **SSH** (`russh`): Password, `keyboard-interactive`, and private-key auth (OpenSSH / PEM, Ed25519 / RSA, passphrase support), ProxyJump, keep-alive, post-login scripts, and first-connect host key verification.
+- **Proxies**: SSH, Telnet and raw TCP sessions can connect through a **SOCKS5** (username / password), **SOCKS4 / 4a** or **HTTP CONNECT** (Basic auth) proxy. SSH sessions can also use an OpenSSH-style **ProxyCommand** (`%h` / `%p` / `%r`), e.g. `ssh -W %h:%p bastion`. With a jump host, the proxy is used to reach the jump host.
 - **Anti-Idle**: After a set number of seconds without input, a session sends a string (`\0` by default; escapes such as `\n` and `\xHH` work) so servers that log out inactive users (`TMOUT`, `autologout`, `exec-timeout`) keep you in. SSH keep-alives cannot do this. The timer runs in the backend, so it keeps working while the window is minimized, and it holds off while a full-screen program (vim, top …) or a command is running. Works with every protocol; turn it on under **More** in the session settings.
 - **Local & Hardware Protocols**: Native ConPTY local shells (PowerShell / CMD / WSL / custom commands), Telnet, raw TCP, and Serial ports.
 - **Shell Integration**: Automatically tracks prompts, commands, and working directories (OSC 133 / 633 / 7) in SSH `bash` / `zsh` / `fish` and local `PowerShell`. The context menu's **Load shell integration** installs scripts and startup configuration for the current `bash` / `zsh` / `fish` user, taking effect immediately and in future sessions, including WSL, SSH, nested shells, and serial consoles. Existing startup files are backed up as `.nexterm-si.bak` before changes.
-- **Forwarding & In-Band Transfers**: Port forwarding, one-click X11 forwarding via bundled VcXsrv, **ZMODEM / XMODEM / YMODEM** transfers, and session logging.
+- **Forwarding & In-Band Transfers**: Local (`-L`), remote (`-R`) and dynamic (`-D`, a local SOCKS4 / 4a / 5 proxy whose connections go out through the server) port forwarding, saved per session or started from the Port Forwarding panel; one-click X11 forwarding via bundled VcXsrv, **ZMODEM / XMODEM / YMODEM** transfers, and session logging.
 
 ### File Browser
 
@@ -106,7 +107,8 @@ Patterns recognized in terminal output, like WindTerm's triggers. Every match on
 
 ### Other
 
-- **Easy Migration**: Import sessions, quick commands, and color schemes from **WindTerm**, or hosts from `~/.ssh/config`.
+- **Server Resources**: For SSH sessions on Linux servers, the **Server Resources** panel (from **More** or the command palette; it can also be added to the toolbar) shows CPU, memory and swap, load, network rates per interface, disk usage and uptime. The status bar shows CPU, memory and network of the active session (turn it off in **Settings → General**). It uses the session's existing connection, so no extra login is needed. Other systems show "not supported".
+- **Easy Migration**: Import sessions, quick commands, and color schemes from **WindTerm**, hosts from `~/.ssh/config`, and sessions from **Xshell** (the `Sessions` folder, found automatically, or `.xsh` / exported `.xts` files) and **MobaXterm** (`MobaXterm.ini` or exported `.mxtsessions`). Folders become session groups; SSH, Telnet, serial and local shell sessions are imported, other types (RDP, VNC, FTP …) are skipped and counted. Saved passwords are not imported: enter them on first connect.
 - **Customization**: 4 built-in themes + custom themes, configurable shortcuts and toolbar, in English and Simplified Chinese.
 - **Update Check**: Checks GitHub for a newer release at startup and offers to open its download page (or skip that version). Turn it off or check by hand under **Settings → General**.
 
@@ -171,7 +173,7 @@ cd relay; npm test                                       # relay & E2EE protocol
 | Path | Contents |
 | --- | --- |
 | `src/` | Front end (React + TypeScript); `utils/` holds UI-independent logic and core unit tests |
-| `src-tauri/` | Rust backend: connections, protocols, SFTP / SCP, shell integration, full scrollback history, MCP, remote access, session sharing |
+| `src-tauri/` | Rust backend: connections, protocols and proxies, port forwarding, SFTP / SCP, session import, shell integration, full scrollback history, server resources, MCP, remote access, session sharing |
 | `relay/` | Self-hosted relay server, remote access PWA and session share page (Node.js) |
 | `bench/` | Throughput and memory benchmark scripts |
 
