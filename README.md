@@ -32,6 +32,7 @@ Windows 10 / 11 only. Current version: `0.1.5`.
 
 - **SFTP with SCP Fallback**: Open via `Ctrl+Shift+O` or context menu; automatically falls back to SCP + shell commands when SFTP is unavailable.
 - **Two-Way Directory Sync**: Filter folders, jump by path, **auto-follow terminal `cd`**, or `cd` the terminal to the current folder.
+- **Folder Bookmarks**: In the file browser, click the star in the address bar or press `Ctrl+D` to bookmark the current folder. Keep a bookmark for one server or share it across servers (e.g. `~/.ssh`). The address bar suggests bookmarks and recent folders; `Alt`-click a bookmark to change the terminal directory too.
 - **Edit Locally, Auto-Upload**: Open remote files in your local editor—every save automatically uploads back to the server.
 - **Zero-Download Previews**: Preview code/text, JSON, Markdown, CSV/TSV tables, images (zoom/rotate), and PDFs directly.
 - **Transfer Queue**: Drag-and-drop folders/files, edit permissions (checkboxes or octal), pause / resume / retry parallel transfers with conflict rules, and track ZMODEM transfers in one place.

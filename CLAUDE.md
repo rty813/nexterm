@@ -41,7 +41,7 @@ cd relay; npm test                    # 中继 + 加密协议（node:test；vite
 - `importer.rs`：从 `~/.wind/profiles/*/terminal/user.sessions`、`~/.ssh/config`、WindTerm 的 `scheme.theme` 导入；`importer_xshell.rs`（`.xsh` 目录 / `.xts` 包）和 `importer_mobaxterm.rs`（`MobaXterm.ini` / `.mxtsessions` 的 Bookmarks）共用其中的 `decode_text`（BOM / UTF-16LE / GBK）和 `parse_ini`。
 - `net.rs`：出站连接，SOCKS5 / SOCKS4(a) / HTTP CONNECT 代理和 SSH 的 ProxyCommand（`connect_stream`）；`socks.rs`：动态转发（`-D`）的 SOCKS4/4a/5 服务端，解析是纯函数。
 - `server_stats.rs`：服务器资源监控的采样脚本（`/proc` + `df`），经窗格已有 SSH 连接的 exec 通道运行；解析和速率计算在前端 `utils/serverStats.ts`，轮询在 `services/serverMonitor.ts`（只在显示且窗口可见时）。
-- `sftp.rs` / `scp.rs`：SSH 窗格的文件面板（前端是 `SftpPanel.tsx`）。
+- `sftp.rs` / `scp.rs`：SSH 窗格的文件面板（前端是 `SftpPanel.tsx`）。目录书签存在 `settings.sftp.bookmarks`（参与同步，逻辑在 `utils/sftpBookmarks.ts`，界面是 `SftpBookmarks.tsx`）；最近访问的目录只存本机 localStorage（`nexterm.sftp.recent`）。
 
 ### 前端（`src/`）
 

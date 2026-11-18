@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Clock,
   Copy,
   Download,
   Eye,
@@ -28,6 +29,7 @@ import {
   RotateCcw,
   Square,
   SquareTerminal,
+  Star,
   Trash2,
   Upload,
   X,
@@ -38,8 +40,9 @@ import {
   type TransferInfo,
   type TransferRequest,
 } from "../services/backend";
-import type { SftpSettings } from "../types/domain";
+import type { SftpBookmark, SftpSettings } from "../types/domain";
 import { useContextMenu, type MenuItem } from "./ContextMenu";
+import { SftpBookmarkBar, type BookmarkPopover } from "./SftpBookmarks";
 import type { ConfirmAnswer, ConfirmRequest } from "./ConfirmDialog";
 import type { PreviewRequest } from "./FilePreview";
 import { paneCwd } from "../utils/paneCwd";
@@ -62,11 +65,29 @@ import {
   type RemoteEntry,
   type SortKey,
 } from "../utils/sftpPaths";
+import {
+  addBookmark,
+  bookmarksFor,
+  expandHome,
+  findBookmark,
+  forgetRecent,
+  parseRecent,
+  pathCandidates,
+  pushRecent,
+  removeBookmark,
+  tildePath,
+  type RecentMap,
+} from "../utils/sftpBookmarks";
+
+/** Recent folders of every server (this machine only, not synced). */
+const RECENT_KEY = "nexterm.sftp.recent";
 
 export interface SftpTarget {
   paneId: string;
   title: string;
   connected: boolean;
+  /** `user@host:port`: whose bookmarks and recent folders to show. */
+  hostKey: string;
 }
 
 /** Drag of rows inside the browser (move into a folder). */
@@ -171,11 +192,34 @@ export const SftpPanel: React.FC<{
   const [queueTab, setQueueTab] = useState<"transfers" | "edits">("transfers");
   const [applyAll, setApplyAll] = useState(false);
   const history = useRef<string[]>([]);
+  const [recentMap, setRecentMap] = useState<RecentMap>(() => parseRecent(localStorage.getItem(RECENT_KEY)));
+  const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
+  const [bmPopover, setBmPopover] = useState<BookmarkPopover>(null);
+  const [suggest, setSuggest] = useState(-1);
+  const hostKey = target?.hostKey ?? "";
+  const hostKeyRef = useRef(hostKey);
+  hostKeyRef.current = hostKey;
+  const homeRef = useRef(home);
+  homeRef.current = home;
   const listRef = useRef<HTMLDivElement | null>(null);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+
+  const updateRecent = useCallback((f: (m: RecentMap) => RecentMap) => {
+    setRecentMap((m) => {
+      const next = f(m);
+      if (next !== m) localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  // Other windows record recent folders too.
+  useEffect(() => {
+    const on = (e: StorageEvent) => e.key === RECENT_KEY && setRecentMap(parseRecent(e.newValue));
+    window.addEventListener("storage", on);
+    return () => window.removeEventListener("storage", on);
+  }, []);
 
   // Follow the preferred pane while the user has not picked another live one.
   useEffect(() => {
@@ -187,8 +231,8 @@ export const SftpPanel: React.FC<{
   }, [preferredPaneId, targets]);
 
   const load = useCallback(
-    async (path: string, opts: { keepSelection?: boolean; push?: boolean } = {}) => {
-      if (!paneId) return;
+    async (path: string, opts: { keepSelection?: boolean; push?: boolean; home?: string } = {}): Promise<boolean> => {
+      if (!paneId) return false;
       setLoading(true);
       try {
         const listing = await backend.sftpList(paneId, path);
@@ -200,8 +244,13 @@ export const SftpPanel: React.FC<{
         setMode(listing.mode);
         setError(null);
         if (!opts.keepSelection) setSelected(new Set());
+        const key = hostKeyRef.current;
+        if (key) updateRecent((m) => pushRecent(m, key, listing.path, opts.home ?? homeRef.current));
+        setMissing((m) => (m.has(listing.path) ? new Set([...m].filter((x) => x !== listing.path)) : m));
+        return true;
       } catch (e) {
         setError(String(e));
+        return false;
       } finally {
         setLoading(false);
       }
@@ -216,6 +265,8 @@ export const SftpPanel: React.FC<{
     setCwd("");
     setError(null);
     history.current = [];
+    setBmPopover(null);
+    setMissing(new Set());
     if (!paneId || !connected) return;
     let gone = false;
     void (async () => {
@@ -223,7 +274,7 @@ export const SftpPanel: React.FC<{
         const h = await backend.sftpHome(paneId);
         if (gone) return;
         setHome(h);
-        await load(paneCwd.get(paneId) ?? h, { push: false });
+        await load(paneCwd.get(paneId) ?? h, { push: false, home: h });
       } catch (e) {
         if (!gone) setError(String(e));
       }
@@ -487,10 +538,65 @@ export const SftpPanel: React.FC<{
 
   const copyText = (text: string) => void backend.writeClipboard(text).then(() => onToast(t("sftp.copied")));
 
-  const cdTerminal = () => {
-    if (!paneId || !cwd) return;
-    onTerminalInput(paneId, ` cd '${cwd.replace(/'/g, "'\\''")}'\r`);
+  const cdTerminalTo = (dir: string) => {
+    if (paneId) onTerminalInput(paneId, ` cd '${dir.replace(/'/g, "'\\''")}'\r`);
   };
+
+  const cdTerminal = () => {
+    if (cwd) cdTerminalTo(cwd);
+  };
+
+  // ------------------------------------------------------------------- bookmarks
+
+  const shownBookmarks = useMemo(() => bookmarksFor(settings.bookmarks, hostKey).all, [settings.bookmarks, hostKey]);
+  const bookmarkedDirs = useMemo(() => new Set(shownBookmarks.map((b) => expandHome(b.path, home))), [shownBookmarks, home]);
+  const recent = recentMap[hostKey] ?? [];
+  const bookmarkOf = (abs: string) => findBookmark(settingsRef.current.bookmarks, hostKey, abs, home);
+  const saveBookmarks = (next: SftpBookmark[]) => onSettings({ bookmarks: next });
+
+  const addBm = (abs: string, host: string, beforeId?: string | null) => {
+    const cur = settingsRef.current.bookmarks;
+    const next = addBookmark(cur, { abs, home, host, hostKey, beforeId });
+    if (next === cur) return;
+    // Later adds in the same event (several dropped folders) build on this one.
+    settingsRef.current = { ...settingsRef.current, bookmarks: next };
+    saveBookmarks(next);
+    onToast(t("sftp.bm.added", { path: tildePath(abs, home) }));
+  };
+
+  const toggleBookmark = (abs = cwd) => {
+    if (!abs || !hostKey) return;
+    const b = bookmarkOf(abs);
+    if (b) {
+      saveBookmarks(removeBookmark(settingsRef.current.bookmarks, b.id));
+      onToast(t("sftp.bm.removed", { path: tildePath(abs, home) }));
+    } else addBm(abs, hostKey);
+  };
+
+  /** Open a bookmarked / recent folder; with Alt the terminal cds there too. */
+  const openFolder = async (abs: string, alsoTerminal: boolean) => {
+    if (await load(abs)) {
+      if (alsoTerminal) cdTerminalTo(abs);
+      return;
+    }
+    setMissing((m) => new Set([...m, abs]));
+    onToast(t("sftp.bm.missing", { path: tildePath(abs, home) }));
+  };
+
+  /** Folders among the file rows being dragged (readable on drop only). */
+  const draggedDirs = (e: React.DragEvent): string[] | null => {
+    const raw = e.dataTransfer.getData(ROW_DRAG);
+    if (!raw) return null;
+    try {
+      const paths = JSON.parse(raw) as string[];
+      return paths.filter((path) => entries.some((x) => x.path === path && isDirLike(x)));
+    } catch {
+      return null;
+    }
+  };
+
+  const suggestions = editingPath === null ? [] : pathCandidates(editingPath, { bookmarks: shownBookmarks, recent, home, cwd });
+  const cwdBookmarked = Boolean(cwd && hostKey && findBookmark(settings.bookmarks, hostKey, cwd, home));
 
   const goTerminalCwd = () => {
     const dir = paneId ? paneCwd.get(paneId) : undefined;
@@ -528,6 +634,9 @@ export const SftpPanel: React.FC<{
     else if (e.key === "F2" && one) setPrompt({ kind: "rename", entry: one, value: one.name });
     else if (e.key === "F5") refresh();
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") setSelected(new Set(visible.map((x) => x.path)));
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") toggleBookmark();
+    else if ((e.ctrlKey || e.metaKey) && /^[1-9]$/.test(e.key) && shownBookmarks[Number(e.key) - 1])
+      void openFolder(expandHome(shownBookmarks[Number(e.key) - 1].path, home), e.altKey);
     else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       const i = visible.findIndex((x) => x.path === anchor.current);
       const n = Math.max(0, Math.min(visible.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)));
@@ -541,6 +650,20 @@ export const SftpPanel: React.FC<{
   };
 
   // ------------------------------------------------------------------- menus
+
+  /** "Add to bookmarks ▸ this server / all servers", or "Remove bookmark". */
+  const bookmarkMenuItem = (abs: string): MenuItem | null => {
+    if (!hostKey || !abs) return null;
+    if (bookmarkOf(abs)) return { label: t("sftp.bm.unbookmark"), icon: <Star size={13} fill="currentColor" />, onClick: () => toggleBookmark(abs) };
+    return {
+      label: t("sftp.bm.add"),
+      icon: <Star size={13} />,
+      children: [
+        { label: t("sftp.bm.addOwn"), onClick: () => addBm(abs, hostKey) },
+        { label: t("sftp.bm.addGlobal"), onClick: () => addBm(abs, "") },
+      ],
+    };
+  };
 
   const rowMenu = (ev: React.MouseEvent, entry: RemoteEntry | null) => {
     ev.preventDefault();
@@ -557,6 +680,7 @@ export const SftpPanel: React.FC<{
       ? [
           { label: isDirLike(one) ? t("sftp.open") : t("sftp.preview.open"), icon: isDirLike(one) ? <FolderOpen size={13} /> : <Eye size={13} />, onClick: () => open(one) },
           !isDirLike(one) && { label: t("sftp.editLocal"), icon: <PencilLine size={13} />, onClick: () => void editLocal(one) },
+          isDirLike(one) && bookmarkMenuItem(one.path),
           { type: "separator" },
         ]
       : [];
@@ -591,6 +715,7 @@ export const SftpPanel: React.FC<{
       { label: t("sftp.uploadFolders"), icon: <FolderUp size={13} />, onClick: () => void uploadFolders() },
       { type: "separator" },
       { label: t("sftp.cdTerminal"), icon: <SquareTerminal size={13} />, onClick: cdTerminal },
+      !entry && bookmarkMenuItem(cwd),
       { label: t("sftp.refresh"), shortcut: "F5", icon: <RefreshCw size={13} />, onClick: refresh }
     );
     openMenu(ev, items.filter((x): x is MenuItem => Boolean(x)));
@@ -758,19 +883,59 @@ export const SftpPanel: React.FC<{
           </div>
 
           {editingPath !== null ? (
-            <input
-              className="text-input input-sm mono sftp-pathbar"
-              autoFocus
-              value={editingPath}
-              onChange={(e) => setEditingPath(e.target.value)}
-              onBlur={() => setEditingPath(null)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  void load(resolveTyped(editingPath, cwd, home));
-                  setEditingPath(null);
-                } else if (e.key === "Escape") setEditingPath(null);
-              }}
-            />
+            <div className="sftp-pathwrap">
+              <input
+                className="text-input input-sm mono sftp-pathbar"
+                autoFocus
+                spellCheck={false}
+                value={editingPath}
+                onChange={(e) => {
+                  setEditingPath(e.target.value);
+                  setSuggest(-1);
+                }}
+                onBlur={() => setEditingPath(null)}
+                onKeyDown={(e) => {
+                  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && suggestions.length) {
+                    e.preventDefault();
+                    const n = suggestions.length;
+                    setSuggest((i) => (e.key === "ArrowDown" ? (i + 1) % n : i <= 0 ? n - 1 : i - 1));
+                  } else if (e.key === "Tab" && suggestions.length) {
+                    e.preventDefault();
+                    setEditingPath(suggestions[Math.max(0, suggest)].shown);
+                    setSuggest(-1);
+                  } else if (e.key === "Enter") {
+                    const pick = suggest >= 0 ? suggestions[suggest] : undefined;
+                    if (pick) void openFolder(pick.abs, e.altKey);
+                    else void load(resolveTyped(editingPath, cwd, home));
+                    setEditingPath(null);
+                  } else if (e.key === "Escape") setEditingPath(null);
+                }}
+              />
+              {suggestions.length > 0 && (
+                <div className="sftp-suggest">
+                  {suggestions.map((c, i) => (
+                    <div
+                      key={c.abs}
+                      className={`bm-row ${i === suggest ? "cursor" : ""}`}
+                      title={c.abs}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setEditingPath(null);
+                        void openFolder(c.abs, e.altKey);
+                      }}
+                    >
+                      {c.kind === "bookmark" ? <Star size={12} className="bm-ico own" fill="currentColor" /> : <Clock size={12} className="bm-ico recent" />}
+                      <span className="bm-row-text">
+                        {c.label && <span className="bm-row-label">{c.label}</span>}
+                        <span className="bm-row-path mono strong">{c.shown}</span>
+                      </span>
+                      <span className="bm-kind">{c.kind === "bookmark" ? t("sftp.bm.kindBookmark") : t("sftp.bm.kindRecent")}</span>
+                    </div>
+                  ))}
+                  <div className="sftp-suggest-hint">{t("sftp.bm.suggestHint")}</div>
+                </div>
+              )}
+            </div>
           ) : (
             <div className="sftp-crumbs mono" onClick={() => setEditingPath(cwd)} title={t("sftp.editPath")}>
               {crumbs(cwd).map((c, i) => (
@@ -788,7 +953,42 @@ export const SftpPanel: React.FC<{
                   </span>
                 </React.Fragment>
               ))}
+              {hostKey && cwd && (
+                <button
+                  type="button"
+                  className={`sftp-crumb-star ${cwdBookmarked ? "on" : ""}`}
+                  title={cwdBookmarked ? t("sftp.bm.unbookmarkKey") : t("sftp.bm.bookmarkKey")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleBookmark();
+                  }}
+                >
+                  <Star size={14} fill={cwdBookmarked ? "currentColor" : "none"} />
+                </button>
+              )}
             </div>
+          )}
+
+          {hostKey && (
+            <SftpBookmarkBar
+              hostKey={hostKey}
+              hostTitle={target.title}
+              home={home}
+              cwd={cwd}
+              bookmarks={settings.bookmarks}
+              onBookmarks={saveBookmarks}
+              recent={recent}
+              onForgetRecent={(dir) => updateRecent((m) => forgetRecent(m, hostKey, dir))}
+              missing={missing}
+              popover={bmPopover}
+              onPopover={setBmPopover}
+              onOpen={(abs, alt) => void openFolder(abs, alt)}
+              onCdTerminal={cdTerminalTo}
+              onAdd={addBm}
+              onToggleCurrent={() => toggleBookmark()}
+              draggedDirs={draggedDirs}
+              rowDragType={ROW_DRAG}
+            />
           )}
 
           <input className="text-input input-sm sftp-filter" placeholder={t("sftp.filter")} value={filter} onChange={(e) => setFilter(e.target.value)} />
@@ -838,6 +1038,7 @@ export const SftpPanel: React.FC<{
                     {dirLike ? <Folder size={13} className="sftp-ico dir" /> : <FileIcon size={13} className="sftp-ico" />}
                     {e.kind === "link" && <Link2 size={9} className="sftp-link-badge" />}
                     <span className="sftp-name">{e.name}</span>
+                    {dirLike && bookmarkedDirs.has(e.path) && <Star size={10} className="sftp-row-star" fill="currentColor" />}
                   </span>
                   <span className="sftp-col size">{dirLike ? "" : fmtSize(e.size)}</span>
                   <span className="sftp-col time" title={modeString(e.mode, e.kind)}>

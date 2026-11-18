@@ -79,6 +79,7 @@ import { TmuxPanel, type TmuxTarget } from "./components/TmuxPanel";
 import { commandHistory, historyKeyOf } from "./utils/commandHistory";
 import { autoSyncInterval, syncErrorKey, syncReady } from "./utils/configSync";
 import { historyOf, modemOf, remoteOf, sftpOf, syncOf } from "./utils/settingsDefaults";
+import { hostKeyOf } from "./utils/sftpBookmarks";
 import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem, UpdateInfo } from "./types/domain";
 import { AiRequestDialog } from "./components/AiRequestDialog";
 import { PortForwardPanel, type ForwardTarget } from "./components/PortForwardPanel";
@@ -794,7 +795,7 @@ export const App: React.FC = () => {
     () =>
       allLeaves(ws.root)
         .filter((l) => l.session.protocol === "ssh")
-        .map((l) => ({ paneId: l.paneId, title: tabTitle(l), connected: l.status === "connected" })),
+        .map((l) => ({ paneId: l.paneId, title: tabTitle(l), connected: l.status === "connected", hostKey: hostKeyOf(l.session) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [ws.root]
   );

@@ -555,6 +555,19 @@ export interface SftpSettings {
   editor: string;
   /** Last local folder downloads went to ("" = Downloads). */
   downloadDir: string;
+  /** Bookmarked folders (bookmarks bar). Recent folders stay on this machine (localStorage). */
+  bookmarks: SftpBookmark[];
+}
+
+/** A bookmarked folder of the file browser (utils/sftpBookmarks.ts). */
+export interface SftpBookmark {
+  id: string;
+  /** Absolute, or "~/..." under the home folder. */
+  path: string;
+  /** Shown instead of the folder's name. */
+  label?: string;
+  /** `user@host:port` it belongs to; missing = shown on every server. */
+  host?: string;
 }
 
 export interface ModemSettings {

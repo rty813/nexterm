@@ -10,6 +10,7 @@ import type {
   SftpSettings,
   XServerSettings,
 } from "../types/domain";
+import { cleanBookmarks } from "./sftpBookmarks";
 
 /** Defaults follow WindTerm's global/wind.config and terminal/configs/session.config. */
 export const DEFAULT_HISTORY: HistorySettings = { enabled: true, days: 30, size: 10000, perSession: true };
@@ -90,11 +91,12 @@ export const DEFAULT_SFTP: SftpSettings = {
   showHidden: false,
   editor: "",
   downloadDir: "",
+  bookmarks: [],
 };
 
 export function sftpOf(s: AppSettings): SftpSettings {
   const v = { ...DEFAULT_SFTP, ...(s.sftp ?? {}) };
-  return { ...v, concurrency: Math.min(16, Math.max(1, Math.round(v.concurrency) || 3)) };
+  return { ...v, concurrency: Math.min(16, Math.max(1, Math.round(v.concurrency) || 3)), bookmarks: cleanBookmarks(v.bookmarks) };
 }
 
 export const DEFAULT_REMOTE: RemoteSettings = { enabled: false, relayUrl: "", hostToken: "", readOnly: false };
