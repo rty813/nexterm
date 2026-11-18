@@ -209,16 +209,22 @@ export class PluginPlatform {
       }
       if (!current()) throw new Error(i18n.t("plugin.sourceChanged"));
       if (!isRecord(result) || result.connection === undefined || result.choices !== undefined) throw new Error(i18n.t("plugin.invalidConnection"));
-      await this.openSsh(runtime, result.connection, sessionSourceKey(pluginId, sourceId, itemId), current);
+      await this.openSsh(runtime, result.connection, sessionSourceKey(pluginId, sourceId, itemId), current, true);
     } catch (reason) { if (this.runtimes.get(pluginId) === runtime) runtime.sourceErrors.set(sourceId, String(reason).replace(/^(?:Error:\s*)+/, "")); }
     finally { runtime.sourceBusy.delete(sourceId); this.emit(); }
   }
-  private async openSsh(runtime: Runtime, value: unknown, sourceKey?: string, current = () => this.runtimes.get(runtime.entry.bundle.manifest.id) === runtime && !this.locked) {
+  // userPicked: the user clicked this item in the session bar. Then no prompt when the SSH host is the host of an
+  // origin the plugin can already reach, since the connection can't carry the plugin's secrets anywhere new.
+  private async openSsh(runtime: Runtime, value: unknown, sourceKey?: string, current = () => this.runtimes.get(runtime.entry.bundle.manifest.id) === runtime && !this.locked, userPicked = false) {
     if (runtime.entry.bundle.manifest.permissions.sessions !== "open") throw new Error("Session permission not granted");
     const session = temporarySsh(value);
-    const message = `${runtime.entry.bundle.manifest.name}\n${session.username}@${session.host}:${session.port}\n\n${i18n.t("plugin.sshConfirm")}`;
-    const approved = isTauriRuntime() ? await confirm(message, {title: i18n.t("plugin.sshConfirmTitle"), kind: "warning"}) : window.confirm(message);
-    if (!approved || !current()) throw new Error("Connection cancelled");
+    const known = userPicked && [...runtime.origins].some(origin => new URL(origin).hostname === session.host.toLowerCase());
+    if (!known) {
+      const message = `${runtime.entry.bundle.manifest.name}\n${session.username}@${session.host}:${session.port}\n\n${i18n.t("plugin.sshConfirm")}`;
+      const approved = isTauriRuntime() ? await confirm(message, {title: i18n.t("plugin.sshConfirmTitle"), kind: "warning"}) : window.confirm(message);
+      if (!approved) throw new Error("Connection cancelled");
+    }
+    if (!current()) throw new Error("Connection cancelled");
     session.authType = "password";
     if (isRecord(value) && typeof value.passwordKey === "string") {
       await invoke("plugin_stage_ssh", {capability: runtime.capability, instanceId: session.id, secretKey: value.passwordKey, host: session.host, port: session.port, username: session.username});

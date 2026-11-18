@@ -100,6 +100,14 @@ describe("generic plugin session sources", () => {
     expect(native.invoke).toHaveBeenCalledWith("plugin_stage_ssh",expect.objectContaining({instanceId:session.id,host:ssh.host,username:ssh.username}));
     platform.pruneSessionOrigins(new Set()); expect(platform.sessionKey(session.id)).toBe(session.id);
   });
+  it("skips SSH confirmation only for a user-picked item on a host the plugin already reaches", async () => {
+    const {runtime,call} = await source(); call.mockResolvedValue({connection:{...ssh,host:"Example.com"}});
+    await platform.connectSource("test.plugin","hosts","asset");
+    expect(native.confirm).not.toHaveBeenCalled(); expect(platform.onSession).toHaveBeenCalledOnce();
+    expect(native.invoke).toHaveBeenCalledWith("plugin_stage_ssh",expect.objectContaining({host:"Example.com"}));
+    await platform.dispatch(runtime,"background","sessions.open",{...ssh,host:"example.com"});
+    expect(native.confirm).toHaveBeenCalledOnce();
+  });
   it("does not resolve unknown or signed-out items", async () => {
     const {runtime,call} = await source();
     await platform.connectSource("test.plugin","hosts","missing");

@@ -52,7 +52,7 @@ node scripts/pack-plugin.mjs ../my-counter
 | --- | --- |
 | `permissions.network` | 精确 HTTPS origin 数组，例如 `https://example.com:8443`；不可带路径、尾斜线、用户名或密码，不支持通配符。 |
 | `permissions.networkRequest` | 可选 `true`；允许通过 `network.request(origin)` 按需请求任意 HTTPS 目标，每个新目标由宿主单独向用户确认。 |
-| `permissions.sessions` | 可选 `"open"`；仅请求新建临时 SSH 会话，每次需用户确认。 |
+| `permissions.sessions` | 可选 `"open"`；仅请求新建临时 SSH 会话。插件主动打开时每次需用户确认；用户在会话栏点击插件提供的会话、且 SSH 主机与插件已授权的某个 HTTPS origin 主机名相同时不再确认（连接不会把插件的秘密带到新的地方），其他主机仍需确认。 |
 | `permissions.credentials` | 可选 `"store"`；允许后台使用 Windows 凭据管理器，按插件 ID、HTTPS origin 和键名隔离。安装或替换时需确认。 |
 | `contributes.commands` | `{id, title, shortcut?}`；快捷键使用 `Ctrl+Shift+J` 形式，内置快捷键与快捷命令优先。 |
 | `contributes.views` | `{id, title, location, file}`；位置为 `sidebar`、`panel`、`tab`、`dialog`、`settings`，页面内容由作者完全控制。 |
