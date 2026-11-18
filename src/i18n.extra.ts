@@ -171,7 +171,6 @@ const MONITOR_ZH = {
   cpu: "CPU",
   cores: "{{count}} 核",
   memory: "内存",
-  memShort: "内存",
   swap: "交换分区",
   load: "负载",
   uptime: "运行时间",
@@ -181,7 +180,6 @@ const MONITOR_ZH = {
   tx: "发送",
   nicTotal: "累计 接收 {{rx}} / 发送 {{tx}}",
   disks: "磁盘",
-  openPanel: "点击打开服务器资源面板",
 };
 
 const MONITOR_EN: typeof MONITOR_ZH = {
@@ -197,7 +195,6 @@ const MONITOR_EN: typeof MONITOR_ZH = {
   cpu: "CPU",
   cores: "{{count}} cores",
   memory: "Memory",
-  memShort: "MEM",
   swap: "Swap",
   load: "Load",
   uptime: "Uptime",
@@ -207,7 +204,6 @@ const MONITOR_EN: typeof MONITOR_ZH = {
   tx: "Out",
   nicTotal: "Total in {{rx}} / out {{tx}}",
   disks: "Disks",
-  openPanel: "Click to open the Server Resources panel",
 };
 
 const SFTP_EN: typeof SFTP_ZH = {
@@ -613,9 +609,6 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
 export const extraResources = {
   "zh-CN": {
     settingsModal: {
-      showStatusBar: "显示底部状态栏",
-      serverMonitor: "状态栏显示服务器资源",
-      serverMonitorTip: "SSH 会话处于活动状态时，在状态栏显示 CPU、内存和网络速率（仅 Linux 服务器）。",
       tab: { terminal: "终端", mouse: "鼠标", logs: "日志与传输", xserver: "X 服务器", remote: "远程访问", sync: "同步与备份", triggers: "触发器", plugins: "插件" },
     },
     actions: {
@@ -629,7 +622,6 @@ export const extraResources = {
       "terminal.unfoldAll": "展开全部输出",
       "terminal.pauseLog": "暂停 / 继续记录日志",
       "terminal.syncPausePane": "暂停 / 恢复当前会话的同步输入",
-      "view.toggleStatusBar": "显示 / 隐藏状态栏",
     },
     sync: {
       pausePane: "暂停此会话同步",
@@ -1122,9 +1114,6 @@ export const extraResources = {
   },
   "en-US": {
     settingsModal: {
-      showStatusBar: "Show Status Bar",
-      serverMonitor: "Server Resources in Status Bar",
-      serverMonitorTip: "Show CPU, memory and network rates of the active SSH session in the status bar (Linux servers only).",
       tab: { terminal: "Terminal", mouse: "Mouse", logs: "Logs & Transfers", xserver: "X Server", remote: "Remote Access", sync: "Sync & Backup", triggers: "Triggers", plugins: "Plugins" },
     },
     actions: {
@@ -1138,7 +1127,6 @@ export const extraResources = {
       "terminal.unfoldAll": "Unfold All Output",
       "terminal.pauseLog": "Pause / Resume Logging",
       "terminal.syncPausePane": "Pause / Resume Sync Input of This Session",
-      "view.toggleStatusBar": "Show / Hide Status Bar",
     },
     sync: {
       pausePane: "Pause Sync for This Session",

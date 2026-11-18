@@ -21,7 +21,6 @@ export const ACTIONS: ActionDef[] = [
   { id: "view.history", group: "view", defaultKey: "Alt+H" },
   { id: "view.files", group: "view", defaultKey: "Ctrl+Shift+O" },
   { id: "view.serverMonitor", group: "view", defaultKey: "" },
-  { id: "view.toggleStatusBar", group: "view", defaultKey: "" },
 
   { id: "terminal.copy", group: "terminal", defaultKey: "Ctrl+Shift+C" },
   { id: "terminal.paste", group: "terminal", defaultKey: "Ctrl+Shift+V" },

@@ -306,10 +306,6 @@ export interface AppSettings {
   keymap?: Record<string, string>;
   /** Toolbar buttons the user hid. */
   toolbarHidden?: string[];
-  /** Show the status bar at the bottom of the window (default off). */
-  showStatusBar?: boolean;
-  /** Status bar: CPU / memory / network of the active SSH host (default on; settings.extra on the Rust side). */
-  serverMonitor?: boolean;
   /** Quick bar layout and group order (kept in settings.extra on the Rust side). */
   quickBar?: QuickBarSettings;
   /** Toolbar defaults applied (see DEFAULT_TOOLBAR_HIDDEN); missing on older settings. */

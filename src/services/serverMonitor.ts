@@ -15,7 +15,7 @@ type Listener = (s: MonitorState) => void;
 const FAILS_BEFORE_UNSUPPORTED = 2;
 
 /**
- * One poller per pane, shared by everything showing it (status bar, side panel). It runs
+ * One poller per pane, shared by everything showing it (the side panel). It runs
  * only while someone listens and the window is visible; the last listener leaving drops it.
  */
 class Poller {

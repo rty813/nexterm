@@ -157,15 +157,6 @@ export const uiResources = {
       quickHistoryHint: "双击重新连接",
       quickConnected: "快速连接",
     },
-    statusbar: {
-      connected: "已连接",
-      connectedFor: "已连接 {{time}}",
-      state: { connecting: "正在连接…", disconnected: "已断开", error: "连接出错" },
-      recording: "正在记录日志",
-      noSession: "没有打开的会话",
-      sizeTip: "终端列数 × 行数",
-      logging: "共 {{count}} 个会话在记录日志",
-    },
     interp: {
       title: "数据解释器",
       big: "大端 (BE)",
@@ -456,15 +447,6 @@ export const uiResources = {
       recent: "Recent",
       quickHistoryHint: "Double-click to connect again",
       quickConnected: "Quick connect",
-    },
-    statusbar: {
-      connected: "Connected",
-      connectedFor: "Connected {{time}}",
-      state: { connecting: "Connecting…", disconnected: "Disconnected", error: "Connection error" },
-      recording: "Logging",
-      noSession: "No open session",
-      sizeTip: "Terminal columns × rows",
-      logging: "{{count}} sessions logging",
     },
     plugin: {
       title: "Plugins",

@@ -684,12 +684,6 @@ textarea {
   color: var(--fg-muted);
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
 .status-connected {
   background: #a6e22e;
 }
@@ -1209,70 +1203,6 @@ textarea {
   color: var(--fg-strong);
 }
 
-/* StatusBar: quiet text on the window backdrop. */
-.statusbar {
-  height: 28px;
-  padding: 0 12px;
-  background: var(--bg-base);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  flex-shrink: 0;
-}
-.statusbar-left,
-.statusbar-right {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.mode-pill {
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-weight: 600;
-}
-.mode-local {
-  background: rgba(102, 217, 239, 0.16);
-  color: #66d9ef;
-}
-.mode-remote {
-  background: rgba(253, 151, 31, 0.2);
-  color: #fd971f;
-}
-.status-seg {
-  color: var(--fg-muted);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-variant-numeric: tabular-nums;
-}
-.sync-highlight {
-  color: #fbbf24;
-  font-weight: 600;
-}
-.status-btn {
-  height: 20px;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: 11px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 7px;
-  border-radius: var(--r-xs);
-  cursor: pointer;
-}
-.status-btn:hover {
-  background: var(--bg-hover);
-  color: var(--fg-strong);
-}
-.accent-btn,
-.accent-btn:hover {
-  background: var(--accent);
-  color: #ffffff;
-}
-
 /* Modals & Forms */
 .modal-backdrop {
   position: fixed;
@@ -1738,10 +1668,6 @@ html.ctxmenu-host #root {
   color: #fff;
   cursor: pointer;
 }
-.log-highlight {
-  color: #f87171;
-  font-weight: 600;
-}
 
 /* ---------- Toast ---------- */
 .app-toast {
@@ -2034,17 +1960,6 @@ html.ctxmenu-host #root {
   border-color: #9ca3af;
   color: #d1d5db;
   border-style: dashed;
-}
-.sync-paused {
-  color: #9ca3af;
-  font-weight: 600;
-}
-.status-btn.sync-highlight {
-  color: #fbbf24;
-  font-weight: 600;
-}
-.status-btn.sync-paused {
-  color: #9ca3af;
 }
 
 /* ---------- Submenus / swatches ---------- */
@@ -4199,19 +4114,6 @@ html.ctxmenu-host #root {
   font-size: 12px;
 }
 
-/* ---------- Status bar ---------- */
-.status-target {
-  gap: 6px;
-  color: var(--fg-primary);
-}
-.status-target .status-dot {
-  width: 6px;
-  height: 6px;
-}
-.status-target .mono {
-  font-size: 11px;
-}
-
 /* ---------- Session form ---------- */
 .proto-picker {
   display: grid;
@@ -5146,16 +5048,4 @@ html.ctxmenu-host #root {
 .mon-table th:not(:first-child),
 .mon-table td:not(:first-child) {
   text-align: right;
-}
-.mon-badge {
-  gap: 8px;
-}
-.mon-badge .warn {
-  color: var(--warning);
-}
-.mon-badge .crit {
-  color: var(--danger);
-}
-.mon-badge.stale {
-  opacity: 0.55;
 }

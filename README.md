@@ -125,7 +125,7 @@ Patterns recognized in terminal output, like WindTerm's triggers. Every match on
 
 ### Other
 
-- **Server Resources**: For SSH sessions on Linux servers, the **Server Resources** panel (from **More** or the command palette; it can also be added to the toolbar) shows CPU, memory and swap, load, network rates per interface, disk usage and uptime. The status bar shows CPU, memory and network of the active session (turn it off in **Settings → General**). It uses the session's existing connection, so no extra login is needed. Other systems show "not supported".
+- **Server Resources**: For SSH sessions on Linux servers, the **Server Resources** panel (from **More** or the command palette; it can also be added to the toolbar) shows CPU, memory and swap, load, network rates per interface, disk usage and uptime. It uses the session's existing connection, so no extra login is needed. Other systems show "not supported".
 - **Easy Migration**: Import sessions, quick commands, and color schemes from **WindTerm**, hosts from `~/.ssh/config`, and sessions from **Xshell** (the `Sessions` folder, found automatically, or `.xsh` / exported `.xts` files) and **MobaXterm** (`MobaXterm.ini` or exported `.mxtsessions`). Folders become session groups; SSH, Telnet, serial and local shell sessions are imported, other types (RDP, VNC, FTP …) are skipped and counted. Saved passwords are not imported: enter them on first connect.
 - **Customization**: 4 built-in themes + custom themes, configurable shortcuts and toolbar, in English and Simplified Chinese.
 - **Update Check**: Checks GitHub for a newer release at startup and offers to open its download page (or skip that version). Turn it off or check by hand under **Settings → General**.

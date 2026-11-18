@@ -350,23 +350,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <label className="checkbox-row">
               <input
                 type="checkbox"
-                checked={Boolean(draft.showStatusBar)}
-                onChange={(e) => setDraft({ ...draft, showStatusBar: e.target.checked })}
-              />
-              <span>{t("settingsModal.showStatusBar")}</span>
-            </label>
-            <label className="checkbox-row" title={t("settingsModal.serverMonitorTip")}>
-              <input
-                type="checkbox"
-                checked={draft.serverMonitor !== false}
-                disabled={!draft.showStatusBar}
-                onChange={(e) => setDraft({ ...draft, serverMonitor: e.target.checked })}
-              />
-              <span>{t("settingsModal.serverMonitor")}</span>
-            </label>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
                 checked={Boolean(draft.alwaysOnTop)}
                 onChange={(e) => setDraft({ ...draft, alwaysOnTop: e.target.checked })}
               />

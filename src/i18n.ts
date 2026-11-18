@@ -260,6 +260,7 @@ export const resources = {
         themeTitle: "切换配色主题",
         settings: "终端与界面偏好设置",
         focusMode: "专注模式",
+        exitFocus: "退出专注模式",
       },
       sidebar: {
         title: "会话管理",
@@ -408,18 +409,6 @@ export const resources = {
         importBtn: "从 WindTerm 导入",
         importTip: "导入本机 WindTerm 的快捷命令 (quickbar.config)",
         empty: "暂无快捷命令，可点击右侧「从 WindTerm 导入」",
-      },
-      statusbar: {
-        windowSize: "窗口 {{rows}}×{{cols}}",
-        broadcast: "同步广播 ({{scope}})",
-        scopeTab: "当前分屏",
-        scopeAll: "全部标签",
-        scopeVisible: "所有可见分栏",
-        scopeChannels: "频道 · {{count}} 个窗格",
-        broadcastPaused: "同步已暂停 ({{scope}})",
-        logging: "{{count}} 个会话正在记录日志",
-        exitFocus: "退出专注模式",
-        lockScreen: "锁定屏幕",
       },
       sessionModal: {
         editTitle: "编辑会话配置",
@@ -895,6 +884,7 @@ export const resources = {
         themeTitle: "Color Theme",
         settings: "Preferences",
         focusMode: "Focus Mode",
+        exitFocus: "Exit Focus Mode",
       },
       sidebar: {
         title: "SESSIONS",
@@ -1043,18 +1033,6 @@ export const resources = {
         importBtn: "Import from WindTerm",
         importTip: "Import WindTerm quick commands (quickbar.config)",
         empty: "No quick commands yet. Use \"Import from WindTerm\".",
-      },
-      statusbar: {
-        windowSize: "Window {{rows}}×{{cols}}",
-        broadcast: "Broadcast ({{scope}})",
-        scopeTab: "TAB",
-        scopeAll: "ALL",
-        scopeVisible: "VISIBLE",
-        scopeChannels: "CHANNELS · {{count}}",
-        broadcastPaused: "Sync paused ({{scope}})",
-        logging: "Logging {{count}} session(s)",
-        exitFocus: "Exit Focus Mode",
-        lockScreen: "Lock Screen",
       },
       sessionModal: {
         editTitle: "Edit Session",

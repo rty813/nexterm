@@ -153,25 +153,3 @@ export const ServerMonitorPanel: React.FC<{
   );
 };
 
-/** Compact CPU / memory / network readout of the active SSH pane for the status bar. */
-export const ServerMonitorBadge: React.FC<{ paneId: string; onClick: () => void }> = ({ paneId, onClick }) => {
-  const { t } = useTranslation();
-  const state = useServerMonitor(paneId);
-  if (!state || state.status === "loading") return null;
-  if (state.status === "unsupported") return null;
-  const s = state.stats;
-  const tip = [
-    `${t("monitor.load")}: ${s.load ? s.load.map((n) => n.toFixed(2)).join(" ") : "-"}`,
-    `${t("monitor.uptime")}: ${formatServerUptime(s.uptime)}`,
-    `${t("monitor.memory")}: ${formatBytes(s.memUsed)} / ${formatBytes(s.memTotal)}`,
-    t("monitor.openPanel"),
-  ].join("\n");
-  return (
-    <button type="button" className={`status-btn status-seg mon-badge ${state.stale ? "stale" : ""}`} onClick={onClick} title={tip}>
-      <Activity size={11} />
-      <span className={level(s.cpuPercent)}>CPU {pct(s.cpuPercent)}</span>
-      <span className={level(s.memPercent)}>{t("monitor.memShort")} {pct(s.memPercent)}</span>
-      <span className="mono">↓{formatRate(s.rxRate)} ↑{formatRate(s.txRate)}</span>
-    </button>
-  );
-};

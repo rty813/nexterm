@@ -53,7 +53,6 @@ import { QuickBar } from "./components/QuickBar";
 import { QuickCommandManager, type QuickManagerTarget } from "./components/QuickCommandManager";
 import { quickPayload } from "./utils/quickCommands";
 import { syncTargets } from "./utils/syncInput";
-import { StatusBar } from "./components/StatusBar";
 import { SessionModal } from "./components/SessionModal";
 import { PaneSessionModal } from "./components/PaneSessionModal";
 import { applyPaneSessionEdits, savePaneProfile } from "./utils/paneSession";
@@ -1377,9 +1376,6 @@ export const App: React.FC = () => {
       case "view.focusMode":
         toggleFocusMode();
         return true;
-      case "view.toggleStatusBar":
-        saveSettings({ ...settingsRef.current, showStatusBar: !settingsRef.current.showStatusBar });
-        return true;
       case "view.sessionManager":
         openSessionManager();
         return true;
@@ -2609,11 +2605,11 @@ export const App: React.FC = () => {
           />
           <PluginToolbar />
           </>
-        ) : focusMode && !settings.showStatusBar ? (
+        ) : focusMode ? (
           <div className="titlebar-focus">
             <span className="titlebar-title">{windowTitle}</span>
-            <button type="button" className="btn-ghost btn-sm" onClick={toggleFocusMode} title={keymap["view.focusMode"] ? `${t("statusbar.exitFocus")} (${keymap["view.focusMode"]})` : t("statusbar.exitFocus")}>
-              <Minimize2 size={12} /> {t("statusbar.exitFocus")}
+            <button type="button" className="btn-ghost btn-sm" onClick={toggleFocusMode} title={keymap["view.focusMode"] ? `${t("toolbar.exitFocus")} (${keymap["view.focusMode"]})` : t("toolbar.exitFocus")}>
+              <Minimize2 size={12} /> {t("toolbar.exitFocus")}
             </button>
           </div>
         ) : undefined}
@@ -2807,29 +2803,6 @@ export const App: React.FC = () => {
           />
         )}
       </div>
-
-      {settings.showStatusBar && (
-      <StatusBar
-        activeLeaf={activeLeaf}
-        syncScope={syncScope}
-        focusMode={focusMode}
-        onExitFocusMode={toggleFocusMode}
-        onLockScreen={() => setLocked(true)}
-        syncPaused={syncPaused}
-        pausedPaneCount={syncMembers.filter((m) => m.paused).length}
-        channelCount={Object.keys(syncChannels).length}
-        onToggleSyncPause={toggleSyncPause}
-        loggingCount={Object.keys(logPaths).length}
-        activeLogging={Boolean(activeLeaf && logPaths[activeLeaf.paneId])}
-        monitorPaneId={
-          settings.serverMonitor !== false && activeLeaf?.session.protocol === "ssh" && activeLeaf.status === "connected"
-            ? activeLeaf.paneId
-            : null
-        }
-        onOpenMonitor={() => setMonitorOpen(true)}
-        syncOnToolbar={!focusMode && isMainWindow && !(settings.toolbarHidden ?? DEFAULT_TOOLBAR_HIDDEN).includes("sync")}
-      />
-      )}
 
       {settingsPane && (
         <PaneSessionModal
