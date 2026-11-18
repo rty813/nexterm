@@ -55,6 +55,8 @@ import { quickPayload } from "./utils/quickCommands";
 import { syncTargets } from "./utils/syncInput";
 import { StatusBar } from "./components/StatusBar";
 import { SessionModal } from "./components/SessionModal";
+import { PaneSessionModal } from "./components/PaneSessionModal";
+import { applyPaneSessionEdits, savePaneProfile } from "./utils/paneSession";
 import { SessionManager } from "./components/SessionManager";
 import { ImportModal } from "./components/ImportModal";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
@@ -190,6 +192,8 @@ export const App: React.FC = () => {
     open: boolean;
     editing: SessionConfig | null;
   }>({ open: false, editing: null });
+  const [settingsPaneId, setSettingsPaneId] = useState<string | null>(null);
+  const settingsPane = settingsPaneId ? findLeaf(ws.root, settingsPaneId) : undefined;
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
@@ -709,26 +713,19 @@ export const App: React.FC = () => {
   }, []);
 
   const handleReconnectPane = useCallback((paneId: string, creds?: ReconnectCredentials) => {
-    let sessionToPersist: SessionConfig | null = null;
+    const current = findLeaf(wsRef.current.root, paneId)?.session;
+    if (!current) return;
+    const credentials = {
+      ...(creds?.username !== undefined ? { username: creds.username } : {}),
+      ...(creds?.password !== undefined ? { password: creds.password } : {}),
+    };
 
     setWs((prev) => ({
       ...prev,
       root: updateLeaf(prev.root, paneId, (leaf) => {
-        const nextSession: SessionConfig = {
-          ...leaf.session,
-          ...(creds?.username !== undefined ? { username: creds.username } : {}),
-          ...(creds?.password !== undefined ? { password: creds.password } : {}),
-        };
-        if (creds?.remember) {
-          // Username is always kept; the password only when the user asked to.
-          sessionToPersist = {
-            ...nextSession,
-            password: creds.password ?? leaf.session.password,
-          };
-        }
         return {
           ...leaf,
-          session: nextSession,
+          session: { ...leaf.session, ...credentials },
           status: "connecting",
           statusMessage: undefined,
           reconnectCount: leaf.reconnectCount + 1,
@@ -736,16 +733,8 @@ export const App: React.FC = () => {
       }),
     }));
 
-    if (sessionToPersist) {
-      const target = sessionToPersist as SessionConfig;
-      setSessions((prev) => {
-        const idx = prev.findIndex((s) => s.id === target.id);
-        if (idx === -1) return prev;
-        const next = [...prev];
-        next[idx] = target;
-        void backend.saveSessions(next);
-        return next;
-      });
+    if (creds?.remember && sessionsRef.current.some((session) => session.id === current.id)) {
+      persistSessions(sessionsRef.current.map((session) => session.id === current.id ? { ...session, ...credentials } : session));
     }
   }, []);
 
@@ -2160,6 +2149,7 @@ export const App: React.FC = () => {
   };
 
   const paneExtras: PaneExtras = {
+    onPaneSettings: setSettingsPaneId,
     quickCommands,
     onQuickConnect: (target) => {
       const parsed = parseQuickConnectInput(target);
@@ -2839,6 +2829,25 @@ export const App: React.FC = () => {
         onOpenMonitor={() => setMonitorOpen(true)}
         syncOnToolbar={!focusMode && isMainWindow && !(settings.toolbarHidden ?? DEFAULT_TOOLBAR_HIDDEN).includes("sync")}
       />
+      )}
+
+      {settingsPane && (
+        <PaneSessionModal
+          key={settingsPane.paneId}
+          leaf={settingsPane}
+          isSaved={sessions.some((session) => session.id === settingsPane.session.id)}
+          groups={Array.from(new Set(sessions.map((session) => session.group).filter(Boolean))).sort()}
+          onClose={() => setSettingsPaneId(null)}
+          onApply={async (edits, saveProfile, rememberPassword) => {
+            if (saveProfile) {
+              const next = savePaneProfile(sessionsRef.current, settingsPane.session, edits, rememberPassword);
+              await backend.saveSessions(next);
+              setSessions(next);
+              void backend.emitSessionsChanged().catch((error) => setToast(String(error)));
+            }
+            setWs((prev) => ({ ...prev, root: updateLeaf(prev.root, settingsPane.paneId, (leaf) => applyPaneSessionEdits(leaf, edits)) }));
+          }}
+        />
       )}
 
       {sessionModalState.open && (

@@ -43,7 +43,7 @@ Windows 10 / 11 only. Current version: `0.1.5`.
 
 - **Splits & Multi-Window**: Searchable nested session tree; arbitrary nested split panes, drag-to-rearrange, and tear-off tabs into separate windows. Drag a session from the sidebar onto the terminals to open it there: drop it on a pane's edge to split, or in the middle to add a tab.
 - **Fast Input**: **Broadcast input** (to current tab panes or all tabs), timed multi-session Sender (text or **hex bytes**), Command Palette, grouped Quick Commands, and **history/dictionary auto-completion**.
-- **Quick-Connect Bar**: Connect instantly with `ssh user@host:22`, `ssh -p 2222 -i key user@host`, `powershell`, or `wsl`.
+- **Quick-Connect Bar**: Connect instantly with `ssh user@host:22`, `ssh -p 2222 -i key user@host`, `powershell`, or `wsl`. Right-click the tab or terminal and choose **Session settings and save…** to adjust just that tab or save it to the session list without disconnecting.
 - **Command Alerts & Readability**: One-shot **"Notify When Command Finishes"** alerts (with duration and exit code), output folding, highlight rules, Focus Mode (`F11`), and workspace lock.
 
 ### Plugins (experimental)

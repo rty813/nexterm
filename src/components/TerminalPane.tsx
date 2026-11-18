@@ -105,6 +105,7 @@ import { sessionTargetSummary } from "../utils/sessionSummary";
 
 /** Workspace-level state and actions every pane needs (menus, logging, sync input). */
 export interface PaneExtras {
+  onPaneSettings: (paneId: string) => void;
   syncChannels: Record<string, SyncChannel>;
   syncPaused: boolean;
   /** Panes paused one by one (they neither send nor receive synced input). */
@@ -359,6 +360,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const termOptions: TerminalOptions = { ...DEFAULT_TERMINAL_OPTIONS, ...(leaf.session.termOptions ?? {}) };
   const termOptionsRef = useRef(termOptions);
   termOptionsRef.current = termOptions;
+  const sessionRef = useRef(leaf.session);
+  sessionRef.current = leaf.session;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const [bellFlash, setBellFlash] = useState(false);
@@ -545,8 +548,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         settings: () => settingsRef.current,
         termOptions: () => termOptionsRef.current,
         scheme: () => schemeRef.current,
-        sessionLabel: () => leaf.session.label,
-        sessionKey: () => historyKeyOf(leaf.session),
+        sessionLabel: () => sessionRef.current.label,
+        sessionKey: () => historyKeyOf(sessionRef.current),
         quickCommands: () => extrasRef.current.quickCommands,
         colors: () => ({ fg: themeRef.current.termFg, bg: themeRef.current.termBg }),
         sendInput: (data) => onUserInputRef.current(leaf.paneId, translateInput(data, termOptionsRef.current)),
@@ -1469,6 +1472,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           shortcut: k["tab.lock"],
           onClick: () => extras.onToggleLock(leaf.paneId),
         },
+        { label: t("sessionForm.paneMenu"), onClick: () => extras.onPaneSettings(leaf.paneId) },
         { label: t("pane.reconnect"), shortcut: k["tab.reconnect"], onClick: () => onReconnectPane(leaf.paneId) },
         {
           label: t("menu.disconnect"),

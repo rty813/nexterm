@@ -138,7 +138,7 @@ export function parseQuickConnectInput(raw: string): SessionConfig | null {
 
   return {
     id: makeId(),
-    label: `${username}@${host}`,
+    label: username ? `${username}@${host}` : host,
     group: "Quick Connect",
     protocol: "ssh",
     host,

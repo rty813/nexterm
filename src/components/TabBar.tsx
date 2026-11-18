@@ -37,6 +37,7 @@ export interface GroupTabBarProps {
   onSelectTab: (paneId: string) => void;
   onCloseTab: (paneId: string) => void;
   onRenameTab: (paneId: string, title: string) => void;
+  onPaneSettings: (paneId: string) => void;
   /** reuse: true = new channel on the live SSH connection, false = new connection, omitted = per settings. */
   onDuplicateTab: (paneId: string, reuse?: boolean) => void;
   /** settings.reuseSshConnection: what the duplicate shortcut / tab mouse action does. */
@@ -87,6 +88,7 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
   onSelectTab,
   onCloseTab,
   onRenameTab,
+  onPaneSettings,
   onDuplicateTab,
   reuseSshConnection,
   onReconnectTab,
@@ -226,6 +228,7 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
       point,
       compactMenu([
         { label: t("menu.renameTab"), onClick: () => startRename(leaf) },
+        { label: t("sessionForm.paneMenu"), onClick: () => onPaneSettings(leaf.paneId) },
         { label: t("menu.tabColor"), children: colorItems },
         {
           label: leaf.locked ? t("menu.unlockSession") : t("menu.lockSession"),

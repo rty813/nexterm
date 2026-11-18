@@ -1,4 +1,5 @@
 import type { LayoutNode, PaneGroup, SessionConfig, SplitDirection, TerminalLeafNode, WorkspaceState } from "../types/domain";
+import { withoutSessionSecrets } from "./paneSession";
 
 /**
  * The workspace as saved between runs: split tree, tab order, active tabs, tab titles,
@@ -25,14 +26,8 @@ export interface WorkspaceSnapshot {
   activeGroup: number;
 }
 
-function stripSecrets(session: SessionConfig): SessionConfig {
-  const { password: _p, passphrase: _pp, credentialHandoff: _h, ...rest } = session;
-  const jump = rest.jumpHost ? { ...rest.jumpHost, password: undefined } : rest.jumpHost;
-  return { ...rest, jumpHost: jump };
-}
-
 function tabOf(leaf: TerminalLeafNode, saved: Set<string>): TabSnapshot {
-  const tab: TabSnapshot = saved.has(leaf.session.id) ? { sessionId: leaf.session.id } : { session: stripSecrets(leaf.session) };
+  const tab: TabSnapshot = saved.has(leaf.session.id) ? { sessionId: leaf.session.id } : { session: withoutSessionSecrets(leaf.session) };
   if (leaf.title) tab.title = leaf.title;
   if (leaf.color) tab.color = leaf.color;
   if (leaf.locked) tab.locked = true;

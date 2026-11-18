@@ -103,6 +103,7 @@ export type GroupActions = Omit<
   | "agentStates"
   | "commandWatches"
   | "onActivateGroup"
+  | "onPaneSettings"
   | "onSplitGroup"
   | "onDropTab"
   | "keymap"
@@ -339,6 +340,7 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
               onSelectTab={groupActions.onSelectTab}
               onCloseTab={groupActions.onCloseTab}
               onRenameTab={groupActions.onRenameTab}
+              onPaneSettings={extras.onPaneSettings}
               onDuplicateTab={groupActions.onDuplicateTab}
               reuseSshConnection={settings.reuseSshConnection}
               onReconnectTab={groupActions.onReconnectTab}
