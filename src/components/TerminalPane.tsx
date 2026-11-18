@@ -133,13 +133,13 @@ export interface PaneExtras {
   onTmux: (leaf: TerminalLeafNode) => void;
   /** True for key events bound to an app action; xterm then ignores them. */
   isAppShortcut: (ev: KeyboardEvent) => boolean;
-  /** Add a permanent text highlight (from the selection or the search bar). */
-  onAddHighlight: (pattern: string, options: SearchOptionsState, color: string) => void;
-  /** Literal highlight of `text`: set its color, or remove it with null. */
-  onSetHighlight: (text: string, color: string | null) => void;
-  onClearHighlights: () => void;
-  /** Open Settings on the Highlight tab. */
-  onManageHighlights: () => void;
+  /** Add a text highlight to this pane (from the selection or the search bar). */
+  onAddHighlight: (paneId: string, pattern: string, options: SearchOptionsState, color: string) => void;
+  /** Literal highlight of `text` in this pane: set its color, or remove it with null. */
+  onSetHighlight: (paneId: string, text: string, color: string | null) => void;
+  onClearHighlights: (paneId: string) => void;
+  /** Open the pane's highlight rules. */
+  onManageHighlights: (paneId: string) => void;
   /** Lock / unlock the session: a locked session cannot be closed or disconnected. */
   onToggleLock: (paneId: string) => void;
   /** Short message at the bottom of the window. */
@@ -995,11 +995,12 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     lineHighlightRef.current?.setEnabled(settings.highlightCurrentLine !== false);
   }, [settings.highlightCurrentLine]);
 
-  const userRules = useMemo(() => compileUserRules(settings.highlightRules), [settings.highlightRules]);
+  // Text highlights belong to this pane, not to the settings.
+  const userRules = useMemo(() => compileUserRules(leaf.highlightRules), [leaf.highlightRules]);
   useEffect(() => {
     highlighterRef.current?.setUserRules(userRules);
     // Keyword highlights over the whole history, on the history's scrollbar.
-    const rules = (settings.highlightRules ?? []).filter((r) => r.enabled && r.pattern);
+    const rules = (leaf.highlightRules ?? []).filter((r) => r.enabled && r.pattern);
     historyRef.current?.setMarkLayer(
       "rules",
       rules.length
@@ -1225,7 +1226,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const sel = hasSelection ? term.getSelection().trim() : "";
     const hlText = sel && !sel.includes("\n") ? sel : wordAt(term, e.clientX, e.clientY, settings.wordSeparators);
     const hlCurrent =
-      (settings.highlightRules ?? []).find((r) => r.enabled && !r.regex && r.pattern === hlText)?.color ?? null;
+      (leaf.highlightRules ?? []).find((r) => r.enabled && !r.regex && r.pattern === hlText)?.color ?? null;
     const connected = leaf.status === "connected" || leaf.status === "connecting";
     openMenu(
       e,
@@ -1262,15 +1263,15 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           colors: HIGHLIGHT_PRESETS.map((c) => ({ color: c, label: t("menu.highlightWith", { color: t(`highlight.color.${c}`), text: hlText }) })),
           current: hlCurrent,
           disabled: !hlText,
-          onPick: (c) => extras.onSetHighlight(hlText, c),
-          onClear: () => extras.onSetHighlight(hlText, null),
+          onPick: (c) => extras.onSetHighlight(leaf.paneId, hlText, c),
+          onClear: () => extras.onSetHighlight(leaf.paneId, hlText, null),
           clearLabel: t("menu.unhighlight", { text: hlText }),
         },
-        { label: t("menu.manageHighlights"), onClick: () => extras.onManageHighlights() },
+        { label: t("menu.manageHighlights"), onClick: () => extras.onManageHighlights(leaf.paneId) },
         {
           label: t("menu.clearHighlights"),
-          disabled: !(settings.highlightRules ?? []).some((r) => r.enabled),
-          onClick: () => extras.onClearHighlights(),
+          disabled: !(leaf.highlightRules ?? []).some((r) => r.enabled),
+          onClick: () => extras.onClearHighlights(leaf.paneId),
         },
         { type: "separator" },
         { type: "separator" },
@@ -1767,7 +1768,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
             setSearchOpen(false);
             xtermRef.current?.focus();
           }}
-          onHighlight={extras.onAddHighlight}
+          onHighlight={(pattern, options, color) => extras.onAddHighlight(leaf.paneId, pattern, options, color)}
         />
       )}
 

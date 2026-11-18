@@ -67,6 +67,9 @@ impl Storage {
             settings.font_family = AppSettings::default().font_family;
             let _ = self.save_settings(&settings);
         }
+        if drop_retired_settings(&mut settings) {
+            let _ = self.save_settings(&settings);
+        }
 
         if settings.language.starts_with("zh") {
             localize_legacy_seed_data(&mut sessions, &mut quick_commands);
@@ -133,6 +136,12 @@ impl Storage {
         fs::write(self.settings_path(), json)?;
         Ok(())
     }
+}
+
+/// Settings no longer used: text highlights became per pane (frontend only), so the
+/// old global `highlightRules` is removed. Returns true when something was removed.
+fn drop_retired_settings(settings: &mut AppSettings) -> bool {
+    settings.extra.remove("highlightRules").is_some()
 }
 
 pub fn localize_legacy_seed_data(
@@ -255,4 +264,20 @@ pub fn default_quick_commands() -> Vec<QuickCommand> {
         }
     }
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drops_global_highlight_rules() {
+        let mut settings = AppSettings::default();
+        settings.extra.insert("highlightRules".into(), serde_json::json!([{ "id": "a", "pattern": "err" }]));
+        settings.extra.insert("toolbar".into(), serde_json::json!(["x"]));
+        assert!(drop_retired_settings(&mut settings));
+        assert!(!settings.extra.contains_key("highlightRules"));
+        assert!(settings.extra.contains_key("toolbar"));
+        assert!(!drop_retired_settings(&mut settings));
+    }
 }

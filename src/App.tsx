@@ -71,7 +71,7 @@ import { compactMenu, ContextMenuProvider, type MenuItem } from "./components/Co
 import { HostKeyDialog, ZmodemDialog } from "./components/TransferDialogs";
 import { ConfirmDialog, PasteDialog, type ConfirmAnswer, type ConfirmRequest } from "./components/ConfirmDialog";
 import { StorageLocationPrompt } from "./components/StorageLocation";
-import type { StorageLocationInfo } from "./types/domain";
+import type { HighlightRule, StorageLocationInfo } from "./types/domain";
 import { ShareDialog } from "./components/ShareDialog";
 import { shareStore, useShareStore } from "./services/shares";
 import { SenderPanel } from "./components/SenderPanel";
@@ -89,7 +89,7 @@ import { SftpPanel, type SftpTarget } from "./components/SftpPanel";
 import { FilePreview, type PreviewRequest } from "./components/FilePreview";
 import { paneCwd } from "./utils/paneCwd";
 import { downloadDir as downloadDirPath } from "@tauri-apps/api/path";
-import { newHighlightRule } from "./components/HighlightEditor";
+import { HighlightDialog, newHighlightRule } from "./components/HighlightEditor";
 import { sessionTargetSummary } from "./utils/sessionSummary";
 import { usePersistentUiState } from "./hooks/usePersistentUiState";
 import { CommandPalette, type PaletteTab } from "./components/CommandPalette";
@@ -638,6 +638,11 @@ export const App: React.FC = () => {
   useEffect(() => shareStore.setRelayConfigured(relayConfigured), [relayConfigured]);
   const { dialogPane: shareDialogPane } = useShareStore();
   const shareDialogLeaf = shareDialogPane ? findLeaf(ws.root, shareDialogPane) : null;
+  // "Manage text highlights" of one pane (its rules live on the leaf, not in the settings).
+  const [highlightPane, setHighlightPane] = useState<string | null>(null);
+  const highlightLeaf = highlightPane ? findLeaf(ws.root, highlightPane) : null;
+  const updateHighlights = (paneId: string, fn: (rules: HighlightRule[]) => HighlightRule[]) =>
+    setWs((prev) => ({ ...prev, root: updateLeaf(prev.root, paneId, (l) => ({ ...l, highlightRules: fn(l.highlightRules ?? []) })) }));
   // The pane closed or moved to another window while its dialog was open.
   useEffect(() => {
     if (shareDialogPane && !shareDialogLeaf) shareStore.closeDialog();
@@ -1386,12 +1391,11 @@ export const App: React.FC = () => {
         setMonitorOpen((v) => !v);
         return true;
       case "view.settings":
-      case "view.highlights":
         if (!isMainWindow) {
           inMainWindow(id);
           return true;
         }
-        setSettingsTab(id === "view.settings" ? "general" : "highlight");
+        setSettingsTab("general");
         setSettingsModalOpen(true);
         return true;
       case "terminal.copy":
@@ -2273,35 +2277,34 @@ export const App: React.FC = () => {
       void backend.disconnectTerminal(paneId);
     },
     onToggleLock: toggleLock,
-    onAddHighlight: (pattern, options, color) => {
+    onAddHighlight: (paneId, pattern, options, color) => {
       if (!pattern) return;
-      const rules = settings.highlightRules ?? [];
-      const existing = rules.find(
-        (r) => r.pattern === pattern && r.regex === options.regex && r.caseSensitive === options.caseSensitive && r.wholeWord === options.wholeWord
-      );
-      const next = existing
-        ? rules.map((r) => (r === existing ? { ...r, color, enabled: true } : r))
-        : [...rules, newHighlightRule({ pattern, ...options, color })];
-      saveSettings({ ...settings, highlightRules: next });
+      updateHighlights(paneId, (rules) => {
+        const existing = rules.find(
+          (r) => r.pattern === pattern && r.regex === options.regex && r.caseSensitive === options.caseSensitive && r.wholeWord === options.wholeWord
+        );
+        return existing
+          ? rules.map((r) => (r === existing ? { ...r, color, enabled: true } : r))
+          : [...rules, newHighlightRule({ pattern, ...options, color })];
+      });
       setToast(t("highlight.added", { pattern }));
     },
-    onSetHighlight: (text, color) => {
+    onSetHighlight: (paneId, text, color) => {
       if (!text) return;
-      const rules = settings.highlightRules ?? [];
-      const same = (r: (typeof rules)[number]) => !r.regex && r.pattern === text;
-      const next =
+      const same = (r: HighlightRule) => !r.regex && r.pattern === text;
+      updateHighlights(paneId, (rules) =>
         color === null
           ? rules.filter((r) => !same(r))
           : rules.some(same)
           ? rules.map((r) => (same(r) ? { ...r, color, enabled: true } : r))
-          : [...rules, newHighlightRule({ pattern: text, caseSensitive: true, color })];
-      saveSettings({ ...settings, highlightRules: next });
+          : [...rules, newHighlightRule({ pattern: text, caseSensitive: true, color })]
+      );
     },
-    onClearHighlights: () => {
-      saveSettings({ ...settings, highlightRules: (settings.highlightRules ?? []).map((r) => ({ ...r, enabled: false })) });
+    onClearHighlights: (paneId) => {
+      updateHighlights(paneId, () => []);
       setToast(t("highlight.cleared"));
     },
-    onManageHighlights: () => void runAction("view.highlights"),
+    onManageHighlights: (paneId) => setHighlightPane(paneId),
     onToggleZoom: (paneId) => toggleZoom(paneId),
     isZoomed: zoomedGroupId !== null,
     keymap,
@@ -2953,6 +2956,15 @@ export const App: React.FC = () => {
       {toast && <div className="app-toast">{toast}</div>}
 
       {shareDialogLeaf && <ShareDialog paneId={shareDialogLeaf.paneId} title={tabTitle(shareDialogLeaf)} />}
+
+      {highlightLeaf && (
+        <HighlightDialog
+          title={tabTitle(highlightLeaf)}
+          rules={highlightLeaf.highlightRules ?? []}
+          onChange={(fn) => updateHighlights(highlightLeaf.paneId, fn)}
+          onClose={() => setHighlightPane(null)}
+        />
+      )}
 
       {pasteRequest && (
         <PasteDialog

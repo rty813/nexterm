@@ -21,7 +21,8 @@ export const resources = {
         "truncated": "只列出前 {{count}} 处",
       },
       "highlight": {
-        "hint": "在所有终端输出中按关键字或正则高亮文字。最快的方式：在终端里右键单词（或选中文字后右键），点菜单里的颜色圆点；再点同一个颜色即可取消。",
+        "title": "文本高亮 - {{title}}",
+        "hint": "只对当前会话窗口生效：按关键字或正则高亮这个窗格里的文字，不影响其他窗格，也不保存到设置。最快的方式：在终端里右键单词（或选中文字后右键），点菜单里的颜色圆点；再点同一个颜色即可取消。",
         "empty": "还没有高亮规则。",
         "enabled": "启用",
         "patternPh": "关键字或正则表达式",
@@ -32,7 +33,7 @@ export const resources = {
         "sample": "示例文字",
         "add": "添加高亮规则",
         "added": "已添加高亮：{{pattern}}",
-        "cleared": "已关闭所有高亮（规则仍保留在设置里，可重新启用）",
+        "cleared": "已清除当前会话的所有高亮",
         "color": {
           "#fde047": "黄色",
           "#fb923c": "橙色",
@@ -502,7 +503,7 @@ export const resources = {
         done: "完成",
       },
       settingsModal: {
-        "tab": {"general":"常规","highlight":"文本高亮","keys":"快捷键","toolbar":"工具栏"},
+        "tab": {"general":"常规","keys":"快捷键","toolbar":"工具栏"},
         "terminalBehavior": "终端操作",
         "copyOnSelect": "选中文字后自动复制",
         showTimestamps: "新终端默认显示行时间戳",
@@ -645,7 +646,8 @@ export const resources = {
         "truncated": "first {{count}} shown",
       },
       "highlight": {
-        "hint": "Highlight keywords or patterns in all terminal output. Quickest: right-click a word (or a selection) and click a color dot; click the same dot again to remove it.",
+        "title": "Text Highlights - {{title}}",
+        "hint": "Applies to this session window only: highlights keywords or patterns in this pane, not in other panes, and is not saved in Settings. Quickest: right-click a word (or a selection) and click a color dot; click the same dot again to remove it.",
         "empty": "No highlight rules yet.",
         "enabled": "Enabled",
         "patternPh": "Keyword or regular expression",
@@ -656,7 +658,7 @@ export const resources = {
         "sample": "Sample",
         "add": "Add Highlight Rule",
         "added": "Highlight added: {{pattern}}",
-        "cleared": "All highlights turned off (rules stay in Settings)",
+        "cleared": "All highlights of this session cleared",
         "color": {
           "#fde047": "Yellow",
           "#fb923c": "Orange",
@@ -1126,7 +1128,7 @@ export const resources = {
         done: "Done",
       },
       settingsModal: {
-        "tab": {"general":"General","highlight":"Highlight","keys":"Shortcuts","toolbar":"Toolbar"},
+        "tab": {"general":"General","keys":"Shortcuts","toolbar":"Toolbar"},
         "terminalBehavior": "Terminal",
         "copyOnSelect": "Copy on select",
         showTimestamps: "Show line timestamps in new terminals",

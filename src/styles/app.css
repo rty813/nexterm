@@ -2670,6 +2670,21 @@ html.ctxmenu-host #root {
 }
 
 /* ---------- Highlight rules editor ---------- */
+.modal-panel.hl-dialog {
+  width: 560px;
+}
+.hl-dialog .modal-header h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.hl-dialog .modal-body {
+  overflow-y: auto;
+}
 .hl-editor {
   display: flex;
   flex-direction: column;

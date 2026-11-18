@@ -72,7 +72,7 @@ export interface SessionConfig {
   tabColor?: string | null;
 }
 
-/** A keyword / pattern painted in every terminal (Settings > Highlight). */
+/** A keyword / pattern painted in one pane's output (TerminalLeafNode.highlightRules). */
 export interface HighlightRule {
   id: string;
   pattern: string;
@@ -320,7 +320,6 @@ export interface AppSettings {
   gutterLineNumbers?: boolean;
   /** Background bands on the cursor's line and on the line last clicked (default on). */
   highlightCurrentLine?: boolean;
-  highlightRules?: HighlightRule[];
   /** Triggers (missing = the defaults, see utils/triggers.ts). */
   triggers?: TriggerRule[];
   /** Underline trigger matches on screen (default on). */
@@ -746,6 +745,8 @@ export interface TerminalLeafNode {
   reuseFrom?: string;
   /** When the connection last came up (status bar uptime). Frontend only. */
   connectedAt?: number;
+  /** Text highlights of this pane only (not a setting; moves with the tab). Frontend only. */
+  highlightRules?: HighlightRule[];
 }
 
 /** A split area with its own tab bar; every tab is one terminal. */

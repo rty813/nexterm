@@ -1,7 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2 } from "lucide-react";
-import type { AppSettings, HighlightRule } from "../types/domain";
+import { Highlighter, Plus, Trash2, X } from "lucide-react";
+import type { HighlightRule } from "../types/domain";
 import { buildMatcher, contrastText, HIGHLIGHT_PRESETS } from "../utils/textMatch";
 
 export function newHighlightRule(patch: Partial<HighlightRule> = {}): HighlightRule {
@@ -19,16 +19,13 @@ export function newHighlightRule(patch: Partial<HighlightRule> = {}): HighlightR
   };
 }
 
-/** Settings > Highlight: keywords / patterns painted in every terminal. */
+/** Keywords / patterns painted in one pane's output (the pane's own rules, not a setting). */
 export const HighlightEditor: React.FC<{
-  draft: AppSettings;
+  rules: HighlightRule[];
   /** Functional update, so quick successive edits never overwrite each other. */
-  onChange: (update: (prev: AppSettings) => AppSettings) => void;
-}> = ({ draft, onChange }) => {
+  onChange: (update: (prev: HighlightRule[]) => HighlightRule[]) => void;
+}> = ({ rules, onChange: update }) => {
   const { t } = useTranslation();
-  const rules = draft.highlightRules ?? [];
-  const update = (fn: (rules: HighlightRule[]) => HighlightRule[]) =>
-    onChange((prev) => ({ ...prev, highlightRules: fn(prev.highlightRules ?? []) }));
   const patch = (id: string, p: Partial<HighlightRule>) => update((rs) => rs.map((r) => (r.id === id ? { ...r, ...p } : r)));
 
   return (
@@ -105,6 +102,41 @@ export const HighlightEditor: React.FC<{
       <button type="button" className="btn-secondary btn-sm hl-add" onClick={() => update((rs) => [...rs, newHighlightRule()])}>
         <Plus size={13} /> {t("highlight.add")}
       </button>
+    </div>
+  );
+};
+
+/** "Manage text highlights" of one pane; edits apply live. */
+export const HighlightDialog: React.FC<{
+  title: string;
+  rules: HighlightRule[];
+  onChange: (update: (prev: HighlightRule[]) => HighlightRule[]) => void;
+  onClose: () => void;
+}> = ({ title, rules, onChange, onClose }) => {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <div className="modal-panel hl-dialog">
+        <div className="modal-header">
+          <h3>
+            <Highlighter size={15} /> {t("highlight.title", { title })}
+          </h3>
+          <button type="button" className="icon-btn" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <div className="modal-body">
+          <HighlightEditor rules={rules} onChange={onChange} />
+        </div>
+      </div>
     </div>
   );
 };

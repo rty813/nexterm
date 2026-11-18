@@ -2,14 +2,13 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentHooks";
 import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
-import { Globe, Highlighter, Keyboard, Monitor, Mouse, PanelTop, Puzzle, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
+import { Globe, Keyboard, Monitor, Mouse, PanelTop, Puzzle, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
 import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
 import { PluginManager } from "./StatusPlugins";
-export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "highlight" | "triggers" | "keys" | "toolbar" | "plugins";
+export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "triggers" | "keys" | "toolbar" | "plugins";
 import { KeymapEditor, ToolbarEditor } from "./SettingsExtra";
-import { HighlightEditor } from "./HighlightEditor";
 import { TriggerEditor } from "./TriggerEditor";
 import { RemoteSettingsEditor } from "./SettingsRemote";
 import { SyncSettingsEditor } from "./SettingsSync";
@@ -24,7 +23,6 @@ const settingsSections = [
   { id: "xserver", icon: Monitor },
   { id: "remote", icon: Globe },
   { id: "sync", icon: RefreshCw },
-  { id: "highlight", icon: Highlighter },
   { id: "triggers", icon: Zap },
   { id: "keys", icon: Keyboard },
   { id: "toolbar", icon: PanelTop },
@@ -140,7 +138,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {tab === "keys" && <KeymapEditor draft={draft} onChange={setDraft} />}
           {tab === "plugins" && <PluginManager />}
           {tab === "toolbar" && <ToolbarEditor draft={draft} onChange={setDraft} />}
-          {tab === "highlight" && <HighlightEditor draft={draft} onChange={setDraft} />}
           {tab === "triggers" && <TriggerEditor draft={draft} onChange={setDraft} />}
           {tab === "terminal" && <TerminalSettings draft={draft} onChange={setDraft} sessions={sessions} />}
           {tab === "mouse" && <MouseSettingsEditor draft={draft} onChange={setDraft} />}
