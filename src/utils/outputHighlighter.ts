@@ -174,10 +174,22 @@ interface LineRecord {
 const MAX_RECORDS = 1000;
 /** Upper bound of lines inspected per pass. */
 const MAX_SCAN_LINES = 1000;
+/**
+ * Scans run right in onWriteParsed, before xterm's next animation frame, so new text is
+ * drawn already colored instead of flashing in the default color first. Under heavy
+ * output that would cost throughput, so once synchronous scans took this much time in
+ * the current window, the rest of the window falls back to the deferred scan.
+ */
+const SYNC_BUDGET_MS = 4;
+const SYNC_WINDOW_MS = 100;
+/** Delay of the deferred scan (after renders, and when over the budget). */
+const DEFERRED_SCAN_MS = 40;
 
 export class OutputHighlighter implements IDisposable {
   private records: LineRecord[] = [];
   private timer: number | undefined;
+  private syncWindowStart = 0;
+  private syncSpent = 0;
   /**
    * Where the next scan resumes, held by a marker: absolute rows shift when the scrollback
    * trims rows at the top or the full history inserts / drops rows there.
@@ -200,7 +212,7 @@ export class OutputHighlighter implements IDisposable {
     this.rules = SCHEMES[scheme] ?? SCHEMES.linux;
     this.enabled = enabled;
     this.subs = [
-      term.onWriteParsed(() => this.schedule()),
+      term.onWriteParsed(() => this.scanNow()),
       // Not term.onScroll, which fires (and allocates) once per scrolled line: a viewport
       // change renders, so onRender covers scrolling back through the scrollback too.
       term.onRender(() => this.schedule()),
@@ -276,7 +288,25 @@ export class OutputHighlighter implements IDisposable {
     this.timer = window.setTimeout(() => {
       this.timer = undefined;
       this.scan();
-    }, 40);
+    }, DEFERRED_SCAN_MS);
+  }
+
+  /** Scan synchronously while within the time budget, else defer. */
+  private scanNow(): void {
+    const start = performance.now();
+    if (start - this.syncWindowStart >= SYNC_WINDOW_MS) {
+      this.syncWindowStart = start;
+      this.syncSpent = 0;
+    }
+    if (this.syncSpent >= SYNC_BUDGET_MS) {
+      this.schedule();
+      return;
+    }
+    // This pass covers whatever a pending deferred one would have.
+    window.clearTimeout(this.timer);
+    this.timer = undefined;
+    this.scan();
+    this.syncSpent += performance.now() - start;
   }
 
   private scan(): void {
