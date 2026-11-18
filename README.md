@@ -146,7 +146,6 @@ A WebView terminal cannot simply keep millions of lines: xterm.js stores every l
 6. **Fast search over everything.** The backend searches the compressed blocks on several threads. It matches each block's text in one pass before looking at single lines, and builds no per-line objects. A full pass over 10 million lines takes about 0.1 s. Per-block match counts are cached for each query, so match counts and scrollbar marks only scan new output afterwards.
 
 ## Building
-## Building
 
 Prerequisites: [Node.js](https://nodejs.org) >= 20, [Rust](https://rustup.rs) stable (MSVC), and [Tauri v2 Windows prerequisites](https://tauri.app/start/prerequisites/).
 
@@ -179,6 +178,10 @@ cd relay; npm test                                       # relay & E2EE protocol
 ## Contributing
 
 Issues and PRs are welcome. Please run front-end and Rust tests before submitting, and provide both English and Chinese strings for new UI text.
+
+## Community
+
+- Community: [LINUX DO](https://linux.do/)
 
 ## License
 

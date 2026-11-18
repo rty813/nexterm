@@ -146,7 +146,6 @@ WebView 里的终端没法直接保留几百万行：xterm.js 每行按整个窗
 6. **全量搜索也很快**：后端在多个线程上搜索压缩块。每块先整体匹配一次，命中了才逐行查找，过程中不为每行创建对象。1000 万行全部扫一遍约 0.1 秒。每个关键字的分块计数会缓存，之后的计数和滚动条标记只需扫新输出。
 
 ## 构建
-## 构建
 
 环境要求：[Node.js](https://nodejs.org) >= 20、[Rust](https://rustup.rs) stable（MSVC）、[Tauri v2 Windows 依赖](https://tauri.app/start/prerequisites/)。
 
@@ -179,6 +178,10 @@ cd relay; npm test                                       # 中继与加密协议
 ## 参与
 
 欢迎提 Issue 和 PR。提交前请运行前端和 Rust 测试；新增界面文案需同时提供中英文。
+
+## 社区
+
+- 社区链接：[LINUX DO](https://linux.do/)
 
 ## 许可证
 
