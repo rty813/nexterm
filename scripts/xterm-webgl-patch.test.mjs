@@ -21,6 +21,9 @@ describe("xterm webgl atlas-merge patch", () => {
     expect(patched).not.toContain("this.version=0");
     expect(patched).toContain("invalidateAtlasTextures(){");
     expect(patched).toContain("__nxMergeGen");
+    // #6043: evict instead of growing past the texture units, and never index past them.
+    expect(patched).toContain("__nxEvictAll(){");
+    expect(patched).toContain("Math.min(this._atlas.pages.length,this._atlasTextures.length)");
     expect(() => new Function("exports", "module", "require", "define", "self", patched)).not.toThrow();
   });
 

@@ -16,6 +16,12 @@
 // Either way cells draw pixels from another glyph until a resize or font change rebuilds
 // everything.
 //
+// Also backports PR #6043: once the pages reach the maximum texture size they can no longer
+// be merged, and 0.18.0 kept adding pages beyond maxAtlasPages; render() then threw on every
+// frame ("reading 'version'") and the pane stopped updating. The atlas is now evicted and
+// rebuilt instead. (PR #6042 is covered by the per-renderer merge generation below; 0.18.0
+// has no oversized-glyph page, so that part of #6043 does not apply.)
+//
 // Differences from upstream: upstream resets the atlas' `_requestClearModel` flag in
 // beginFrame(), but the atlas is shared between terminals with the same font settings, so
 // whichever pane rendered first would swallow the flag. Here each renderer remembers the
@@ -81,6 +87,40 @@ const REPLACEMENTS = [
       "!a||this.__nxAtlas!==a||this.__nxGen!==m?(this._clearModel(!0),this._updateModel(0,this._terminal.rows-1)):this._updateModel(e,t);" +
       "for(;a&&g()!==m&&x++<32;)m=g(),f=!0,this._clearModel(!0),this._updateModel(0,this._terminal.rows-1);" +
       "this.__nxAtlas=a,this.__nxGen=m,f&&this._glyphRenderer.value.invalidateAtlasTextures()})(),",
+  },
+
+  // --- xterm.js PR #6043: keep the atlas within the renderer's texture capacity. ---
+  {
+    // Drop every page and cached glyph, and bump the merge generation so every renderer
+    // sharing the atlas rebuilds its model (the glyphs are rasterized again on demand).
+    name: "TextureAtlas evict all pages",
+    from: "_createNewPage(){if(g.maxAtlasPages&&",
+    to:
+      "__nxEvictAll(){for(const e of this._pages)this._onRemoveTextureAtlasCanvas.fire(e.canvas),e.canvas.remove();" +
+      "this._pages.length=0,this._activePages.length=0,this._cacheMap.clear(),this._cacheMapCombined.clear(),this._didWarmUp=!1," +
+      "this.__nxMergeGen=(this.__nxMergeGen||0)+1}" +
+      "_createNewPage(){if(g.maxAtlasPages&&",
+  },
+  {
+    // Once the pages have grown to the maximum texture size there are no four same-sized
+    // pages left to merge; 0.18.0 merged whatever it found anyway (or crashed on an empty
+    // list) and the page count kept growing past maxAtlasPages. Evict instead.
+    name: "merge only four same-sized pages",
+    from: "let t=-1,i=0;for(let s=0;s<e.length;s++)if(e[s].canvas.width!==i)t=s,i=e[s].canvas.width;else if(s-t==3)break;const s=e.slice(t,t+4),r=",
+    to:
+      "let t=-1,i=0;for(let s=0;s<e.length;s++)if(e[s].canvas.width!==i)t=s,i=e[s].canvas.width;else if(s-t==3)break;" +
+      "const s=t<0?[]:e.slice(t,t+4);if(s.length<4||s.some((e=>e.canvas.width!==s[0].canvas.width||!e.glyphs.length)))this.__nxEvictAll();else{const r=",
+  },
+  {
+    name: "close the merge branch",
+    from: "this._onAddTextureAtlasCanvas.fire(n.canvas)}const e=new v(this._document,this._textureSize);",
+    to: "this._onAddTextureAtlasCanvas.fire(n.canvas)}}const e=new v(this._document,this._textureSize);",
+  },
+  {
+    // Defensive backstop: never index past the renderer's texture units.
+    name: "clamp texture upload loop",
+    from: "for(let e=0;e<this._atlas.pages.length;e++)this._atlas.pages[e].version!==this._atlasTextures[e].version&&",
+    to: "for(let e=0;e<Math.min(this._atlas.pages.length,this._atlasTextures.length);e++)this._atlas.pages[e].version!==this._atlasTextures[e].version&&",
   },
 ];
 
