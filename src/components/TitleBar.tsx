@@ -34,11 +34,38 @@ export const TitleBar: React.FC<{ title: string; children?: React.ReactNode; sta
     void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => fn(getCurrentWindow()).catch(() => undefined));
   };
 
+  /**
+   * Maximize / restore without losing the terminal's keyboard focus: clicking a button
+   * moves DOM focus to it, and the native resize can leave WebView2 without keyboard
+   * focus. Remember what had focus, then give native + DOM focus back.
+   */
+  const toggleMaximize = () => {
+    const active = document.activeElement;
+    const prev = active instanceof HTMLElement && active !== document.body ? active : null;
+    withWindow(async (w) => {
+      await w.toggleMaximize();
+      await w.setFocus().catch(() => undefined);
+      const refocus = () => {
+        if (prev?.isConnected) prev.focus({ preventScroll: true });
+      };
+      refocus();
+      // The resize settles a frame or two later and can take focus away again.
+      requestAnimationFrame(() => requestAnimationFrame(refocus));
+      setTimeout(refocus, 150);
+    });
+  };
+
   const onMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest(INTERACTIVE)) return;
+    if (e.button !== 0) return;
+    // Window control buttons: keep DOM focus where it is (in the terminal).
+    if ((e.target as HTMLElement).closest(".titlebar-controls")) {
+      e.preventDefault();
+      return;
+    }
+    if ((e.target as HTMLElement).closest(INTERACTIVE)) return;
     e.preventDefault();
     if (e.detail === 2) {
-      withWindow((w) => w.toggleMaximize());
+      toggleMaximize();
       return;
     }
     titleDragAt = Date.now();
@@ -59,7 +86,7 @@ export const TitleBar: React.FC<{ title: string; children?: React.ReactNode; sta
             type="button"
             className="titlebar-btn"
             title={maximized ? t("titlebar.restore") : t("titlebar.maximize")}
-            onClick={() => withWindow((w) => w.toggleMaximize())}
+            onClick={toggleMaximize}
           >
             {maximized ? <Copy size={12} style={{ transform: "scaleX(-1)" }} /> : <Square size={12} />}
           </button>
