@@ -56,6 +56,12 @@ const LOAD_LIMIT: Duration = Duration::from_secs(5);
 /// The new prompt is collected this long after [`READY`], then redrawn in one go.
 const SETTLE: Duration = Duration::from_millis(150);
 
+/// The scripts without `\r`: a Windows checkout with `core.autocrlf` embeds CRLF, and bash
+/// then fails on `{\r` (`syntax error near unexpected token $'{\r'`).
+fn lf(script: &str) -> String {
+    script.replace('\r', "")
+}
+
 fn base(token: &str) -> String {
     format!("/tmp/.nexterm-si-{token}")
 }
@@ -67,7 +73,7 @@ pub fn upload_script(token: &str) -> String {
     let mut s = String::from("case \"${SHELL##*/}\" in bash|zsh|fish) ;; *) exit 0 ;; esac\numask 077\n");
     s += &format!("d={d}\nrm -f \"$d\" \"$d\".*\n");
     for (ext, body) in [("bash", BASH), ("zsh", ZSH), ("fish", FISH)] {
-        s += &format!("cat > \"$d.{ext}\" <<'NEXTERM_SI_EOF'\n{}\nNEXTERM_SI_EOF\n", body.trim_end());
+        s += &format!("cat > \"$d.{ext}\" <<'NEXTERM_SI_EOF'\n{}\nNEXTERM_SI_EOF\n", lf(body).trim_end());
     }
     s += &format!(
         "cat > \"$d\" <<'NEXTERM_SI_EOF'\n\
@@ -102,11 +108,12 @@ fn permanent_installer() -> String {
     let mut scripts = String::from("case $s in\n");
     for (name, body) in [("fish", FISH), ("zsh", ZSH), ("bash", BASH)] {
         // The automatic /tmp loaders delete themselves. Installed copies stay in place.
+        let body = lf(body);
         let body = body.lines().filter(|line| !line.starts_with("rm -f -- ")).collect::<Vec<_>>().join("\n");
         scripts += &format!("{name}) cat > \"$script.tmp\" <<'NEXTERM_SI_EOF'\n{}\nNEXTERM_SI_EOF\n;;\n", strip_comments(&body));
     }
     scripts += "esac";
-    strip_comments(&include_str!("../shell-integration/install.sh").replace("# NEXTERM_SCRIPT", &scripts))
+    strip_comments(&lf(include_str!("../shell-integration/install.sh")).replace("# NEXTERM_SCRIPT", &scripts))
 }
 
 /// Permanently install for the current user and load into the running bash, zsh or fish.
@@ -450,6 +457,8 @@ mod tests {
         }
         assert!(loader_line("abc").starts_with(" sh /tmp/.nexterm-si-abc "));
         assert!(upload_ok("noise\nok\n"));
+        assert!(!up.contains('\r') && !permanent_installer().contains('\r'));
+        assert_eq!(lf("f() {\r\n  :\r\n}\r\n"), "f() {\n  :\n}\n");
         assert!(!upload_ok(""));
     }
 

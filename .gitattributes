@@ -1,0 +1,4 @@
+# Scripts embedded with include_str! and run on remote shells: never CRLF.
+*.sh   text eol=lf
+*.zsh  text eol=lf
+*.fish text eol=lf
