@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { remoteMirror } from "../services/remoteMirror";
+import { HISTORY_RESET, bannerLine, resetForReconnect, resetTerminal } from "../utils/reconnectReset";
 import { pluginContextMenu } from "./StatusPlugins";
 import { shareStore, useShareStore } from "../services/shares";
 import { shareOfPane, summarizeShare } from "../utils/share";
@@ -382,6 +383,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     triggerLinksRef.current?.refresh();
   }, [compiledTriggers, settings.triggerUnderline, theme]);
   const featuresRef = useRef<TerminalFeatures | null>(null);
+  const serializeRef = useRef<SerializeAddon | null>(null);
   const foldGutterRef = useRef<HTMLDivElement | null>(null);
   const [suggestions, setSuggestions] = useState<SuggestionState | null>(null);
 
@@ -413,6 +415,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     term.loadAddon(fitAddon);
     term.loadAddon(unicode11Addon);
     term.loadAddon(serializeAddon);
+    serializeRef.current = serializeAddon;
     const wideFix = installWideCursorFix(term);
 
     // Mouse wheel: a fixed number of lines per notch, like WindTerm. xterm.js would
@@ -807,10 +810,10 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       focus: () => term.focus(),
       toggleTimestamps: () => setShowTimestamps((v) => !v),
       reset: () => {
-        term.reset();
+        resetTerminal(term);
         // The full history keeps what was on screen (the reset only starts a fresh screen).
         historyRef.current?.reset();
-        void backend.historyFeed(leaf.paneId, `${ESC}c`);
+        void backend.historyFeed(leaf.paneId, HISTORY_RESET);
         remoteMirror.refresh(leaf.paneId);
         featuresRef.current?.tracker.reset();
         // Let the shell redraw its prompt.
@@ -972,6 +975,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       timestampsRef.current = null;
       featuresRef.current?.dispose();
       featuresRef.current = null;
+      serializeRef.current = null;
       term.dispose();
       xtermRef.current = null;
     };
@@ -1038,25 +1042,48 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     }
     const cols = term?.cols ?? 100;
     const rows = term?.rows ?? 30;
-    if (leaf.reconnectCount > 0 && term) {
+    let cancelled = false;
+    const connect = () => {
+      if (cancelled) return;
+      // Duplicated SSH tab: open a channel on the source pane's connection (first connect only).
+      const reuse = leaf.reconnectCount === 0 ? leaf.reuseFrom ?? null : null;
+      void backend
+        .connectTerminal(leaf.paneId, leaf.session, cols, rows, reuse)
+        .then((logPath) => {
+          if (logPath) extras.onLogStarted(leaf.paneId, logPath);
+          // Resizes sent while the backend was still spawning the session were
+          // dropped (no registered entry yet); re-sync the current size now.
+          const current = xtermRef.current;
+          if (current && (current.cols !== cols || current.rows !== rows)) {
+            void backend.resizeTerminal(leaf.paneId, current.cols, current.rows);
+          }
+        });
+    };
+    const serializer = serializeRef.current;
+    if (leaf.reconnectCount > 0 && term && serializer) {
+      // Start the new connection on a reset terminal: nothing the old one left behind
+      // (full-screen program, mouse reporting, input modes, scroll region) carries over.
+      // The normal screen and its scrollback are kept.
       const msg = t("pane.reconnectingBanner", { label: leaf.session.label });
-      const banner = `${CR_LF}${ESC}[90m${msg}${ESC}[0m${CR_LF}`;
-      term.write(banner);
-      void backend.historyFeed(leaf.paneId, banner);
-    }
-    // Duplicated SSH tab: open a channel on the source pane's connection (first connect only).
-    const reuse = leaf.reconnectCount === 0 ? leaf.reuseFrom ?? null : null;
-    void backend
-      .connectTerminal(leaf.paneId, leaf.session, cols, rows, reuse)
-      .then((logPath) => {
-        if (logPath) extras.onLogStarted(leaf.paneId, logPath);
-        // Resizes sent while the backend was still spawning the session were
-        // dropped (no registered entry yet); re-sync the current size now.
-        const current = xtermRef.current;
-        if (current && (current.cols !== cols || current.rows !== rows)) {
-          void backend.resizeTerminal(leaf.paneId, current.cols, current.rows);
-        }
+      // The history has every line already: it only resets (archiving its screen) and adds the banner.
+      void backend.historyFeed(leaf.paneId, HISTORY_RESET + bannerLine(msg));
+      void resetForReconnect(term, serializer, msg, historyRef.current?.loadedRows() ?? 0, () => {
+        historyRef.current?.reset();
+        featuresRef.current?.tracker.reset();
+        // Programs change the cursor with DECSCUSR, which xterm.js stores in its options.
+        term.options.cursorStyle = settingsRef.current.cursorStyle;
+        term.options.cursorBlink = settingsRef.current.cursorBlink;
+      }).then(() => {
+        // Phones and share viewers get the reset screen as a whole.
+        remoteMirror.refresh(leaf.paneId);
+        connect();
       });
+    } else {
+      connect();
+    }
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leaf.paneId, leaf.reconnectCount, awaitingPassword]);
 
@@ -1202,9 +1229,9 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const canFold = clickRow !== null && Boolean(folder?.canFoldAt(clickRow));
     const api = {
       reset: () => {
-        term.reset();
+        resetTerminal(term);
         historyRef.current?.reset();
-        void backend.historyFeed(leaf.paneId, `${ESC}c`);
+        void backend.historyFeed(leaf.paneId, HISTORY_RESET);
         remoteMirror.refresh(leaf.paneId);
         features?.tracker.reset();
         if (leaf.status === "connected") onUserInputRef.current(leaf.paneId, "\x0c");

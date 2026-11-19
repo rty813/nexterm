@@ -206,6 +206,11 @@ export class HistoryScroll implements IDisposable {
     this.check();
   }
 
+  /** Rows at the top of the normal buffer that are loaded history, not output. */
+  loadedRows(): number {
+    return this.segRowCount;
+  }
+
   /** Line up the gutter's line numbers with the history (after a tab moved windows). */
   async syncNumbers(): Promise<void> {
     const core = coreOf(this.term);

@@ -457,6 +457,16 @@ mod tests {
     }
 
     #[test]
+    fn reset_from_alt_screen_archives_normal_screen() {
+        // The front end's HISTORY_RESET: CAN, leave the alternate screen, RIS.
+        let mut c = cap(20, 3);
+        c.feed(b"keep me\r\n\x1b[?1049hvim\x1b]2;cut off", 1);
+        c.feed(b"\x18\x1b[?1049l\x1bcfresh", 2);
+        assert_eq!(texts(&archived(&c)), ["keep me"]);
+        assert_eq!(texts(&c.tail()), ["fresh"]);
+    }
+
+    #[test]
     fn alt_screen_is_not_archived() {
         let mut c = cap(20, 2);
         c.feed(b"before\r\n\x1b[?1049h", 1);
