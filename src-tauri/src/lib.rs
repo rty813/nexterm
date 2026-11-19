@@ -6,6 +6,7 @@ pub mod commands;
 pub mod fonts;
 mod plugin_http;
 mod plugin_credentials;
+mod plugin_store;
 pub mod hexdump;
 pub mod history;
 pub mod importer;
@@ -512,6 +513,9 @@ const DATA_FILES: &[&str] = &[
     "last_workspace",
     "ui_state",
     "quick_connect_history",
+    // Installed plugins (packages, enablement, plugin configuration) and plugin stores; both synced.
+    "plugins",
+    "plugin_stores",
 ];
 
 /// A saved session was opened: bump its use count and last-used time in session_usage.json
@@ -1738,6 +1742,9 @@ pub fn run() {
             plugin_http::plugin_forget_credentials,
             plugin_http::plugin_http,
             plugin_http::plugin_stage_ssh,
+            plugin_store::plugin_store_probe,
+            plugin_store::plugin_store_index,
+            plugin_store::plugin_store_fetch,
             check_update,
             storage_location_info,
             storage_location_prompt,

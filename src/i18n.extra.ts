@@ -415,6 +415,7 @@ const CFG_SYNC_ZH = {
     settings: "设置",
     senders: "发送器",
     history: "命令历史",
+    plugins: "插件",
   },
   catHint: {
     sessions: "会话列表，包括保存的密码和端口转发",
@@ -423,6 +424,7 @@ const CFG_SYNC_ZH = {
     settings: "外观、快捷键、工具栏等（不含本机路径和同步配置）",
     senders: "发送器面板里保存的文本",
     history: "命令历史和快速连接历史",
+    plugins: "已安装的插件及其配置、插件商店；插件保存在凭据管理器里的密码不同步",
   },
   autoSync: "启动时和定时自动同步",
   interval: "间隔（分钟，0 = 仅启动时）",
@@ -538,6 +540,7 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
     settings: "Settings",
     senders: "Senders",
     history: "Command history",
+    plugins: "Plugins",
   },
   catHint: {
     sessions: "Session list, including saved passwords and port forwards",
@@ -546,6 +549,7 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
     settings: "Appearance, shortcuts, toolbar ... (not local paths or the sync target)",
     senders: "Texts saved in the sender panel",
     history: "Command history and quick connect history",
+    plugins: "Installed plugins with their settings, and plugin stores; passwords plugins keep in Credential Manager are not synced",
   },
   autoSync: "Sync at startup and periodically",
   interval: "Interval (minutes, 0 = startup only)",

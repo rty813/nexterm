@@ -197,3 +197,50 @@ test("one phone stays connected to several computers at once", async () => {
   assert.deepEqual(await toB.next(), new Uint8Array([9]));
   for (const ws of [toA, toB, hostB]) ws.close();
 });
+
+/** A relay serving a throwaway plugin store folder. */
+async function storeRelay() {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nexterm-store-"));
+  await fs.mkdir(path.join(dir, "packages", "demo"), { recursive: true });
+  await fs.writeFile(path.join(dir, "index.json"), '{"seq":1}');
+  await fs.writeFile(path.join(dir, "index.json.sig"), "c2ln");
+  await fs.writeFile(path.join(dir, "packages", "demo", "1.0.0.nexterm-plugin"), '{"manifest":{}}');
+  const r = createRelay({ storeDir: dir });
+  r.server.listen(0, "127.0.0.1");
+  await once(r.server, "listening");
+  const url = `http://127.0.0.1:${r.server.address().port}`;
+  return { url, close: () => r.server.close(), cleanup: () => fs.rm(dir, { recursive: true, force: true }) };
+}
+
+test("plugin store is off unless STORE_DIR is set", async () => {
+  const http = base.replace("ws://", "http://").replace(/\/ws$/, "");
+  assert.equal((await fetch(`${http}/store/index.json`)).status, 404);
+});
+
+test("plugin store serves the index, signature and packages read-only", async () => {
+  const s = await storeRelay();
+  try {
+    const index = await fetch(`${s.url}/store/index.json`);
+    assert.equal(index.status, 200);
+    assert.equal(await index.text(), '{"seq":1}');
+    assert.equal(index.headers.get("cache-control"), "no-cache");
+    const again = await fetch(`${s.url}/store/index.json`, { headers: { "if-none-match": index.headers.get("etag") } });
+    assert.equal(again.status, 304);
+    assert.equal((await fetch(`${s.url}/store/index.json.sig`)).headers.get("content-type"), "text/plain; charset=utf-8");
+    const pkg = await fetch(`${s.url}/store/packages/demo/1.0.0.nexterm-plugin`);
+    assert.equal(pkg.status, 200);
+    assert.equal(pkg.headers.get("content-type"), "application/json");
+    assert.equal(pkg.headers.get("cache-control"), "public, max-age=31536000, immutable");
+    assert.equal((await fetch(`${s.url}/store/index.json`, { method: "HEAD" })).status, 200);
+    assert.equal((await fetch(`${s.url}/store/index.json`, { method: "PUT", body: "x" })).status, 405);
+    for (const bad of ["/store/", "/store", "/store/packages", "/store/nope.json", "/store/..%2fserver.js", "/store/packages%2f..%2f..%2fserver.js", "/store/%00", "/store/%E0"]) {
+      assert.ok([400, 404].includes((await fetch(`${s.url}${bad}`)).status), bad);
+    }
+  } finally {
+    s.close();
+    await s.cleanup();
+  }
+});

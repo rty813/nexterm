@@ -31,7 +31,13 @@ export interface PluginManifest {
   };
 }
 export interface PluginPackage { manifest: PluginManifest; files: Record<string, string> }
-export interface InstalledPlugin { bundle: PluginPackage; enabled: boolean; revision: string; hidden: string[]; approvedOrigins?: string[] }
+/** Where an installed plugin came from: updates and revocations are only taken from that store. */
+export interface PluginSource { storeId: string; storeName: string; version: string; sha256: string }
+export interface InstalledPlugin { bundle: PluginPackage; enabled: boolean; revision: string; hidden: string[]; approvedOrigins?: string[]; source?: PluginSource; config?: Record<string, unknown> }
+export function pluginSource(value: unknown): PluginSource | undefined {
+  if (!isRecord(value) || typeof value.storeId !== "string" || !/^[0-9a-f]{16}$/.test(value.storeId) || typeof value.storeName !== "string" || value.storeName.length > 200 || typeof value.version !== "string" || value.version.length > 100 || typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256)) return undefined;
+  return {storeId: value.storeId, storeName: value.storeName, version: value.version, sha256: value.sha256};
+}
 export interface SshRequest { host: string; port: number; username: string; label: string; passwordKey?: string }
 
 const identifier = (value: unknown): value is string => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$/.test(value);

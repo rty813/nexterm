@@ -5,12 +5,13 @@ import { ArrowDown, ArrowUp, Columns2, Download, LoaderCircle, Puzzle, RotateCw,
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { isTauriRuntime } from "../services/backend";
 import { Endpoint, plugins, type Runtime } from "../plugins/platform";
-import { isModalLocation, statusLabelPrefix, type DockedViewLocation, type InstalledPlugin, type PluginPackage, type PluginView } from "../plugins/model";
+import { isModalLocation, statusLabelPrefix, type DockedViewLocation, type InstalledPlugin, type PluginView } from "../plugins/model";
 import type { PackageReadResult } from "../plugins/packageReader.worker";
 import { backgroundDocument, viewDocument } from "../plugins/sandbox";
 import type { MenuItem } from "./ContextMenu";
 import "../styles/plugins.css";
 import { PluginAccountDialog } from "./PluginSessions";
+import { InstallReviewPanel, InstalledUpdate, PluginStorePanel, usePluginStores } from "./PluginStore";
 
 export function usePluginPlatform() { useSyncExternalStore(plugins.subscribe, plugins.snapshot); return plugins; }
 
@@ -178,8 +179,8 @@ export function pluginContextMenu(selection: string): MenuItem[] {
 
 export function PluginManager() {
   usePluginPlatform();
+  const stores = usePluginStores();
   const { t } = useTranslation();
-  const [candidate, setCandidate] = useState<PluginPackage>();
   const [error, setError] = useState("");
   const [progress, setProgress] = useState("");
   const file = useRef<HTMLInputElement>(null);
@@ -192,14 +193,14 @@ export function PluginManager() {
   }, []);
   const cancelRead = () => {reader.current?.terminate(); reader.current = undefined; setProgress("");};
   const readFile = (picked: File) => {
-    cancelRead(); setCandidate(undefined); setError(""); setProgress(t("plugin.reading", {name: picked.name}));
+    cancelRead(); stores.clearReview(); setError(""); setProgress(t("plugin.reading", {name: picked.name}));
     try {
       const worker = new Worker(new URL("../plugins/packageReader.worker.ts", import.meta.url), {type: "module"});
       reader.current = worker;
       const finish = (result: PackageReadResult) => {
         if (reader.current !== worker) return;
         cancelRead();
-        if ("bundle" in result) setCandidate(result.bundle); else setError(t("plugin.readFailed", {error: result.code ? t(`plugin.${result.code}`) : result.error}));
+        if ("bundle" in result) stores.reviewFile(result.bundle); else setError(t("plugin.readFailed", {error: result.code ? t(`plugin.${result.code}`) : result.error}));
       };
       worker.onmessage = (event: MessageEvent<PackageReadResult>) => finish(event.data);
       worker.onerror = worker.onmessageerror = () => finish({error: t("plugin.verifierFailed")});
@@ -208,23 +209,19 @@ export function PluginManager() {
   };
   const perform = (action: () => void | Promise<void>) => {try {const result = action(); setError(""); if (result) void result.catch(() => setError(t("plugin.actionFailedNative")));} catch {setError(t("plugin.actionFailedStorage"));}};
   return <div className="plugin-manager">
-    <div className="plugin-manager-heading"><h3>{t("plugin.title")}</h3><button type="button" className="btn-secondary" disabled={!!progress} onClick={() => {setProgress(t("plugin.choosing")); file.current?.click();}}><Download size={14} />{t("plugin.install")}</button></div>
+    <div className="plugin-manager-heading"><h3>{t("plugin.title")}</h3>
+      <div className="plugin-manager-tabs" role="group" aria-label={t("plugin.title")}>{(["installed", "store"] as const).map(view => <button key={view} type="button" aria-pressed={stores.view === view} className={stores.view === view ? "active" : ""} onClick={() => {stores.view = view; stores.emit();}}>{t(view === "installed" ? "pluginStore.tabInstalled" : "pluginStore.tabStore")}{view === "installed" && stores.updates().length > 0 && <span className="plugin-update-count">{stores.updates().length}</span>}</button>)}</div>
+      <button type="button" className="btn-secondary" disabled={!!progress} onClick={() => {setProgress(t("plugin.choosing")); file.current?.click();}}><Download size={14} />{t("plugin.install")}</button></div>
     <input ref={file} type="file" accept=".nexterm-plugin,application/json" hidden onChange={event => {
       const input = event.currentTarget; const picked = input.files?.[0]; input.value = "";
       if (picked) readFile(picked); else setProgress("");
     }} />
     {progress && <div className="plugin-install-progress"><span role="status"><LoaderCircle aria-hidden="true" size={16} />{progress}</span>{reader.current && <button type="button" className="btn-ghost" onClick={cancelRead}>{t("plugin.cancelRead")}</button>}</div>}
     {(error || plugins.lastError) && <p className="plugin-error" role="alert">{error || plugins.lastError}</p>}
-    {candidate && !progress && <section className="plugin-install-review">
-      <strong>{candidate.manifest.name} <small>{candidate.manifest.version}</small></strong><code>{candidate.manifest.id}</code>
-      <p>{t("plugin.permNetwork", {value: [...candidate.manifest.permissions.network, ...(candidate.manifest.permissions.networkRequest ? [t("plugin.networkOnDemand")] : [])].join(t("plugin.listSeparator")) || t("plugin.none")})}</p>
-      <p>{t("plugin.permSessions", {value: candidate.manifest.permissions.sessions ? t("plugin.sessionsConfirm") : t("plugin.none")})}</p>
-      <p>{t("plugin.permCredentials", {value: candidate.manifest.permissions.credentials ? t("plugin.credentialsStore") : t("plugin.none")})}</p>
-      <p>{t("plugin.trustWarning")}</p>
-      <div className="plugin-actions"><button type="button" className="btn-primary" onClick={() => perform(() => {plugins.install(candidate); setCandidate(undefined);})}>{plugins.entries.some(entry => entry.bundle.manifest.id === candidate.manifest.id) ? t("plugin.authorizeReplace") : t("plugin.authorizeInstall")}</button><button type="button" className="btn-secondary" onClick={() => setCandidate(undefined)}>{t("plugin.cancel")}</button></div>
-    </section>}
-    {!plugins.entries.length && <p className="plugin-empty">{t("plugin.empty")}</p>}
-    <div className="plugin-installed-list">{plugins.entries.map((entry, index) => {
+    {!progress && <InstallReviewPanel perform={perform} />}
+    {stores.view === "store" && <PluginStorePanel />}
+    {stores.view === "installed" && !plugins.entries.length && <p className="plugin-empty">{t("plugin.empty")}</p>}
+    {stores.view === "installed" && <div className="plugin-installed-list">{plugins.entries.map((entry, index) => {
       const manifest = entry.bundle.manifest;
       const settings = (manifest.contributes.views ?? []).filter(view => view.location === "settings");
       return <section className="plugin-installed" key={manifest.id}>
@@ -232,10 +229,11 @@ export function PluginManager() {
           <div className="plugin-actions">{settings.length > 0 && <button type="button" className="btn-ghost" title={t("plugin.settings")} aria-label={t("plugin.settingsOf", {name: manifest.name})} disabled={!plugins.runtimes.has(manifest.id)} onClick={() => perform(() => plugins.open(manifest.id, settings[0].id))}><Settings2 size={14} /></button>}<button type="button" className="btn-ghost" title={t("plugin.moveUp")} disabled={!index} onClick={() => perform(() => plugins.move(manifest.id, -1))}><ArrowUp size={14} /></button><button type="button" className="btn-ghost" title={t("plugin.moveDown")} disabled={index === plugins.entries.length - 1} onClick={() => perform(() => plugins.move(manifest.id, 1))}><ArrowDown size={14} /></button><button type="button" className="btn-ghost" title={t("plugin.reload")} disabled={!entry.enabled} onClick={() => perform(() => plugins.toggle(manifest.id, true))}><RotateCw size={14} /></button><button type="button" className="btn-ghost" title={t("plugin.uninstall")} onClick={() => {void (async () => {const approved = isTauriRuntime() ? await confirm(t("plugin.uninstallConfirm", {name: manifest.name}), {title: t("plugin.uninstallTitle"), kind: "warning"}) : window.confirm(t("plugin.uninstallConfirm", {name: manifest.name})); if (approved) perform(() => plugins.remove(manifest.id));})().catch(() => setError(t("plugin.uninstallDialogFailed")));}}><Trash2 size={14} /></button></div>
         </div>
         <code>{manifest.id}</code>
+        <InstalledUpdate pluginId={manifest.id} onError={setError} />
         {!!entry.approvedOrigins?.length && <div className="plugin-actions"><small title={entry.approvedOrigins.join("\n")}>{t("plugin.rememberedOrigins", {count: entry.approvedOrigins.length})}</small><button type="button" className="btn-ghost" title={t("plugin.revokeNetwork")} aria-label={t("plugin.revokeNetworkOf", {name: manifest.name})} onClick={() => perform(() => plugins.revokeNetwork(manifest.id))}><ShieldOff size={14} /></button></div>}
         {plugins.failures.has(manifest.id) && <p className="plugin-error" role="alert">{plugins.failures.get(manifest.id)}</p>}
         <div className="plugin-contributions">{[...(manifest.contributes.statusBar ?? []), ...(manifest.contributes.toolbar ?? []), ...(manifest.contributes.views ?? []).filter(view => !isModalLocation(view.location)), ...(manifest.contributes.sessionSources ?? [])].map(item => <label key={item.id}><input type="checkbox" checked={!entry.hidden.includes(item.id)} onChange={() => perform(() => plugins.hide(manifest.id, item.id))} />{"title" in item ? item.title : item.text}</label>)}</div>
       </section>;
-    })}</div>
+    })}</div>}
   </div>;
 }

@@ -45,6 +45,9 @@ pub const CATEGORIES: &[(&str, &[&str])] = &[
     ("settings", &["settings"]),
     ("senders", &["senders"]),
     ("history", &["command_history", "quick_connect_history"]),
+    // Installed plugins (with their packages and configuration) and plugin stores (with access tokens).
+    // Passwords plugins keep in Windows Credential Manager stay on this computer.
+    ("plugins", &["plugins", "plugin_stores"]),
 ];
 
 /// Settings that belong to this computer: never exported, kept when importing.
@@ -1123,6 +1126,22 @@ mod tests {
             merge_lists(&local, &incoming),
             json!([{ "id": "a", "v": 1 }, { "id": "b", "v": 2 }, "x", { "id": "c", "v": 2 }, "y"])
         );
+    }
+
+    #[test]
+    fn plugins_category_carries_installed_plugins_and_stores() {
+        let dir = tmp_dir("plugins");
+        write_json(&dir.join("plugins.json"), &json!([{ "id": "team.a", "enabled": true, "config": { "user": "me" } }])).unwrap();
+        write_json(&dir.join("plugin_stores.json"), &json!([{ "id": "2648d2bab1b4c559", "token": "t" }])).unwrap();
+        let categories = vec!["plugins".to_string()];
+        let data = collect(&dir, &categories);
+        assert_eq!(data.keys().cloned().collect::<Vec<_>>(), vec!["plugin_stores", "plugins"]);
+        // Another computer's plugins merge by id; local ones it does not know about stay.
+        let mut incoming = data.clone();
+        incoming.insert("plugins".into(), json!([{ "id": "team.b", "enabled": false }]));
+        assert_eq!(apply(&dir, &incoming, &categories, ImportMode::Merge).unwrap(), categories);
+        assert_eq!(read_json(&dir.join("plugins.json")).unwrap(), json!([{ "id": "team.a", "enabled": true, "config": { "user": "me" } }, { "id": "team.b", "enabled": false }]));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

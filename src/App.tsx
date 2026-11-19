@@ -100,6 +100,8 @@ import { UPDATE_CHECK_DELAY_MS, shouldPromptUpdate, updateCheckEnabled } from ".
 import { ReleaseNotes } from "./components/ReleaseNotes";
 import { PluginActivity, PluginBadges, PluginHost, PluginToolbar, PluginViews, usePluginPlatform } from "./components/StatusPlugins";
 import { plugins } from "./plugins/platform";
+import { pluginStores } from "./plugins/storeService";
+import { PluginUpdateNotice } from "./components/PluginStore";
 
 function sameDropHint(a: DropHint | null, b: DropHint | null): boolean {
   if (!a || !b) return a === b;
@@ -912,6 +914,10 @@ export const App: React.FC = () => {
       if (categories.includes("senders")) {
         void backend.loadDataFile<SenderItem[]>("senders").then((list) => setSenders(Array.isArray(list) ? list : []));
       }
+      if (categories.includes("plugins")) {
+        void plugins.reload();
+        void pluginStores.reload();
+      }
       if (categories.includes("history")) {
         void commandHistory.reload();
         void backend.loadDataFile<string[]>("quick_connect_history").then((list) => setQuickHistory(Array.isArray(list) ? list : []));
@@ -1576,6 +1582,14 @@ export const App: React.FC = () => {
       window.clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMainWindow, syncLoaded]);
+
+  // Plugin updates (main window only): ask every configured store once per start, after a startup
+  // sync had its chance to bring in plugins and stores. Failures show on the store page, not here.
+  useEffect(() => {
+    if (!isMainWindow || !syncLoaded || !isTauriRuntime()) return;
+    const timer = window.setTimeout(() => void pluginStores.checkForUpdates().catch(() => undefined), UPDATE_CHECK_DELAY_MS);
+    return () => window.clearTimeout(timer);
   }, [isMainWindow, syncLoaded]);
 
   const isAppShortcut = useCallback((ev: KeyboardEvent) => {
@@ -2971,6 +2985,7 @@ export const App: React.FC = () => {
       )}
 
       {toast && <div className="app-toast">{toast}</div>}
+      {isMainWindow && !settingsModalOpen && <PluginUpdateNotice onOpen={() => { setSettingsTab("plugins"); setSettingsModalOpen(true); }} />}
 
       {shareDialogLeaf && <ShareDialog paneId={shareDialogLeaf.paneId} title={tabTitle(shareDialogLeaf)} />}
 

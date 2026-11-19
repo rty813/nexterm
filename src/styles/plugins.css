@@ -77,3 +77,25 @@
 .plugin-account-form label { display: grid; gap: 8px; min-width: 0; }
 .plugin-account-form select { width: 100%; min-width: 0; }
 .plugin-account-form .plugin-actions { justify-content: flex-end; }
+.plugin-manager-heading h4 { font-size: 13px; color: var(--fg-strong); }
+.plugin-manager-tabs { display: flex; gap: 2px; margin-right: auto; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 6px; }
+.plugin-manager-tabs button { height: 24px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--fg-muted); cursor: pointer; }
+.plugin-manager-tabs button.active { background: var(--bg-active); color: var(--fg-strong); }
+.plugin-update-count { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; }
+.plugin-store { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.plugin-store-add { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 6px; }
+.plugin-store-add-row { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.plugin-store-add-row .text-input { flex: 1; min-width: 0; }
+.plugin-store-add summary { cursor: pointer; color: var(--fg-muted); font-size: 12px; }
+.plugin-store-add details[open] { display: flex; flex-direction: column; gap: 6px; }
+.plugin-store-search { display: flex; align-items: center; gap: 5px; color: var(--fg-muted); }
+.plugin-store-search .text-input { width: 180px; }
+.plugin-store-description { color: var(--fg-primary); font-size: 12px; overflow-wrap: anywhere; }
+.plugin-manager .plugin-store-source, .plugin-manager .plugin-store-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plugin-manager small { display: inline-flex; align-items: center; gap: 4px; }
+.plugin-manager .plugin-warning { color: var(--warning); overflow-wrap: anywhere; }
+.plugin-spin { animation: plugin-session-spin 1s linear infinite; flex: none; }
+.plugin-update-notice { position: fixed; right: 16px; bottom: 44px; z-index: 900; display: flex; align-items: center; gap: 8px; max-width: min(640px, calc(100vw - 32px)); padding: 8px 10px 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-elevated); color: var(--fg-strong); box-shadow: var(--shadow-pop); font-size: 12px; }
+.plugin-update-notice > svg { color: var(--accent); flex: none; }
+.plugin-update-notice > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-update-notice button { display: inline-flex; align-items: center; gap: 5px; flex: none; }

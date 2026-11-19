@@ -4,6 +4,7 @@
 //
 //   GET  /                   remote access page (public/)
 //   GET  /s                  session share page (public/share.html)
+//   GET  /store/<path>       public plugin store files from STORE_DIR (off when unset)
 //   WS   /ws?role=host&room=<id>[&token=<HOST_TOKEN>]
 //   WS   /ws?role=client&room=<id>
 //
@@ -39,6 +40,8 @@ const MIME = {
   ".webmanifest": "application/manifest+json",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".nexterm-plugin": "application/json",
+  ".sig": "text/plain; charset=utf-8",
 };
 
 /** URL path -> file. Vendor files come from node_modules so the page needs no CDN. */
@@ -60,7 +63,39 @@ function header(kind, id, payload) {
   return out;
 }
 
-export function createRelay({ hostToken = "", log = () => {}, pingMs = 25_000 } = {}) {
+/**
+ * Plugin store: a folder of static files signed by the publisher elsewhere (index.json, index.json.sig,
+ * packages/<id>/<version>.nexterm-plugin). The relay only serves it: it never signs and accepts no uploads.
+ */
+function serveStore(req, res, pathname, storeDir) {
+  if (!storeDir) return res.writeHead(404).end("not found");
+  if (req.method !== "GET" && req.method !== "HEAD") return res.writeHead(405, { allow: "GET, HEAD" }).end();
+  let rel;
+  try {
+    rel = decodeURIComponent(pathname.slice("/store/".length));
+  } catch {
+    return res.writeHead(400).end();
+  }
+  const root = path.resolve(storeDir);
+  const full = path.normalize(path.join(root, rel));
+  if (!rel || /\0/.test(rel) || !full.startsWith(root + path.sep)) return res.writeHead(404).end("not found");
+  fs.readFile(full, (err, body) => {
+    if (err) return res.writeHead(404).end("not found");
+    const etag = `"${crypto.createHash("sha1").update(body).digest("base64url")}"`;
+    // A published package never changes (a new version is a new file); the index is revalidated every time.
+    const cache = rel.startsWith("packages/") ? "public, max-age=31536000, immutable" : "no-cache";
+    if (req.headers["if-none-match"] === etag) return res.writeHead(304, { etag, "cache-control": cache }).end();
+    res.writeHead(200, {
+      etag,
+      "content-type": MIME[path.extname(full)] ?? "application/octet-stream",
+      "cache-control": cache,
+      "x-content-type-options": "nosniff",
+    });
+    res.end(body);
+  });
+}
+
+export function createRelay({ hostToken = "", storeDir = "", log = () => {}, pingMs = 25_000 } = {}) {
   /** room -> { host: ws | null, clients: Map<id, ws> } */
   const rooms = new Map();
   let nextId = 1;
@@ -81,6 +116,10 @@ export function createRelay({ hostToken = "", log = () => {}, pingMs = 25_000 } 
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://x");
+    if (url.pathname === "/store" || url.pathname.startsWith("/store/")) {
+      serveStore(req, res, url.pathname, storeDir);
+      return;
+    }
     let file = files[url.pathname];
     if (!file) {
       const rel = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).replace(/^\/+/, "");
@@ -218,9 +257,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const host = process.env.HOST || "0.0.0.0";
   const { server } = createRelay({
     hostToken: process.env.HOST_TOKEN || "",
+    storeDir: process.env.STORE_DIR || "",
     log: (m) => console.log(new Date().toISOString(), m),
   });
   server.listen(port, host, () => {
     console.log(`Nexterm relay on http://${host}:${port}${process.env.HOST_TOKEN ? " (host token required)" : ""}`);
+    if (process.env.STORE_DIR) console.log("Plugin store at /store/");
   });
 }

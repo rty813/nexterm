@@ -34,7 +34,7 @@ describe("config sync helpers", () => {
     expect(s.provider).toBe("webdav");
     expect(s.webdav).toEqual({ url: "https://x", username: "", password: "" });
     expect(s.s3.prefix).toBe("nexterm");
-    expect(s.categories).toHaveLength(6);
+    expect(s.categories).toEqual(["sessions", "quickCommands", "themes", "settings", "senders", "history", "plugins"]);
   });
 
   it("names export files by time", () => {

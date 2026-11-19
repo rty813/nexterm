@@ -8,5 +8,9 @@ services:
     restart: unless-stopped
     environment:
       - HOST_TOKEN=${HOST_TOKEN:-}
+      - STORE_DIR=/app/store
+    volumes:
+      # Plugin store files: publish by copying into ./store, no image rebuild needed.
+      - ./store:/app/store:ro
     ports:
       - "127.0.0.1:7085:8080"

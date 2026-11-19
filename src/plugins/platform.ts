@@ -1,11 +1,46 @@
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { isTauriRuntime } from "../services/backend";
+import { backend, isTauriRuntime } from "../services/backend";
 import i18n from "../i18n";
-import { httpsOrigin, isModalLocation, isRecord, parsePackage, sessionCatalog, sessionChoices, sessionSourceKey, temporarySsh, type DockedViewLocation, type InstalledPlugin, type PluginPackage, type PluginView, type PluginSessionCatalog, type PluginSessionChoice } from "./model";
+import { httpsOrigin, isModalLocation, isRecord, parsePackage, pluginSource, sessionCatalog, sessionChoices, sessionSourceKey, temporarySsh, type DockedViewLocation, type InstalledPlugin, type PluginSource, type PluginPackage, type PluginView, type PluginSessionCatalog, type PluginSessionChoice } from "./model";
 import type { SessionConfig } from "../types/domain";
 
-const storageKey = "nexterm.plugins.v1";
+/**
+ * Installed plugins are kept in the synced data file `plugins.json` (package, enablement, hidden
+ * contributions, remembered origins, store source and the plugin's own configuration). `save` must
+ * throw synchronously when it cannot accept the records, so callers can leave their state untouched.
+ */
+export interface PluginRecords { load(): Promise<unknown>; save(records: unknown[]): void }
+const legacyKey = "nexterm.plugins.v1";
+const legacyConfigKey = (id: string) => "nexterm.plugin.config." + id;
+export function fileRecords(onError: (error: unknown) => void): PluginRecords {
+  let queue = Promise.resolve();
+  const write = (records: unknown[]) => isTauriRuntime() ? invoke<void>("save_data_file", {name: "plugins", value: records}) : backend.saveDataFile("plugins", records);
+  return {
+    async load() {
+      const saved = await (isTauriRuntime() ? invoke<unknown>("load_data_file", {name: "plugins"}) : backend.loadDataFile<unknown>("plugins"));
+      if (saved !== null && saved !== undefined) return saved;
+      // First start with file storage: move what earlier versions kept in this WebView.
+      const legacy: unknown = JSON.parse(localStorage.getItem(legacyKey) ?? "null");
+      if (!Array.isArray(legacy)) return [];
+      const records = legacy.filter(isRecord).map(item => {
+        const id = isRecord(item.bundle) && isRecord(item.bundle.manifest) ? item.bundle.manifest.id : undefined;
+        let config: unknown;
+        try { config = typeof id === "string" ? JSON.parse(localStorage.getItem(legacyConfigKey(id)) ?? "null") : null; } catch { config = null; }
+        return {...item, id, ...(isRecord(config) ? {config} : {})};
+      });
+      await write(records);
+      localStorage.removeItem(legacyKey);
+      for (const item of records) if (typeof item.id === "string") localStorage.removeItem(legacyConfigKey(item.id));
+      return records;
+    },
+    save(records) {
+      const value = JSON.parse(JSON.stringify(records)) as unknown[];
+      queue = queue.then(() => write(value)).catch(onError);
+    },
+  };
+}
+const record = (entry: InstalledPlugin) => ({id: entry.bundle.manifest.id, bundle: entry.bundle, enabled: entry.enabled, hidden: entry.hidden, approvedOrigins: entry.approvedOrigins ?? [], ...(entry.source ? {source: entry.source} : {}), ...(entry.config ? {config: entry.config} : {})});
 export class Endpoint {
   private next = 0;
   private closed = false;
@@ -63,8 +98,9 @@ export interface Runtime {
 export class PluginPlatform {
   private listeners = new Set<() => void>();
   private generations = new Map<string, number>();
-  private loaded = false;
+  private loaded?: Promise<void>;
   private version = 0;
+  constructor(private records: PluginRecords = fileRecords(() => {this.lastError = i18n.t("plugin.actionFailedStorage"); this.emit();})) {}
   entries: InstalledPlugin[] = [];
   runtimes = new Map<string, Runtime>();
   opened: {pluginId: string; view: PluginView}[] = [];
@@ -80,35 +116,45 @@ export class PluginPlatform {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => {this.listeners.delete(listener);}; };
   snapshot = () => this.version;
   emit = () => {this.version++; for (const listener of this.listeners) listener();};
-  load() {
-    if (this.loaded) return;
-    this.loaded = true;
+  load(): Promise<void> {
+    this.loaded ??= this.records.load().then(stored => this.restore(stored), () => {this.lastError = i18n.t("plugin.actionFailedStorage"); this.emit();});
+    return this.loaded;
+  }
+  /** Synced data replaced the file: stop everything and load it again. */
+  async reload() {
+    for (const id of [...this.runtimes.keys()]) this.stop(id);
+    this.entries = []; this.failures.clear(); this.loaded = undefined;
+    await this.load();
+  }
+  private restore(stored: unknown) {
     try {
-      const stored: unknown = JSON.parse(localStorage.getItem(storageKey) ?? "[]");
       if (Array.isArray(stored)) for (const item of stored) {
         try {
           if (!isRecord(item)) continue;
           const bundle = parsePackage(item.bundle);
           if (this.entries.some(entry => entry.bundle.manifest.id === bundle.manifest.id)) continue;
           const approvedOrigins = bundle.manifest.permissions.networkRequest && Array.isArray(item.approvedOrigins) ? [...new Set(item.approvedOrigins.filter((value): value is string => {try {return typeof value === "string" && httpsOrigin(value) === value;} catch {return false;}}))].slice(0, 16 - bundle.manifest.permissions.network.length) : [];
-          this.entries.push({bundle, revision: crypto.randomUUID(), approvedOrigins, hidden: Array.isArray(item.hidden) ? item.hidden.filter((value): value is string => typeof value === "string") : [], enabled: item.enabled === true});
+          const source = pluginSource(item.source);
+          this.entries.push({bundle, revision: crypto.randomUUID(), approvedOrigins, hidden: Array.isArray(item.hidden) ? item.hidden.filter((value): value is string => typeof value === "string") : [], enabled: item.enabled === true, ...(source ? {source} : {}), ...(isRecord(item.config) ? {config: item.config} : {})});
         } catch { continue; }
       }
     }
     catch { this.entries = []; }
     this.emit();
   }
-  private persist(entries: InstalledPlugin[]) { localStorage.setItem(storageKey, JSON.stringify(entries)); this.entries = entries; }
-  install(bundle: PluginPackage) {
+  private save(entries: InstalledPlugin[]) { this.records.save(entries.map(record)); }
+  private persist(entries: InstalledPlugin[]) { this.save(entries); this.entries = entries; }
+  /** Installs or replaces a plugin; `source` marks a store install (a local file clears it). */
+  install(bundle: PluginPackage, source?: PluginSource) {
     const existing = this.entries.find(entry => entry.bundle.manifest.id === bundle.manifest.id);
-    const entry = {bundle, revision: crypto.randomUUID(), enabled: true, hidden: existing?.hidden ?? []};
+    const entry: InstalledPlugin = {bundle, revision: crypto.randomUUID(), enabled: true, hidden: existing?.hidden ?? [], ...(source ? {source} : {}), ...(existing?.config ? {config: existing.config} : {})};
     this.persist(existing ? this.entries.map(item => item === existing ? entry : item) : [...this.entries, entry]);
     this.stop(bundle.manifest.id);
   }
   toggle(id: string, enabled: boolean) { this.persist(this.entries.map(entry => entry.bundle.manifest.id === id ? {...entry, enabled, revision: crypto.randomUUID()} : entry)); this.stop(id); }
   remove(id: string) {
     this.persist(this.entries.filter(entry => entry.bundle.manifest.id !== id));
-    this.stop(id); localStorage.removeItem("nexterm.plugin.config." + id);
+    this.stop(id);
     if (isTauriRuntime()) return invoke<void>("plugin_forget_credentials", {pluginId: id});
   }
   revokeNetwork(id: string) { this.persist(this.entries.map(entry => entry.bundle.manifest.id === id ? {...entry, approvedOrigins: [], revision: crypto.randomUUID()} : entry)); this.stop(id); }
@@ -116,7 +162,7 @@ export class PluginPlatform {
     const entry = this.entries.find(entry => entry.bundle.manifest.id === id);
     if (!entry) return;
     const hidden = entry.hidden.includes(contribution) ? entry.hidden.filter(item => item !== contribution) : [...entry.hidden, contribution];
-    localStorage.setItem(storageKey, JSON.stringify(this.entries.map(item => item === entry ? {...entry, hidden} : item)));
+    this.save(this.entries.map(item => item === entry ? {...entry, hidden} : item));
     entry.hidden = hidden;
     if (hidden.includes(contribution) && this.accountPrompt?.pluginId === id && this.accountPrompt.sourceId === contribution) this.chooseSessionAccount(undefined);
     this.emit();
@@ -254,7 +300,7 @@ export class PluginPlatform {
       if (isTauriRuntime()) await invoke("plugin_allow_origin", {capability: runtime.capability, requestedOrigin: origin});
       if (this.runtimes.get(manifest.id) !== runtime || this.locked) throw new Error("Network authorization cancelled");
       const approvedOrigins = [...new Set([...(runtime.entry.approvedOrigins ?? []), origin])];
-      localStorage.setItem(storageKey, JSON.stringify(this.entries.map(entry => entry === runtime.entry ? {...entry, approvedOrigins} : entry)));
+      this.save(this.entries.map(entry => entry === runtime.entry ? {...entry, approvedOrigins} : entry));
       runtime.entry.approvedOrigins = approvedOrigins;
       runtime.origins.add(origin);
       return true;
@@ -291,10 +337,12 @@ export class PluginPlatform {
         if (this.runtimes.get(id) !== runtime || this.locked) throw new Error("Credential request cancelled");
         return result;
       }
-      case "config.get": return JSON.parse(localStorage.getItem("nexterm.plugin.config." + id) ?? "{}");
+      case "config.get": return structuredClone(runtime.entry.config ?? {});
       case "config.set": {
         if (!isRecord(value) || JSON.stringify(value).length > 32768) throw new Error("Invalid plugin configuration");
-        localStorage.setItem("nexterm.plugin.config." + id, JSON.stringify(value));
+        const config = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+        this.save(this.entries.map(entry => entry === runtime.entry ? {...entry, config} : entry));
+        runtime.entry.config = config;
         for (const client of [runtime.background, ...runtime.clients]) client?.event("configChanged", value);
         return;
       }

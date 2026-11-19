@@ -105,7 +105,7 @@ export function remoteOf(s: AppSettings): RemoteSettings {
   return { ...DEFAULT_REMOTE, ...(s.remote ?? {}) };
 }
 
-export const SYNC_CATEGORIES: SyncCategory[] = ["sessions", "quickCommands", "themes", "settings", "senders", "history"];
+export const SYNC_CATEGORIES: SyncCategory[] = ["sessions", "quickCommands", "themes", "settings", "senders", "history", "plugins"];
 
 export const DEFAULT_SYNC: SyncSettings = {
   provider: "none",

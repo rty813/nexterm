@@ -420,7 +420,7 @@ export interface AppSettings {
 }
 
 /** What export / import / sync carry. Mirrors Rust `sync::CATEGORIES`. */
-export type SyncCategory = "sessions" | "quickCommands" | "themes" | "settings" | "senders" | "history";
+export type SyncCategory = "sessions" | "quickCommands" | "themes" | "settings" | "senders" | "history" | "plugins";
 
 export type SyncProvider = "none" | "s3" | "webdav" | "gist" | "folder";
 

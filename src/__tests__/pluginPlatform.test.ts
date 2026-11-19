@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Endpoint, PluginPlatform } from "../plugins/platform";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { Endpoint, PluginPlatform, fileRecords } from "../plugins/platform";
 import type { PluginPackage } from "../plugins/model";
 import type { SessionConfig } from "../types/domain";
 
@@ -24,6 +24,9 @@ function deferred<Value>() {
 let platform: PluginPlatform;
 let values: Map<string, string>;
 let storage: {getItem: ReturnType<typeof vi.fn>; setItem: ReturnType<typeof vi.fn>; removeItem: ReturnType<typeof vi.fn>};
+/** What the synced plugins.json would hold. */
+let saved: unknown[] | null;
+let records: {load: Mock<() => Promise<unknown>>; save: Mock<(records: unknown[]) => void>};
 beforeEach(() => {
   values = new Map();
   storage = {getItem: vi.fn((key: string) => values.get(key) ?? null), setItem: vi.fn((key: string, value: string) => {values.set(key, value);}), removeItem: vi.fn((key: string) => {values.delete(key);})};
@@ -31,7 +34,9 @@ beforeEach(() => {
   native.invoke.mockReset().mockImplementation(async (method: string) => method === "plugin_grant" ? crypto.randomUUID() : undefined);
   native.confirm.mockReset().mockResolvedValue(true);
   native.runtime.mockReturnValue(true);
-  platform = new PluginPlatform();
+  saved = null;
+  records = {load: vi.fn(async () => saved), save: vi.fn((value: unknown[]) => {saved = JSON.parse(JSON.stringify(value));})};
+  platform = new PluginPlatform(records);
 });
 afterEach(() => {for (const id of platform.runtimes.keys()) platform.stop(id); vi.unstubAllGlobals();});
 async function activate(id = "test.plugin") {
@@ -76,7 +81,7 @@ describe("generic plugin session sources", () => {
   it("isolates same-named sources and items across plugins, without persisting catalogs", async () => {
     const first = await source(); const second = await source("other.plugin");
     expect(platform.sessionSources().map(item => item.pluginId)).toEqual(["test.plugin","other.plugin"]);
-    expect([...values.values()].join("")).not.toContain("10.0.0.1");
+    expect(JSON.stringify(saved)).not.toContain("10.0.0.1");
     await platform.dispatch(first.runtime, "background", "sessions.updateSource", {id:"hosts",catalog:{state:"signedOut",items:[]}});
     expect(second.runtime.sources.get("hosts")?.items).toHaveLength(1);
     platform.hide("other.plugin","hosts"); expect(platform.sessionSources()).toHaveLength(1);
@@ -196,15 +201,16 @@ describe("plugin lifecycle", () => {
   it.each(["replace", "disable", "remove", "hide", "move"])("preserves an active plugin if storage fails during %s", async operation => {
     const runtime = await activate(); await activate("other.plugin"); platform.open("test.plugin", "page");
     const before = JSON.stringify(platform.entries);
-    storage.setItem.mockImplementation(() => {throw new Error("QuotaExceededError");});
+    records.save.mockImplementation(() => {throw new Error("QuotaExceededError");});
     const actions = {replace: () => platform.install(bundle()), disable: () => platform.toggle("test.plugin", false), remove: () => platform.remove("test.plugin"), hide: () => platform.hide("test.plugin", "page"), move: () => platform.move("test.plugin", 1)};
     expect(actions[operation as keyof typeof actions]).toThrow("QuotaExceededError");
     expect(platform.runtimes.get("test.plugin")).toBe(runtime); expect(JSON.stringify(platform.entries)).toBe(before);
     expect(platform.active.tab).toBe("test.plugin:page"); expect(native.invoke.mock.calls.some(([method]) => method === "plugin_revoke")).toBe(false);
   });
-  it("loads valid plugins independently of corrupt or duplicate entries", () => {
-    values.set("nexterm.plugins.v1", JSON.stringify([{bundle: bundle(), enabled: true, hidden: ["page", 2]}, {bundle: {}}, {bundle: bundle(), enabled: true}, {bundle: bundle("other.plugin"), enabled: false}]));
-    platform.load(); platform.load();
+  it("loads valid plugins independently of corrupt or duplicate entries", async () => {
+    saved = [{bundle: bundle(), enabled: true, hidden: ["page", 2]}, {bundle: {}}, {bundle: bundle(), enabled: true}, {bundle: bundle("other.plugin"), enabled: false}];
+    await Promise.all([platform.load(), platform.load()]);
+    expect(records.load).toHaveBeenCalledTimes(1);
     expect(platform.entries.map(entry => entry.bundle.manifest.id)).toEqual(["test.plugin", "other.plugin"]);
     expect(platform.entries[0].hidden).toEqual(["page"]); expect(platform.entries[1].enabled).toBe(false);
   });
@@ -290,7 +296,7 @@ describe("plugin capabilities", () => {
     await platform.dispatch(runtime,"background","network.request",{origin:"https://custom.example.com"});
     expect(platform.entries[0]).toBe(entry);
     expect(await platform.dispatch(runtime,"background","network.isGranted",{origin:"https://custom.example.com"})).toBe(true);
-    const restored = new PluginPlatform(); restored.load();
+    const restored = new PluginPlatform(records); await restored.load();
     expect(restored.entries[0].approvedOrigins).toEqual(["https://custom.example.com"]);
     restored.revokeNetwork("test.plugin");
     expect(restored.entries[0].approvedOrigins).toEqual([]);
@@ -450,5 +456,44 @@ describe("plugin RPC cleanup", () => {
     const pending = endpoint.call("query"); const rejection = expect(pending).rejects.toThrow("stopped");
     endpoint.close(); await rejection; expect(port.close).toHaveBeenCalledOnce();
     await expect(endpoint.call("query")).rejects.toThrow("unavailable"); expect(port.postMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("synced plugin records", () => {
+  it("keeps configuration and store source in the synced records and across a replace", async () => {
+    const source = {storeId: "2648d2bab1b4c559", storeName: "Team", version: "1.0.0", sha256: "a".repeat(64)};
+    platform.install(bundle(), source);
+    const runtime = await platform.start(platform.entries[0]);
+    await platform.dispatch(runtime, "view", "config.set", {url: "https://example.com"});
+    expect(saved).toEqual([expect.objectContaining({id: "test.plugin", enabled: true, source, config: {url: "https://example.com"}})]);
+    platform.install(bundle());
+    expect(platform.entries[0].source).toBeUndefined();
+    expect(platform.entries[0].config).toEqual({url: "https://example.com"});
+    const restored = new PluginPlatform(records); await restored.load();
+    expect(restored.entries[0].config).toEqual({url: "https://example.com"});
+    restored.remove("test.plugin");
+    expect(saved).toEqual([]);
+  });
+  it("reloads from synced data", async () => {
+    await activate();
+    saved = [{id: "other.plugin", bundle: bundle("other.plugin"), enabled: true, hidden: []}];
+    await platform.reload();
+    expect(platform.runtimes.size).toBe(0);
+    expect(platform.entries.map(entry => entry.bundle.manifest.id)).toEqual(["other.plugin"]);
+  });
+  it("moves plugins and their configuration out of WebView storage once", async () => {
+    values.set("nexterm.plugins.v1", JSON.stringify([{bundle: bundle(), enabled: true, hidden: []}]));
+    values.set("nexterm.plugin.config.test.plugin", JSON.stringify({user: "me"}));
+    const files = new Map<string, unknown>();
+    native.invoke.mockImplementation(async (method: string, args: {name: string; value?: unknown}) => {
+      if (method === "load_data_file") return files.get(args.name) ?? null;
+      if (method === "save_data_file") files.set(args.name, args.value);
+    });
+    const migrated = new PluginPlatform(fileRecords(() => undefined));
+    await migrated.load();
+    expect(migrated.entries[0].config).toEqual({user: "me"});
+    expect(files.get("plugins")).toEqual([expect.objectContaining({id: "test.plugin", config: {user: "me"}})]);
+    expect(values.has("nexterm.plugins.v1")).toBe(false);
+    expect(values.has("nexterm.plugin.config.test.plugin")).toBe(false);
   });
 });

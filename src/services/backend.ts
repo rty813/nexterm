@@ -460,7 +460,9 @@ export type DataFileName =
   | "session_usage"
   | "last_workspace"
   | "ui_state"
-  | "quick_connect_history";
+  | "quick_connect_history"
+  | "plugins"
+  | "plugin_stores";
 
 /**
  * The current window's backdrop color, for new windows: WebView2 paints white until the

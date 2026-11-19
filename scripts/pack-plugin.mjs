@@ -2,7 +2,8 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { resolve, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export async function packPlugin(directory, destination) {
+/** The `.nexterm-plugin` file contents for a plugin source directory. */
+export async function bundlePlugin(directory) {
   const root = resolve(directory);
   const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8"));
   const names = new Set([manifest.main, ...(manifest.contributes?.views ?? []).map(view => view.file)]);
@@ -13,9 +14,15 @@ export async function packPlugin(directory, destination) {
   }
   const bundle = JSON.stringify({manifest, files});
   if (Buffer.byteLength(bundle) > 2 * 1024 * 1024) throw new Error("Plugin exceeds 2 MiB");
+  return bundle + "\n";
+}
+
+export async function packPlugin(directory, destination) {
+  const root = resolve(directory);
+  const bundle = await bundlePlugin(root);
   const output = destination ? resolve(destination) : resolve(root, "..", `${basename(root)}.nexterm-plugin`);
   await mkdir(resolve(output, ".."), {recursive: true});
-  await writeFile(output, bundle + "\n", "utf8");
+  await writeFile(output, bundle, "utf8");
   return output;
 }
 
