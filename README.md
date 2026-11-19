@@ -14,7 +14,7 @@ It keeps WindTerm's familiar workflow (session tree, nested split panes, quick c
 - **Full Scrollback History**: Every line a pane ever printed stays available, compressed in the background. Scroll, search and export all of it, back to the start of the session.
 - **Installable Plugins**: Extend Nexterm with your own commands, views and dynamic session lists without modifying the host. [Start with the Hello counter](#plugins-experimental).
 
-Windows 10 / 11 only. Current version: `0.1.6`.
+Windows 10 / 11 only. Current version: `0.1.7`.
 
 ![Nexterm main window: session tree, split panes running htop and Claude Code, SFTP file browser, quick-command bar](docs/media/screenshot.jpg)
 
