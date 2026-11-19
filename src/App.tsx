@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, Minimize2 } from "lucide-react";
 import { applyThemeCssVars, BUILTIN_THEMES } from "./constants/themes";
@@ -156,6 +156,9 @@ export const App: React.FC = () => {
   const [quickManager, setQuickManager] = useState<QuickManagerTarget | null>(null);
   const [customThemes, setCustomThemes] = useState<ThemeDefinition[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [initialSnapshot, setInitialSnapshot] = useState<{ sessions: SessionConfig[]; settings: AppSettings } | null>(null);
+  // Saved state could not be read: carry on with the defaults (and the default theme).
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const [ws, setWs] = useState<WorkspaceState>({ root: null, activeGroupId: null });
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -250,9 +253,15 @@ export const App: React.FC = () => {
     [allThemes, settings.themeId]
   );
 
-  useEffect(() => {
+  // The theme waits for the saved settings: until then the page keeps the cached theme
+  // (applyCachedThemeVars) instead of flashing the default one. The main window's backdrop
+  // follows the theme and is kept for the next start, painted before the page loads.
+  const themeReady = initialSnapshot !== null || loadFailed;
+  useLayoutEffect(() => {
+    if (!themeReady) return;
     applyThemeCssVars(activeTheme);
-  }, [activeTheme]);
+    if (currentWindowLabel() === "main") void backend.setWindowBackground();
+  }, [activeTheme, themeReady]);
 
   // Keep i18n language in sync with persisted settings (default zh-CN)
   useEffect(() => {
@@ -296,6 +305,9 @@ export const App: React.FC = () => {
       commandHistory.configure(historyOf(snap.settings));
       void commandHistory.load();
       setInitialSnapshot(snap);
+    }).catch((err) => {
+      console.error("load initial state", err);
+      if (mounted) setLoadFailed(true);
     });
     void backend.loadDataFile<SenderItem[]>("senders").then((list) => {
       if (mounted && Array.isArray(list)) setSenders(list);
@@ -364,7 +376,6 @@ export const App: React.FC = () => {
 
   // ---------------------------------------------------------------- startup sessions
   // WindTerm terminal.startupSessions: reopen the last sessions, or a chosen list.
-  const [initialSnapshot, setInitialSnapshot] = useState<{ sessions: SessionConfig[]; settings: AppSettings } | null>(null);
   const startupDone = useRef(false);
   // Opening a saved session counts as a use (sidebar: recent / most used order).
   const restoringRef = useRef(false);

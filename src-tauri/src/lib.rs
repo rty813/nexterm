@@ -176,6 +176,32 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// Main window backdrop (theme background, RGB) for the next start, painted before the page
+/// is. Local to this computer, not synced.
+const WINDOW_BACKGROUND: &str = "window_background.json";
+
+fn read_window_background(dir: &std::path::Path) -> Option<[u8; 3]> {
+    serde_json::from_str(&std::fs::read_to_string(dir.join(WINDOW_BACKGROUND)).ok()?).ok()
+}
+
+fn window_color([r, g, b]: [u8; 3]) -> tauri::window::Color {
+    tauri::window::Color(r, g, b, 255)
+}
+
+/// The main window's backdrop follows the theme and is saved for the next start.
+#[tauri::command]
+fn set_window_background(app: AppHandle, ctx: State<'_, AppContext>, rgb: [u8; 3]) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_background_color(Some(window_color(rgb)));
+    }
+    let dir = ctx.storage.lock().map_err(|e| e.to_string())?.base_dir().to_path_buf();
+    if read_window_background(&dir) == Some(rgb) {
+        return Ok(());
+    }
+    std::fs::write(dir.join(WINDOW_BACKGROUND), serde_json::to_string(&rgb).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn load_initial_state(ctx: State<'_, AppContext>) -> Result<AppStateSnapshot, String> {
     let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
@@ -1613,6 +1639,17 @@ pub fn run() {
             crate::history::init_dir(&data_dir.join("history"));
             let storage = Storage::new(data_dir).expect("Failed to initialize Nexterm data directory");
             let settings = storage.load_settings().unwrap_or_default();
+            // The main window is created hidden (tauri.conf.json) so it can take last run's
+            // theme background first, then is shown right away, before the page loads: it
+            // never waits on the page, so a page that fails to load still has a window, and
+            // the page lays out at the window's final (possibly maximized) size.
+            if let Some(win) = app.get_webview_window("main") {
+                if let Some(rgb) = read_window_background(storage.base_dir()) {
+                    let _ = win.set_background_color(Some(window_color(rgb)));
+                }
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
             crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
             let (history_on, history_limits) = history_config(&settings);
             crate::history::configure(history_on, history_limits);
@@ -1734,6 +1771,7 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            set_window_background,
             plugin_http::plugin_grant,
             plugin_http::plugin_allow_origin,
             plugin_http::plugin_revoke,

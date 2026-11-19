@@ -20,6 +20,8 @@
         "resizable": true,
         "fullscreen": false,
         "label": "main",
+        "visible": false,
+        "backgroundColor": "#121212",
         "dragDropEnabled": false,
         "decorations": false
       }

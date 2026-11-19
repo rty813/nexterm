@@ -1206,6 +1206,13 @@ export const backend = {
     return out.sort((a, b) => (a.label === "main" ? -1 : b.label === "main" ? 1 : 0));
   },
 
+  /** The main window's backdrop follows the theme, and is used again at the next start. */
+  async setWindowBackground(): Promise<void> {
+    const rgb = backdropColor();
+    if (!isTauriRuntime() || !rgb) return;
+    await invoke("set_window_background", { rgb }).catch(console.error);
+  },
+
   /** Bring the main window up. False when it no longer exists. */
   async showMainWindow(): Promise<boolean> {
     if (!isTauriRuntime()) return false;
