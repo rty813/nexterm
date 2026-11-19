@@ -4,7 +4,23 @@ export type DockedViewLocation = "sidebar" | "panel" | "tab";
 export type ViewLocation = DockedViewLocation | "settings" | "dialog";
 export const isModalLocation = (location: ViewLocation): location is "settings" | "dialog" => location === "settings" || location === "dialog";
 export interface PluginCommand { id: string; title: string; shortcut?: string }
-export interface PluginView { id: string; title: string; location: ViewLocation; file: string }
+export interface PluginViewSize { width?: number; height?: number }
+export interface PluginView { id: string; title: string; location: ViewLocation; file: string; size?: PluginViewSize }
+/** Dialog sizes in CSS pixels; the host still clamps them to the window. */
+export const VIEW_SIZE_LIMITS = {width: [320, 2400], height: [200, 1600]} as const;
+export function viewSize(value: unknown): PluginViewSize {
+  if (!isRecord(value) || Object.keys(value).some(key => key !== "width" && key !== "height") || (value.width === undefined && value.height === undefined)) throw new Error("Invalid view size");
+  const size: PluginViewSize = {};
+  for (const key of ["width", "height"] as const) {
+    const item = value[key];
+    if (item === undefined) continue;
+    const [min, max] = VIEW_SIZE_LIMITS[key];
+    if (typeof item !== "number" || !Number.isInteger(item) || item < min || item > max) throw new Error(`View ${key} must be an integer between ${min} and ${max}`);
+    size[key] = item;
+  }
+  return size;
+}
+const validViewSize = (value: unknown) => { try { viewSize(value); return true; } catch { return false; } };
 export interface PluginItem { id: string; text: string; tooltip?: string; command: string }
 export function statusLabelPrefix(declared: string, current: string): string {
   const prefix = declared.match(/^[^:：\n]+(?:：\s*|:\s+)/)?.[0];
@@ -75,7 +91,7 @@ export function parsePackage(value: unknown): PluginPackage {
       if (!isRecord(item)) return fail();
       if (kind !== "menus") { if (!identifier(item.id) || ids.has(item.id)) return fail(); ids.add(item.id); }
       if (kind === "commands" && (!text(item.title) || (item.shortcut !== undefined && !text(item.shortcut)))) return fail();
-      if (kind === "views" && (!text(item.title) || !["sidebar", "panel", "tab", "settings", "dialog"].includes(String(item.location)) || typeof item.file !== "string" || !names.includes(item.file))) return fail();
+      if (kind === "views" && (!text(item.title) || !["sidebar", "panel", "tab", "settings", "dialog"].includes(String(item.location)) || typeof item.file !== "string" || !names.includes(item.file) || (item.size !== undefined && (!isModalLocation(item.location as ViewLocation) || !validViewSize(item.size))))) return fail();
       if (["statusBar", "toolbar"].includes(kind) && (!text(item.text) || !identifier(item.command) || (item.tooltip !== undefined && !text(item.tooltip)))) return fail();
       if (kind === "menus" && (!text(item.title) || !identifier(item.command) || (item.selectionOnly !== undefined && typeof item.selectionOnly !== "boolean"))) return fail();
       if (kind === "sessionSources" && (!text(item.title) || (item.refreshCommand !== undefined && !identifier(item.refreshCommand)) || (item.settingsView !== undefined && !identifier(item.settingsView)))) return fail();

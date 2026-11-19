@@ -48,7 +48,13 @@
 .plugin-contributions label { display: inline-flex; align-items: center; gap: 5px; }
 .plugin-settings-dialog { width: 760px; max-width: calc(100vw - 40px); height: min(620px, 88vh); max-height: calc(100vh - 40px); margin: auto; padding: 0; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-panel); color: var(--fg-primary); box-shadow: var(--shadow-pop); overflow: hidden; }
 .plugin-settings-dialog[open] { display: flex; flex-direction: column; }
-.plugin-content-dialog { width: 600px; height: min(420px, 80vh); }
+.plugin-content-dialog { width: 760px; height: min(560px, 85vh); }
+.plugin-settings-dialog { min-width: min(320px, calc(100vw - 40px)); min-height: min(200px, calc(100vh - 40px)); }
+.plugin-settings-dialog.maximized { width: calc(100vw - 40px); height: calc(100vh - 40px); }
+.plugin-settings-dialog.resizing { user-select: none; }
+.plugin-settings-dialog.resizing .plugin-frame { pointer-events: none; }
+.plugin-dialog-grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; touch-action: none; opacity: 0.7; background: linear-gradient(135deg, transparent 50%, var(--border-strong) 50%, var(--border-strong) 58%, transparent 58%, transparent 70%, var(--border-strong) 70%, var(--border-strong) 78%, transparent 78%); }
+.plugin-dialog-grip:hover { opacity: 1; }
 .plugin-settings-dialog::backdrop { background: color-mix(in srgb, var(--bg-base) 55%, rgba(0, 0, 0, 0.45)); backdrop-filter: blur(3px); }
 .plugin-settings-dialog .modal-header { border-bottom: 1px solid var(--border-subtle); }
 .plugin-settings-dialog-heading { flex: 1; min-width: 0; overflow-wrap: anywhere; }

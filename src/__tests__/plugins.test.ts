@@ -3,8 +3,9 @@ import helloPackage from "../../plugins/hello.nexterm-plugin?raw";
 import helloManifest from "../../plugins/hello/manifest.json?raw";
 import helloMain from "../../plugins/hello/main.js?raw";
 import helloView from "../../plugins/hello/view.html?raw";
-import { parsePackage, sessionCatalog, sessionChoices, sessionSourceKey, statusLabelPrefix, temporarySsh } from "../plugins/model";
+import { parsePackage, viewSize, sessionCatalog, sessionChoices, sessionSourceKey, statusLabelPrefix, temporarySsh } from "../plugins/model";
 import { snapshotWorkspace } from "../utils/workspaceSnapshot";
+import { draggedDialogSize } from "../utils/pluginDialogSize";
 
 const manifest = () => ({apiVersion: 1, id: "test.plugin", name: "Test", version: "1.0.0", main: "main.js", permissions: {network: ["https://example.com"]}, contributes: {commands: [{id: "show", title: "Show"}], views: [{id: "view", title: "View", location: "tab", file: "view.html"}]}});
 const bundle = () => ({manifest: manifest(), files: {"main.js": "", "view.html": "<h1>test</h1>"}});
@@ -108,5 +109,26 @@ describe("structured plugin SSH sessions", () => {
     const session = {...temporarySsh(input), authType: "password" as const, credentialHandoff: true};
     const snapshot = snapshotWorkspace({activeGroupId: "g", root: {kind: "group", id: "g", activeTabId: "p", tabs: [{kind: "leaf", paneId: "p", session, status: "connecting", reconnectCount: 0, cols: 80, rows: 24}]}}, []);
     expect(JSON.stringify(snapshot)).not.toContain("credentialHandoff");
+  });
+});
+
+describe("plugin dialog size", () => {
+  const withView = (view: Record<string, unknown>) => { const value = bundle(); value.manifest.contributes.views = [{...value.manifest.contributes.views[0], ...view}]; return value; };
+  it("accepts a size hint only on dialog and settings views", () => {
+    expect(parsePackage(withView({location: "dialog", size: {width: 1000, height: 700}})).manifest.contributes.views?.[0].size).toEqual({width: 1000, height: 700});
+    expect(parsePackage(withView({location: "settings", size: {height: 800}})).manifest.contributes.views?.[0].size).toEqual({height: 800});
+    expect(() => parsePackage(withView({location: "tab", size: {width: 1000}}))).toThrow();
+    expect(() => parsePackage(withView({location: "dialog", size: {width: 100}}))).toThrow();
+    expect(() => parsePackage(withView({location: "dialog", size: {}}))).toThrow();
+  });
+  it("validates runtime resize requests", () => {
+    expect(viewSize({width: 320, height: 1600})).toEqual({width: 320, height: 1600});
+    for (const bad of [null, {}, {width: 319}, {height: 1601}, {width: 500.5}, {width: "500"}, {width: 500, depth: 1}]) expect(() => viewSize(bad)).toThrow();
+  });
+  it("grows a centred dialog by twice the drag distance and keeps it inside the window", () => {
+    const viewport = {width: 1600, height: 900};
+    expect(draggedDialogSize({width: 760, height: 560}, 50, 20, viewport)).toEqual({width: 860, height: 600});
+    expect(draggedDialogSize({width: 760, height: 560}, 2000, 2000, viewport)).toEqual({width: 1560, height: 860});
+    expect(draggedDialogSize({width: 760, height: 560}, -2000, -2000, viewport)).toEqual({width: 320, height: 200});
   });
 });

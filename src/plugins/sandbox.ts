@@ -58,7 +58,7 @@ function bridge(dismissOnEscape = false) {
     secrets: {set: (key: string, value: string, origin: string) => call("secrets.set", {key, value, origin}), delete: (key: string, origin: string) => call("secrets.delete", {key, origin})},
     credentials: {get: (key: string, origin: string) => call("credentials.get", {key, origin}), set: (key: string, value: string, origin: string) => call("credentials.set", {key, value, origin}), delete: (key: string, origin: string) => call("credentials.delete", {key, origin})},
     status: {update: (id: string, text: string, tooltip?: string) => call("status.update", {id, text, tooltip})},
-    views: {open: (id: string) => call("views.open", {id})},
+    views: {open: (id: string) => call("views.open", {id}), resize: (size: unknown) => call("views.resize", size)},
     sessions: {
       openSsh: (request: unknown) => call("sessions.open", request),
       updateSource: (id: string, catalog: unknown) => call("sessions.updateSource", {id, catalog}),

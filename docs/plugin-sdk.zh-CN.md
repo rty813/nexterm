@@ -38,6 +38,13 @@ node scripts/pack-plugin.mjs ../my-counter
 
 插件可声明 `location: "dialog"`，从状态项或命令用 `views.open(id)` 打开独立的内容弹窗。它不占用底部面板，不出现在活动栏或设置页列表中，与设置弹窗共用关闭方式；打开另一弹窗会替换当前弹窗。
 
+弹窗大小：内容弹窗默认 760×560，设置弹窗默认 760×620，都不会超出窗口（四周各留 20px）。插件可以用两种方式调整：
+
+- 清单里给 `dialog` / `settings` 视图加 `size: {width?, height?}`（CSS 像素整数，宽 320–2400、高 200–1600），作为打开时的初始大小；其他位置的视图带 `size` 会拒绝安装。
+- 页面运行时调用 `await nexterm.views.resize({width?, height?})`，范围相同，例如根据内容多少调整高度。只能在弹窗页面中调用。
+
+用户也可以点标题栏的最大化按钮铺满窗口，或拖动右下角调整大小；拖出来的大小按插件 + 视图记在本机，下次打开沿用（优先于清单里的 `size`），双击右下角恢复默认。页面应按 iframe 的实际大小自适应布局，不要假定固定尺寸。
+
 选择本地包时，插件管理显示文件选择、读取和校验状态；通过校验才出现授权确认。读取期间可取消，关闭插件管理不会安装尚未确认的包。
 
 `contributes.statusBar` 的可见状态项显示在主窗口标题栏右侧，专注模式也保留。窄窗口下，若状态文字与清单使用同一个 `标签：` 或 `Label: ` 前缀，则只显示后面的值，悬停及无障碍名称保留全文；其他文字原样显示。已有插件无需更改清单。用户可在插件管理中隐藏单项、停用或卸载插件。
@@ -55,7 +62,7 @@ node scripts/pack-plugin.mjs ../my-counter
 | `permissions.sessions` | 可选 `"open"`；仅请求新建临时 SSH 会话。插件主动打开时每次需用户确认；用户在会话栏点击插件提供的会话、且 SSH 主机与插件已授权的某个 HTTPS origin 主机名相同时不再确认（连接不会把插件的秘密带到新的地方），其他主机仍需确认。 |
 | `permissions.credentials` | 可选 `"store"`；允许后台使用 Windows 凭据管理器，按插件 ID、HTTPS origin 和键名隔离。安装或替换时需确认。 |
 | `contributes.commands` | `{id, title, shortcut?}`；快捷键使用 `Ctrl+Shift+J` 形式，内置快捷键与快捷命令优先。 |
-| `contributes.views` | `{id, title, location, file}`；位置为 `sidebar`、`panel`、`tab`、`dialog`、`settings`，页面内容由作者完全控制。 |
+| `contributes.views` | `{id, title, location, file, size?}`；位置为 `sidebar`、`panel`、`tab`、`dialog`、`settings`，页面内容由作者完全控制。`size` 仅用于 `dialog` / `settings`，见上文弹窗大小。 |
 | `contributes.statusBar` / `toolbar` | `{id, text, tooltip?, command}`；点击执行已声明命令。 |
 | `contributes.menus` | `{title, command, selectionOnly?}`；注册终端右键菜单；只有 `selectionOnly: true` 才在用户执行此命令时交付当前选区（最多 16 KiB）。 |
 | `contributes.sessionSources` | `{id, title, refreshCommand?, settingsView?}`；向原有会话栏提供动态会话，需要 `sessions: "open"`。刷新命令必须已声明，设置视图必须位于 `settings`。 |
@@ -80,7 +87,7 @@ const result = await nexterm.request("query", {input: 1});
 - `publish(name, value)`：后台向本插件页面广播；保留最近 32 种事件的最新值，新打开页面自动接收。消息最大 256 KiB。不要广播凭据。
 - `on(name, listener)` / `onCommand(id, handler)`：订阅事件或命令，返回取消函数。右键选区命令的参数为 `{selection}`。
 - `config.get()` / `config.set(object)`：单插件非敏感配置，整体替换，上限 32 KiB；变更广播 `configChanged`。不得存放密码或令牌。
-- `views.open(id)`：打开本插件声明的视图。`status.update(id, text, tooltip?)` 更新本插件状态项（文字 100 字符、提示 500 字符）。
+- `views.open(id)`：打开本插件声明的视图。`views.resize({width?, height?})`：弹窗页面调整自己所在弹窗的大小。`status.update(id, text, tooltip?)` 更新本插件状态项（文字 100 字符、提示 500 字符）。
 
 后台失去心跳或出现未处理错误时停止该插件，可在管理页查看错误并重载。禁用、替换、卸载会销毁 Worker、页面、消息通道、缓存事件并撤销原生网络能力；已交给宿主管理的终端不会被强制断开。锁屏时 SDK 的敏感操作不可用。仅主窗口激活插件；弹出的终端窗口不启动第二份后台。
 

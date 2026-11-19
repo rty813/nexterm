@@ -1,11 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, Columns2, Download, LoaderCircle, Puzzle, RotateCw, Settings2, ShieldOff, TerminalSquare, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns2, Download, LoaderCircle, Maximize2, Minimize2, Puzzle, RotateCw, Settings2, ShieldOff, TerminalSquare, Trash2, X } from "lucide-react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { isTauriRuntime } from "../services/backend";
 import { Endpoint, plugins, type Runtime } from "../plugins/platform";
-import { isModalLocation, statusLabelPrefix, type DockedViewLocation, type InstalledPlugin, type PluginView } from "../plugins/model";
+import { isModalLocation, statusLabelPrefix, viewSize, type DockedViewLocation, type InstalledPlugin, type PluginView, type PluginViewSize } from "../plugins/model";
+import { draggedDialogSize, saveDialogSize, savedDialogSize } from "../utils/pluginDialogSize";
 import type { PackageReadResult } from "../plugins/packageReader.worker";
 import { backgroundDocument, viewDocument } from "../plugins/sandbox";
 import type { MenuItem } from "./ContextMenu";
@@ -15,7 +16,7 @@ import { InstallReviewPanel, InstalledUpdate, PluginStorePanel, usePluginStores 
 
 export function usePluginPlatform() { useSyncExternalStore(plugins.subscribe, plugins.snapshot); return plugins; }
 
-function PluginFrame({runtime, view}: {runtime: Runtime; view: PluginView}) {
+function PluginFrame({runtime, view, onResize}: {runtime: Runtime; view: PluginView; onResize?: (size: PluginViewSize) => void}) {
   const { t } = useTranslation();
   const frame = useRef<HTMLIFrameElement>(null);
   const endpoint = useRef<Endpoint>();
@@ -31,6 +32,10 @@ function PluginFrame({runtime, view}: {runtime: Runtime; view: PluginView}) {
         const key = runtime.entry.bundle.manifest.id + ":" + view.id;
         if (plugins.modalView?.view === view && plugins.runtimes.get(runtime.entry.bundle.manifest.id) === runtime) plugins.close(key);
         return Promise.resolve();
+      }
+      if (method === "views.resize") {
+        if (!onResize) return Promise.reject(new Error("views.resize is only available in dialog and settings views"));
+        try { onResize(viewSize(value)); return Promise.resolve(); } catch (reason) { return Promise.reject(reason); }
       }
       return plugins.dispatch(runtime, "view", method, value);
     });
@@ -85,6 +90,13 @@ function PluginViewDialog({runtime, view}: {runtime: Runtime; view: PluginView})
   const isSettings = view.location === "settings";
   const settings = isSettings ? (manifest.contributes.views ?? []).filter(item => item.location === "settings") : [];
   const close = () => plugins.close(manifest.id + ":" + view.id);
+  const sizeKey = manifest.id + ":" + view.id;
+  const [size, setSize] = useState<PluginViewSize>(() => savedDialogSize(sizeKey) ?? view.size ?? {});
+  const [maximized, setMaximized] = useState(false);
+  const [resizing, setResizing] = useState(false);
+  const drag = useRef<{x: number; y: number; width: number; height: number}>();
+  const dragged = (event: {clientX: number; clientY: number}, start: {x: number; y: number; width: number; height: number}) =>
+    draggedDialogSize(start, event.clientX - start.x, event.clientY - start.y, {width: window.innerWidth, height: window.innerHeight});
   useLayoutEffect(() => {
     const element = dialog.current;
     const previous = document.activeElement;
@@ -94,16 +106,30 @@ function PluginViewDialog({runtime, view}: {runtime: Runtime; view: PluginView})
       if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
     };
   }, []);
-  return createPortal(<dialog ref={dialog} className={isSettings ? "plugin-settings-dialog" : "plugin-settings-dialog plugin-content-dialog"} aria-labelledby={titleId} onCancel={event => {event.preventDefault(); close();}} onKeyDown={event => {
+  return createPortal(<dialog ref={dialog} style={maximized ? undefined : {width: size.width, height: size.height}} className={["plugin-settings-dialog", !isSettings && "plugin-content-dialog", maximized && "maximized", resizing && "resizing"].filter(Boolean).join(" ")} aria-labelledby={titleId} onCancel={event => {event.preventDefault(); close();}} onKeyDown={event => {
     event.stopPropagation();
     if (event.key === "Escape") {event.preventDefault(); close();}
   }} onMouseDown={event => {if (event.target === event.currentTarget) close();}}>
     <div className="modal-header">
       <div className="plugin-settings-dialog-heading"><h3 id={titleId}>{isSettings ? manifest.name : view.title}</h3><p>{isSettings ? view.title : manifest.name}</p></div>
       {settings.length > 1 && <select className="text-input" aria-label={t("plugin.settingsPage")} value={view.id} onChange={event => plugins.open(manifest.id, event.target.value)}>{settings.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select>}
+      <button type="button" className="icon-btn" title={maximized ? t("plugin.restoreDialog") : t("plugin.maximizeDialog")} aria-label={maximized ? t("plugin.restoreDialog") : t("plugin.maximizeDialog")} aria-pressed={maximized} onClick={() => setMaximized(value => !value)}>{maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
       <button type="button" className="icon-btn" title={t("plugin.close")} aria-label={isSettings ? t("plugin.closeSettings") : t("plugin.closeView", {title: view.title})} autoFocus onClick={close}><X size={16} /></button>
     </div>
-    <div className="plugin-settings-dialog-body"><PluginFrame key={view.id} runtime={runtime} view={view} /></div>
+    <div className="plugin-settings-dialog-body"><PluginFrame key={view.id} runtime={runtime} view={view} onResize={setSize} /></div>
+    {!maximized && <div className="plugin-dialog-grip" title={t("plugin.resizeDialog")} aria-hidden="true" onDoubleClick={() => {saveDialogSize(sizeKey, undefined); setSize(view.size ?? {});}} onPointerDown={event => {
+      const rect = dialog.current?.getBoundingClientRect();
+      if (!rect || event.button !== 0) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      drag.current = {x: event.clientX, y: event.clientY, width: rect.width, height: rect.height};
+      setResizing(true);
+    }} onPointerMove={event => {if (drag.current) setSize(dragged(event, drag.current));}} onPointerUp={event => {
+      const start = drag.current;
+      if (!start) return;
+      drag.current = undefined; setResizing(false);
+      saveDialogSize(sizeKey, dragged(event, start));
+    }} onPointerCancel={() => {drag.current = undefined; setResizing(false);}} />}
   </dialog>, document.body);
 }
 

@@ -25,7 +25,11 @@ interface NextermSdk {
   readonly secrets: {set(key: string, value: string, origin: string): Promise<void>; delete(key: string, origin: string): Promise<void>};
   readonly credentials: {get(key: string, origin: string): Promise<string | null>; set(key: string, value: string, origin: string): Promise<void>; delete(key: string, origin: string): Promise<void>};
   readonly status: {update(id: string, text: string, tooltip?: string): Promise<void>};
-  readonly views: {open(id: string): Promise<void>};
+  readonly views: {
+    open(id: string): Promise<void>;
+    /** Only in a `dialog` / `settings` view page: resize its dialog (CSS px, width 320-2400, height 200-1600; clamped to the window). */
+    resize(size: {width?: number; height?: number}): Promise<void>;
+  };
   readonly sessions: {
     openSsh(request: NextermSshRequest): Promise<{paneId: string}>;
     updateSource(id: string, catalog: {
