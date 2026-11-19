@@ -7,6 +7,7 @@ import { autoCompleteOf, historyOf, modemOf, mouseOf, sftpOf, xserverOf } from "
 import { commandHistory } from "../utils/commandHistory";
 import { confirmAsk } from "../utils/confirm";
 import { StorageLocationSettings } from "./StorageLocation";
+import { NumberInput } from "./NumberInput";
 
 type Props = { draft: AppSettings; onChange: (next: AppSettings) => void };
 
@@ -28,19 +29,7 @@ const Num: React.FC<{ value: number; onChange: (v: number) => void; label: strin
 }) => (
   <label className="field">
     <span>{label}</span>
-    <input
-      type="number"
-      className="text-input"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => {
-        const n = Number(e.target.value);
-        onChange(Number.isFinite(n) ? Math.max(min, max !== undefined ? Math.min(max, n) : n) : min);
-      }}
-    />
+    <NumberInput min={min} max={max} step={step} value={value} disabled={disabled} onChange={onChange} />
   </label>
 );
 
@@ -398,14 +387,7 @@ export const LogTransferSettings: React.FC<Props> = ({ draft, onChange }) => {
       <div className="form-grid-3">
         <label className="field">
           <span>{t("sftp.concurrency")}</span>
-          <input
-            type="number"
-            min={1}
-            max={16}
-            className="text-input"
-            value={sftp.concurrency}
-            onChange={(e) => setSftp({ concurrency: Math.min(16, Math.max(1, Number(e.target.value) || 1)) })}
-          />
+          <NumberInput min={1} max={16} integer value={sftp.concurrency} onChange={(concurrency) => setSftp({ concurrency })} />
         </label>
         <label className="field">
           <span>{t("sftp.conflictTitle")}</span>
@@ -530,14 +512,7 @@ export const XServerSettingsEditor: React.FC<Props> = ({ draft, onChange }) => {
       <div className="form-grid-3">
         <label className="field">
           <span>{t("xs.display")}</span>
-          <input
-            type="number"
-            className="text-input"
-            min={-1}
-            max={63}
-            value={x.display}
-            onChange={(e) => set({ display: Math.max(-1, Math.min(63, Math.floor(Number(e.target.value) || 0))) })}
-          />
+          <NumberInput min={-1} max={63} integer value={x.display} onChange={(display) => set({ display })} />
         </label>
         <label className="field">
           <span>{t("xs.mode")}</span>

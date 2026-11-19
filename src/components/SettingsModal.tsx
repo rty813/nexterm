@@ -14,6 +14,7 @@ import { RemoteSettingsEditor } from "./SettingsRemote";
 import { SyncSettingsEditor } from "./SettingsSync";
 import { useCloseGuard } from "./useCloseGuard";
 import { FontFamilyField } from "./FontFamilyField";
+import { NumberInput } from "./NumberInput";
 
 const settingsSections = [
   { id: "general", icon: Settings2 },
@@ -194,15 +195,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="form-grid-3">
             <label className="field">
               <span>{t("settingsModal.fontSize")}</span>
-              <input
-                type="number"
-                className="text-input"
+              <NumberInput
                 min={9}
                 max={32}
                 value={draft.fontSize}
-                onChange={(e) =>
-                  setDraft({ ...draft, fontSize: Number(e.target.value) || 14 })
-                }
+                onChange={(fontSize) => setDraft({ ...draft, fontSize })}
               />
             </label>
 
@@ -228,17 +225,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <label className="field">
               <span>{t("settingsModal.scrollback")}</span>
-              <input
-                type="number"
-                className="text-input"
+              <NumberInput
                 min={1000}
                 max={500000}
                 step={1000}
+                integer
                 value={draft.scrollback}
-                onChange={(e) =>
+                onChange={(scrollback) =>
                   setDraft({
                     ...draft,
-                    scrollback: Number(e.target.value) || 10000,
+                    scrollback,
                   })
                 }
               />
@@ -258,24 +254,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="form-grid-2">
                 <label className="field">
                   <span>{t("fullHistory.memoryMb")}</span>
-                  <input
-                    type="number"
-                    className="text-input"
+                  <NumberInput
                     min={4}
                     max={4096}
                     value={draft.fullHistoryMemoryMb ?? 32}
-                    onChange={(e) => setDraft({ ...draft, fullHistoryMemoryMb: Math.max(4, Number(e.target.value) || 32) })}
+                    onChange={(fullHistoryMemoryMb) => setDraft({ ...draft, fullHistoryMemoryMb })}
                   />
                 </label>
                 <label className="field">
                   <span>{t("fullHistory.diskMb")}</span>
-                  <input
-                    type="number"
-                    className="text-input"
+                  <NumberInput
                     min={0}
                     max={102400}
                     value={draft.fullHistoryDiskMb ?? 2048}
-                    onChange={(e) => setDraft({ ...draft, fullHistoryDiskMb: Math.max(0, Number(e.target.value) || 0) })}
+                    onChange={(fullHistoryDiskMb) => setDraft({ ...draft, fullHistoryDiskMb })}
                   />
                 </label>
               </div>

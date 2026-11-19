@@ -6,6 +6,7 @@ import { backend } from "../services/backend";
 import { SYNC_CATEGORIES, syncOf } from "../utils/settingsDefaults";
 import { exportFileName, syncErrorKey, syncReady } from "../utils/configSync";
 import { confirmAsk } from "../utils/confirm";
+import { NumberInput } from "./NumberInput";
 
 type Props = {
   draft: AppSettings;
@@ -312,15 +313,7 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
             </label>
             <label className="field sync-inline">
               <span>{t("cfgSync.interval")}</span>
-              <input
-                className="text-input"
-                type="number"
-                min={0}
-                step={5}
-                disabled={!s.autoSync}
-                value={s.intervalMin}
-                onChange={(e) => set({ intervalMin: Math.max(0, Number(e.target.value) || 0) })}
-              />
+              <NumberInput min={0} step={5} disabled={!s.autoSync} value={s.intervalMin} onChange={(intervalMin) => set({ intervalMin })} />
             </label>
           </div>
 
