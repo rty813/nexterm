@@ -24,9 +24,12 @@ describe("xterm webgl atlas-merge patch", () => {
     // #6043: evict instead of growing past the texture units, and never index past them.
     expect(patched).toContain("__nxEvictAll(){");
     expect(patched).toContain("Math.min(this._atlas.pages.length,this._atlasTextures.length)");
-    // Default-background rectangles keep the (possibly transparent) theme alpha.
+    // #6295: no rectangle for attribute flags alone; rectangles keep their color's alpha.
+    expect(patched).not.toContain("(0!==a||l&&0!==h)");
+    expect(patched.match(/\(0!==\(50331648&a\)\|\|l&&0!==h\)/g)).toHaveLength(2);
     expect(patched).not.toContain("v=1,this._addRectangle(");
-    expect(patched).toContain("(255&this._themeService.colors.background.rgba)/255");
+    expect(patched).toContain("v=(255&l)/255,this._addRectangle(");
+    expect(patched).toContain("l=(16777215&s)<<8|255;");
     expect(() => new Function("exports", "module", "require", "define", "self", patched)).not.toThrow();
   });
 

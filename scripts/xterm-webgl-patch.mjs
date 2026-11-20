@@ -22,8 +22,8 @@
 // rebuilt instead. (PR #6042 is covered by the per-renderer merge generation below; 0.18.0
 // has no oversized-glyph page, so that part of #6043 does not apply.)
 //
-// Also fixes (Nexterm only, see the last section of REPLACEMENTS) default-background cells
-// with underline / dim / italic drawing opaque black over a background image.
+// Also backports PR #6295 (issue #6116, not merged yet): default-background cells with
+// underline / dim / italic drew opaque black over a background image.
 //
 // Differences from upstream: upstream resets the atlas' `_requestClearModel` flag in
 // beginFrame(), but the atlas is shared between terminals with the same font settings, so
@@ -119,17 +119,39 @@ const REPLACEMENTS = [
     from: "this._onAddTextureAtlasCanvas.fire(n.canvas)}const e=new v(this._document,this._textureSize);",
     to: "this._onAddTextureAtlasCanvas.fire(n.canvas)}}const e=new v(this._document,this._textureSize);",
   },
-  // --- Nexterm fix (not upstream): translucent theme background. ---
+  // --- xterm.js PR #6295 (fixes issue #6116): transparent theme background. ---
+  // Underline (extended attributes), dim and italic are flag bits stored in a cell's bg
+  // word, so updateBackgrounds() gave such cells a background rectangle in the default
+  // background color, and _updateRectangle() forced its alpha to 1. With a transparent
+  // theme background (a background image, allowTransparency) they became opaque black
+  // blocks (fish underlines valid paths, codex and PSReadLine predictions use dim / italic).
+  // Still present in addon-webgl 0.19.0. 50331648 is Attributes.CM_MASK; CM_DEFAULT is 0.
   {
-    // Underline (extended attributes), dim and italic are flag bits stored in a cell's bg
-    // word, so such cells get a background rectangle even with the default background. Its
-    // alpha was hard-coded to 1: with a transparent theme background (a background image,
-    // allowTransparency) those cells became opaque black blocks (fish underlines valid
-    // paths, codex uses dim). Keep alpha 1 for an explicit or inverse background; otherwise
-    // use the theme background's own alpha. Still present in addon-webgl 0.19.0.
-    name: "default background keeps the theme alpha",
-    from: "g=(l>>8&255)/255,v=1,this._addRectangle(e.attributes,t,c,d,(o-r)",
-    to: "g=(l>>8&255)/255,v=67108864&i||50331648&s?1:(255&this._themeService.colors.background.rgba)/255,this._addRectangle(e.attributes,t,c,d,(o-r)",
+    // Only a real background color (or inverse) needs a rectangle, not attribute flags.
+    name: "background rectangle only for a non-default color",
+    from: "(0!==a||l&&0!==h)&&(g=8*v++,this._updateRectangle(i,g,h,a,n,r,s))",
+    to: "(0!==(50331648&a)||l&&0!==h)&&(g=8*v++,this._updateRectangle(i,g,h,a,n,r,s))",
+  },
+  {
+    name: "background rectangle only for a non-default color (row end)",
+    from: "(0!==a||l&&0!==h)&&(g=8*v++,this._updateRectangle(i,g,h,a,n,t.cols,s))",
+    to: "(0!==(50331648&a)||l&&0!==h)&&(g=8*v++,this._updateRectangle(i,g,h,a,n,t.cols,s))",
+  },
+  {
+    // 24-bit colors are packed without an alpha byte: make them opaque before the alpha is used.
+    name: "opaque 24-bit inverse background",
+    from: "case 50331648:l=(16777215&i)<<8;break;",
+    to: "case 50331648:l=(16777215&i)<<8|255;break;",
+  },
+  {
+    name: "opaque 24-bit background",
+    from: "case 50331648:l=(16777215&s)<<8;break;",
+    to: "case 50331648:l=(16777215&s)<<8|255;break;",
+  },
+  {
+    name: "rectangle alpha from its color",
+    from: "g=(l>>8&255)/255,v=1,this._addRectangle(",
+    to: "g=(l>>8&255)/255,v=(255&l)/255,this._addRectangle(",
   },
   {
     // Defensive backstop: never index past the renderer's texture units.
