@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { autoSyncInterval, exportFileName, syncErrorKey, syncReady } from "../utils/configSync";
-import { DEFAULT_SYNC, syncOf } from "../utils/settingsDefaults";
+import { DEFAULT_SYNC, SYNC_CATEGORIES, syncOf } from "../utils/settingsDefaults";
 import type { AppSettings } from "../types/domain";
 
 describe("config sync helpers", () => {
+  it("plugin credentials are offered but not selected by default", () => {
+    expect(SYNC_CATEGORIES).toContain("credentials");
+    expect(DEFAULT_SYNC.categories).not.toContain("credentials");
+    expect(syncOf({} as AppSettings).categories).not.toContain("credentials");
+  });
+
   it("maps backend codes to i18n keys", () => {
     expect(syncErrorKey("badPassword")).toBe("cfgSync.err.badPassword");
     expect(syncErrorKey("S3 GET: HTTP 403 Forbidden")).toBeNull();

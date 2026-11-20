@@ -1,4 +1,9 @@
-fn prefix(plugin_id: &str) -> String { format!("Nexterm/Plugins/{plugin_id}/") }
+/// Every plugin credential's target name starts with this.
+pub const ROOT: &str = "Nexterm/Plugins/";
+/// Largest value a credential holds.
+pub const MAX_VALUE: usize = 2560;
+
+fn prefix(plugin_id: &str) -> String { format!("{ROOT}{plugin_id}/") }
 
 fn target(plugin_id: &str, origin: &str, key: &str) -> String {
     let digest = ring::digest::digest(&ring::digest::SHA256, format!("{origin}\0{key}").as_bytes());
@@ -7,10 +12,34 @@ fn target(plugin_id: &str, origin: &str, key: &str) -> String {
 }
 
 pub fn access(plugin_id: &str, origin: &str, key: &str, operation: &str, value: Option<&str>) -> Result<Option<String>, String> {
-    if key.is_empty() || key.len() > 100 || value.is_some_and(|value| value.len() > 2560) { return Err("Invalid persistent credential".into()); }
+    if key.is_empty() || key.len() > 100 || value.is_some_and(|value| value.len() > MAX_VALUE) { return Err("Invalid persistent credential".into()); }
     system::access(&target(plugin_id, origin, key), operation, value)
 }
 pub fn forget(plugin_id: &str) -> Result<(), String> { system::forget(&prefix(plugin_id)) }
+
+/// Is `target` the name of a plugin credential (`Nexterm/Plugins/<plugin id>/<64 hex>`)?
+pub fn valid_target(target: &str) -> bool {
+    let Some((plugin, hash)) = target.strip_prefix(ROOT).and_then(|rest| rest.split_once('/')) else { return false };
+    !plugin.is_empty() && plugin.len() <= 96 && plugin.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        && hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// All plugin credentials on this computer as (target, value), sorted by target (for sync).
+pub fn list_all() -> Result<Vec<(String, String)>, String> {
+    let mut out: Vec<(String, String)> = system::list(ROOT)?.into_iter().filter(|(t, _)| valid_target(t)).collect();
+    out.sort();
+    Ok(out)
+}
+/// Write a credential by its target name (sync).
+pub fn put(target: &str, value: &str) -> Result<(), String> {
+    if !valid_target(target) || value.len() > MAX_VALUE { return Err("Invalid persistent credential".into()); }
+    system::access(target, "set", Some(value)).map(|_| ())
+}
+/// Delete a credential by its target name (sync).
+pub fn remove(target: &str) -> Result<(), String> {
+    if !valid_target(target) { return Err("Invalid persistent credential".into()); }
+    system::access(target, "delete", None).map(|_| ())
+}
 
 #[cfg(windows)]
 mod system {
@@ -55,6 +84,30 @@ mod system {
             }
         }
     }
+    pub fn list(prefix: &str) -> Result<Vec<(String, String)>, String> {
+        let filter = wide(&format!("{prefix}*"));
+        let mut out = Vec::new();
+        unsafe {
+            let mut count = 0;
+            let mut credentials = std::ptr::null_mut();
+            if CredEnumerateW(filter.as_ptr(), 0, &mut count, &mut credentials) == 0 {
+                return if GetLastError() == ERROR_NOT_FOUND { Ok(out) } else { Err(failure()) };
+            }
+            let _allocation = Allocation(credentials.cast());
+            for credential in std::slice::from_raw_parts(credentials, count as usize) {
+                let credential = &**credential;
+                if credential.Type != CRED_TYPE_GENERIC || credential.TargetName.is_null() { continue; }
+                let mut len = 0;
+                while *credential.TargetName.add(len) != 0 { len += 1; }
+                let target = String::from_utf16_lossy(std::slice::from_raw_parts(credential.TargetName, len));
+                let size = credential.CredentialBlobSize as usize;
+                if size > super::MAX_VALUE || (size > 0 && credential.CredentialBlob.is_null()) { continue; }
+                let bytes = if size == 0 { &[][..] } else { std::slice::from_raw_parts(credential.CredentialBlob, size) };
+                if let Ok(value) = String::from_utf8(bytes.to_vec()) { out.push((target, value)); }
+            }
+        }
+        Ok(out)
+    }
     pub fn forget(prefix: &str) -> Result<(), String> {
         let filter = wide(&format!("{prefix}*"));
         unsafe {
@@ -76,6 +129,7 @@ mod system {
 mod system {
     pub fn access(_: &str, _: &str, _: Option<&str>) -> Result<Option<String>, String> { Err("Persistent plugin credentials currently require Windows".into()) }
     pub fn forget(_: &str) -> Result<(), String> { Ok(()) }
+    pub fn list(_: &str) -> Result<Vec<(String, String)>, String> { Ok(Vec::new()) }
 }
 
 #[cfg(test)]
@@ -89,6 +143,11 @@ mod tests {
         assert!(!base.starts_with(&prefix("on")));
         assert!(access("one", "https://example.com", "", "get", None).is_err());
         assert!(access("one", "https://example.com", "key", "set", Some(&"x".repeat(2561))).is_err());
+        assert!(valid_target(&base));
+        let longer = format!("{base}0");
+        let nested = base.replace("one", "o/e");
+        for bad in ["Nexterm/Plugins/one/", "Nexterm/Plugins//abc", "Other/one/0000", longer.as_str(), nested.as_str()] { assert!(!valid_target(bad), "{bad}"); }
+        assert!(put("Other/x", "v").is_err() && remove("Nexterm/Plugins/one/zz").is_err());
     }
     #[cfg(windows)]
     #[test]

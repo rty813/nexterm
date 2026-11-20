@@ -105,7 +105,9 @@ export function remoteOf(s: AppSettings): RemoteSettings {
   return { ...DEFAULT_REMOTE, ...(s.remote ?? {}) };
 }
 
-export const SYNC_CATEGORIES: SyncCategory[] = ["sessions", "quickCommands", "themes", "settings", "senders", "history", "plugins"];
+export const SYNC_CATEGORIES: SyncCategory[] = ["sessions", "quickCommands", "themes", "settings", "senders", "history", "plugins", "credentials"];
+/** Selected unless the user changes it: plugin credentials (passwords, tokens) are opt-in. */
+export const DEFAULT_SYNC_CATEGORIES: SyncCategory[] = SYNC_CATEGORIES.filter((c) => c !== "credentials");
 
 export const DEFAULT_SYNC: SyncSettings = {
   provider: "none",
@@ -115,7 +117,7 @@ export const DEFAULT_SYNC: SyncSettings = {
   gist: { token: "", gistId: "", apiUrl: "" },
   fileName: "nexterm-config.json",
   password: "",
-  categories: [...SYNC_CATEGORIES],
+  categories: [...DEFAULT_SYNC_CATEGORIES],
   autoSync: false,
   intervalMin: 30,
 };
@@ -129,7 +131,7 @@ export function syncOf(s: AppSettings): SyncSettings {
     webdav: { ...DEFAULT_SYNC.webdav, ...(saved.webdav ?? {}) },
     folder: { ...DEFAULT_SYNC.folder, ...(saved.folder ?? {}) },
     gist: { ...DEFAULT_SYNC.gist, ...(saved.gist ?? {}) },
-    categories: Array.isArray(saved.categories) ? saved.categories : [...SYNC_CATEGORIES],
+    categories: Array.isArray(saved.categories) ? saved.categories : [...DEFAULT_SYNC_CATEGORIES],
   };
 }
 

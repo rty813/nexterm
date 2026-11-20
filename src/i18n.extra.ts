@@ -407,6 +407,7 @@ const CFG_SYNC_ZH = {
   password: "加密密码",
   passwordPh: "留空则不加密",
   plainWarn: "未设置加密密码：会话里保存的密码和密钥口令会以明文写入文件。",
+  plainCredWarn: "未设置加密密码：会话密码、密钥口令和插件凭据都会以明文写入文件，建议设置加密密码。",
   content: "同步内容",
   cat: {
     sessions: "会话",
@@ -416,6 +417,7 @@ const CFG_SYNC_ZH = {
     senders: "发送器",
     history: "命令历史",
     plugins: "插件",
+    credentials: "插件凭据",
   },
   catHint: {
     sessions: "会话列表，包括保存的密码和端口转发",
@@ -424,7 +426,8 @@ const CFG_SYNC_ZH = {
     settings: "外观、快捷键、工具栏等（不含本机路径和同步配置）",
     senders: "发送器面板里保存的文本",
     history: "命令历史和快速连接历史",
-    plugins: "已安装的插件及其配置、插件商店；插件保存在凭据管理器里的密码不同步",
+    plugins: "已安装的插件及其配置、插件商店（插件保存在凭据管理器里的密码见“插件凭据”）",
+    credentials: "插件保存在 Windows 凭据管理器里的密码、令牌等密钥（默认不同步）",
   },
   autoSync: "启动时和定时自动同步",
   interval: "间隔（分钟，0 = 仅启动时）",
@@ -532,6 +535,7 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
   password: "Encryption password",
   passwordPh: "Empty = not encrypted",
   plainWarn: "No encryption password: saved session passwords and key passphrases are written to the file in plain text.",
+  plainCredWarn: "No encryption password: session passwords, key passphrases and plugin credentials are written to the file in plain text. Set a password.",
   content: "What to sync",
   cat: {
     sessions: "Sessions",
@@ -541,6 +545,7 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
     senders: "Senders",
     history: "Command history",
     plugins: "Plugins",
+    credentials: "Plugin credentials",
   },
   catHint: {
     sessions: "Session list, including saved passwords and port forwards",
@@ -549,7 +554,8 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
     settings: "Appearance, shortcuts, toolbar ... (not local paths or the sync target)",
     senders: "Texts saved in the sender panel",
     history: "Command history and quick connect history",
-    plugins: "Installed plugins with their settings, and plugin stores; passwords plugins keep in Credential Manager are not synced",
+    plugins: "Installed plugins with their settings, and plugin stores (passwords plugins keep in Credential Manager: see Plugin credentials)",
+    credentials: "Passwords, tokens and other secrets plugins keep in Windows Credential Manager (off by default)",
   },
   autoSync: "Sync at startup and periodically",
   interval: "Interval (minutes, 0 = startup only)",

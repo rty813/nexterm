@@ -46,9 +46,17 @@ pub const CATEGORIES: &[(&str, &[&str])] = &[
     ("senders", &["senders"]),
     ("history", &["command_history", "quick_connect_history"]),
     // Installed plugins (with their packages and configuration) and plugin stores (with access tokens).
-    // Passwords plugins keep in Windows Credential Manager stay on this computer.
+    // Passwords plugins keep in Windows Credential Manager are the `credentials` category.
     ("plugins", &["plugins", "plugin_stores"]),
+    // Passwords and tokens plugins keep in Windows Credential Manager (`plugin_credential`).
+    // Not a data file: read from and written to the credential store. Opt-in, see `DEFAULT_OFF`.
+    ("credentials", &[CREDENTIALS_FILE]),
 ];
+
+/// Bundle entry holding the plugin credentials (`[{ target, value }]`, sorted by target).
+const CREDENTIALS_FILE: &str = "plugin_credentials";
+/// Categories only synced when asked for by name (none given = all the others).
+const DEFAULT_OFF: &[&str] = &["credentials"];
 
 /// Settings that belong to this computer: never exported, kept when importing.
 const LOCAL_SETTING_KEYS: &[&str] = &["sync", "logDir", "zmodemDownloadDir", "xserver"];
@@ -158,7 +166,7 @@ pub fn normalize_categories(requested: &[String]) -> Vec<String> {
     let known: Vec<String> = CATEGORIES
         .iter()
         .map(|(c, _)| c.to_string())
-        .filter(|c| requested.is_empty() || requested.contains(c))
+        .filter(|c| if requested.is_empty() { !DEFAULT_OFF.contains(&c.as_str()) } else { requested.contains(c) })
         .collect();
     known
 }
@@ -213,6 +221,13 @@ fn strip_local_settings(value: &mut Value) {
 pub fn collect(base: &Path, categories: &[String]) -> Map<String, Value> {
     let mut data = Map::new();
     for file in files_of(categories) {
+        if file == CREDENTIALS_FILE {
+            // Unreadable store: leave the entry out rather than sync an empty list.
+            if let Ok(list) = crate::plugin_credentials::list_all() {
+                data.insert(file.to_string(), credentials_value(&list));
+            }
+            continue;
+        }
         let Some(mut value) = read_json(&base.join(format!("{file}.json"))) else { continue };
         if file == "settings" {
             strip_local_settings(&mut value);
@@ -460,7 +475,14 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
     let files: Vec<&str> = files_of(categories).into_iter().filter(|f| data.contains_key(*f)).collect();
     // Validate everything before touching a file.
     let mut planned = Vec::new();
+    let mut credentials = None;
     for file in &files {
+        if *file == CREDENTIALS_FILE {
+            let incoming = parse_credentials(&data[*file])?;
+            let local = crate::plugin_credentials::list_all()?;
+            credentials = Some(plan_credentials(&local, &incoming, mode));
+            continue;
+        }
         let path = base.join(format!("{file}.json"));
         let local = read_json(&path);
         let incoming = &data[*file];
@@ -472,18 +494,67 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
         validate(file, &next)?;
         planned.push((path, next));
     }
-    if planned.is_empty() {
+    if planned.is_empty() && credentials.is_none() {
         return Ok(Vec::new());
     }
-    backup(base, &files)?;
+    // Credentials are not copied into the (plain text) backup folder.
+    let backed: Vec<&str> = files.iter().copied().filter(|f| *f != CREDENTIALS_FILE).collect();
+    backup(base, &backed)?;
     for (path, value) in &planned {
         write_json(path, value)?;
+    }
+    if let Some(plan) = credentials {
+        for (target, value) in &plan.set {
+            crate::plugin_credentials::put(target, value)?;
+        }
+        for target in &plan.delete {
+            crate::plugin_credentials::remove(target)?;
+        }
     }
     Ok(CATEGORIES
         .iter()
         .filter(|(c, fs)| categories.iter().any(|x| x == c) && fs.iter().any(|f| files.contains(f)))
         .map(|(c, _)| c.to_string())
         .collect())
+}
+
+// ------------------------------------------------------------------ plugin credentials
+
+fn credentials_value(list: &[(String, String)]) -> Value {
+    Value::Array(list.iter().map(|(t, v)| serde_json::json!({ "target": t, "value": v })).collect())
+}
+
+/// The bundle's credentials, checked: only plugin credential names, values within the store's limit.
+fn parse_credentials(value: &Value) -> Result<Vec<(String, String)>, String> {
+    let bad = || format!("{}: {}", CREDENTIALS_FILE, code::BAD_FORMAT);
+    let mut out = Vec::new();
+    for item in value.as_array().ok_or_else(bad)? {
+        let target = item.get("target").and_then(Value::as_str).ok_or_else(bad)?;
+        let value = item.get("value").and_then(Value::as_str).ok_or_else(bad)?;
+        if !crate::plugin_credentials::valid_target(target) || value.len() > crate::plugin_credentials::MAX_VALUE {
+            return Err(bad());
+        }
+        out.push((target.to_string(), value.to_string()));
+    }
+    Ok(out)
+}
+
+/// What importing credentials changes in the store.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CredentialPlan {
+    set: Vec<(String, String)>,
+    delete: Vec<String>,
+}
+
+/// Merge: incoming credentials are written (unchanged ones skipped), local ones stay.
+/// Replace: in addition, local credentials the bundle does not have are deleted.
+fn plan_credentials(local: &[(String, String)], incoming: &[(String, String)], mode: ImportMode) -> CredentialPlan {
+    let set = incoming.iter().filter(|c| !local.contains(c)).cloned().collect();
+    let delete = match mode {
+        ImportMode::Merge => Vec::new(),
+        ImportMode::Replace => local.iter().filter(|(t, _)| !incoming.iter().any(|(i, _)| i == t)).map(|(t, _)| t.clone()).collect(),
+    };
+    CredentialPlan { set, delete }
 }
 
 // ------------------------------------------------------------------ remote storage
@@ -1126,6 +1197,23 @@ mod tests {
             merge_lists(&local, &incoming),
             json!([{ "id": "a", "v": 1 }, { "id": "b", "v": 2 }, "x", { "id": "c", "v": 2 }, "y"])
         );
+    }
+
+    #[test]
+    fn credentials_are_opt_in_checked_and_planned() {
+        assert!(!normalize_categories(&[]).contains(&"credentials".to_string()));
+        assert_eq!(normalize_categories(&["credentials".into()]), vec!["credentials".to_string()]);
+
+        let t = |p: &str, c: char| format!("Nexterm/Plugins/{p}/{}", c.to_string().repeat(64));
+        let (a, b, c) = (t("team.a", 'a'), t("team.a", 'b'), t("team.b", 'c'));
+        let parsed = parse_credentials(&credentials_value(&[(a.clone(), "new".into()), (b.clone(), "same".into())])).unwrap();
+        assert!(parse_credentials(&json!([{ "target": "Other/x", "value": "v" }])).is_err());
+        assert!(parse_credentials(&json!([{ "target": a, "value": "x".repeat(2561) }])).is_err());
+        assert!(parse_credentials(&json!({})).is_err());
+
+        let local = vec![(a.clone(), "old".to_string()), (b.clone(), "same".to_string()), (c.clone(), "mine".to_string())];
+        assert_eq!(plan_credentials(&local, &parsed, ImportMode::Merge), CredentialPlan { set: vec![(a.clone(), "new".into())], delete: vec![] });
+        assert_eq!(plan_credentials(&local, &parsed, ImportMode::Replace), CredentialPlan { set: vec![(a, "new".into())], delete: vec![c] });
     }
 
     #[test]

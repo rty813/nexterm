@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { CloudCog, Download, FolderOpen, RefreshCw, Upload } from "lucide-react";
 import type { AppSettings, ConfigBundleInfo, SyncCategory, SyncOutcome, SyncSettings, SyncStateInfo } from "../types/domain";
 import { backend } from "../services/backend";
-import { SYNC_CATEGORIES, syncOf } from "../utils/settingsDefaults";
+import { DEFAULT_SYNC_CATEGORIES, SYNC_CATEGORIES, syncOf } from "../utils/settingsDefaults";
 import { exportFileName, syncErrorKey, syncReady } from "../utils/configSync";
 import { confirmAsk } from "../utils/confirm";
 import { NumberInput } from "./NumberInput";
@@ -51,7 +51,7 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
   const [conflict, setConflict] = useState<SyncOutcome | null>(null);
   const [state, setState] = useState<SyncStateInfo | null>(null);
 
-  const [exportCats, setExportCats] = useState<SyncCategory[]>([...SYNC_CATEGORIES]);
+  const [exportCats, setExportCats] = useState<SyncCategory[]>([...DEFAULT_SYNC_CATEGORIES]);
   const [exportPassword, setExportPassword] = useState("");
   const [importPath, setImportPath] = useState<string | null>(null);
   const [importInfo, setImportInfo] = useState<ConfigBundleInfo | null>(null);
@@ -299,7 +299,9 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
               />
             </label>
           </div>
-          {!s.password && <p className="adv-hint sync-warn">{t("cfgSync.plainWarn")}</p>}
+          {!s.password && (
+            <p className="adv-hint sync-warn">{t(s.categories.includes("credentials") ? "cfgSync.plainCredWarn" : "cfgSync.plainWarn")}</p>
+          )}
 
           <div className="field">
             <span>{t("cfgSync.content")}</span>
@@ -392,7 +394,9 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
           <Upload size={12} /> {t("cfgSync.export")}
         </button>
       </div>
-      {!exportPassword && exportCats.includes("sessions") && <p className="adv-hint sync-warn">{t("cfgSync.plainWarn")}</p>}
+      {!exportPassword && (exportCats.includes("sessions") || exportCats.includes("credentials")) && (
+        <p className="adv-hint sync-warn">{t(exportCats.includes("credentials") ? "cfgSync.plainCredWarn" : "cfgSync.plainWarn")}</p>
+      )}
 
       <h4 className="sync-section">{t("cfgSync.importTitle")}</h4>
       <div className="sync-row">
