@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Download, Minimize2 } from "lucide-react";
+import { Download, Folder, Minimize2 } from "lucide-react";
 import { applyThemeCssVars, BUILTIN_THEMES } from "./constants/themes";
 import { backend, currentWindowLabel, isTauriRuntime, type RemoteAuth, type RemoteTab } from "./services/backend";
 import { actionForCombo, comboFromEvent, resolveKeymap } from "./utils/actions";
@@ -94,6 +94,7 @@ import { sessionTargetSummary } from "./utils/sessionSummary";
 import { usePersistentUiState } from "./hooks/usePersistentUiState";
 import { CommandPalette, type PaletteTab } from "./components/CommandPalette";
 import { ProtocolBadge } from "./components/ProtocolBadge";
+import { buildSessionTree, type SessionTreeNode } from "./utils/sessionTree";
 import { ACTIONS, DEFAULT_TOOLBAR_HIDDEN, TOOLBAR_LAYOUT_VERSION } from "./utils/actions";
 import { restoreWorkspace, snapshotWorkspace, type WorkspaceSnapshot } from "./utils/workspaceSnapshot";
 import { UPDATE_CHECK_DELAY_MS, shouldPromptUpdate, updateCheckEnabled } from "./utils/updateCheck";
@@ -2430,6 +2431,25 @@ export const App: React.FC = () => {
         { label: t("tabbar.newSession"), onClick: () => setSessionModalState({ open: true, editing: null }) },
         { label: t("actions.view.commandPalette"), shortcut: keymap["view.commandPalette"], onClick: () => setPaletteOpen(true) },
       ]);
+    },
+    sessionMenu: (groupId) => {
+      // Same folders and order as the session sidebar.
+      const toItems = (nodes: SessionTreeNode[]): MenuItem[] =>
+        nodes.map((n) =>
+          n.kind === "folder"
+            ? { label: `${n.name} (${n.sessionCount})`, icon: <Folder size={13} />, children: toItems(n.children) }
+            : {
+                label: n.session.label,
+                icon: <ProtocolBadge protocol={n.session.protocol} size={13} />,
+                onClick: () => openSessionInNewTab(n.session, groupId),
+              }
+        );
+      const items = toItems(buildSessionTree(sessions, "", settings.sessionSort ?? "default", sessionUsage));
+      return [
+        ...(items.length ? items : [{ label: t("tabbar.noSessions"), disabled: true }]),
+        { type: "separator" },
+        { label: t("tabbar.newSession"), onClick: () => setSessionModalState({ open: true, editing: null }) },
+      ];
     },
   };
 

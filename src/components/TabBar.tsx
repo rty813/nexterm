@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bell, BellRing, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, CircleCheck, CircleX, Columns2, LoaderCircle, Lock, Plus, Rows2, Share2, X } from "lucide-react";
+import { Bell, BellRing, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, CircleCheck, CircleX, Columns2, LoaderCircle, Lock, Plus, Rows2, Share2, SquarePlus, X } from "lucide-react";
 import { backend } from "../services/backend";
 import { shareStore, useShareStore } from "../services/shares";
 import { shareOfPane, summarizeShare } from "../utils/share";
@@ -68,6 +68,8 @@ export interface GroupTabBarProps {
   onNewTab: () => void;
   /** The menu beside "+": other shells, recent sessions, new session. */
   newTabMenu: () => MenuItem[];
+  /** The button by the split buttons: every saved session, by folder. */
+  sessionMenu: () => MenuItem[];
 }
 
 /** How long the mouse must rest on a tab before it switches (avoids flicking through tabs in passing). */
@@ -109,6 +111,7 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
   hoverSwitch,
   onNewTab,
   newTabMenu,
+  sessionMenu,
 }) => {
   const { t } = useTranslation();
   const openMenu = useContextMenu();
@@ -504,6 +507,17 @@ export const GroupTabBar: React.FC<GroupTabBarProps> = ({
       <div className="tabbar-spacer" />
 
       <div className="tabbar-actions">
+        <button
+          type="button"
+          className="icon-btn"
+          title={t("tabbar.sessionMenu")}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            openMenu({ clientX: r.left, clientY: r.bottom + 4 }, sessionMenu());
+          }}
+        >
+          <SquarePlus size={14} />
+        </button>
         <button
           type="button"
           className="icon-btn"

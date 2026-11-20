@@ -112,9 +112,11 @@ export type GroupActions = Omit<
   | "hoverSwitch"
   | "onNewTab"
   | "newTabMenu"
+  | "sessionMenu"
 > & {
   onNewTab: (groupId: string) => void;
   newTabMenu: (groupId: string) => MenuItem[];
+  sessionMenu: (groupId: string) => MenuItem[];
   onActivateGroup: (groupId: string) => void;
   onSplitGroup: (groupId: string, direction: SplitDirection) => void;
   onDropTab: (paneId: string, groupId: string, index: number) => void;
@@ -361,6 +363,7 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
               hoverSwitch={settings.tabHoverSwitch ?? true}
               onNewTab={() => groupActions.onNewTab(group.id)}
               newTabMenu={() => groupActions.newTabMenu(group.id)}
+              sessionMenu={() => groupActions.sessionMenu(group.id)}
             />
           </div>
         ))}
