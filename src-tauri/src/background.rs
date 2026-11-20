@@ -1,11 +1,12 @@
 //! Terminal background images: a picked file is copied into `<data>/backgrounds/` so the
 //! setting keeps working when the original moves, and each window reads it back as bytes.
+//! Config sync carries the current image along with the settings (see `sync.rs`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Largest image accepted (bytes).
-pub const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+/// Largest image accepted (bytes): it travels base64-encoded in every sync bundle.
+pub const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 /// Copies kept in the folder (the newest ones); older imports are removed.
 const KEEP_FILES: usize = 5;
 
@@ -65,6 +66,27 @@ pub fn read(base: &Path, name: &str) -> Result<Vec<u8>, String> {
     fs::read(dir(base).join(name)).map_err(|e| e.to_string())
 }
 
+/// Save an image that arrived by sync under its own name (already there: left as is).
+pub fn store(base: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    if !valid_name(name) {
+        return Err("invalid background name".into());
+    }
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err("image too large".into());
+    }
+    let folder = dir(base);
+    let path = folder.join(name);
+    if path.is_file() {
+        return Ok(());
+    }
+    fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    let tmp = folder.join(format!("{name}.tmp"));
+    fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    prune(&folder, name);
+    Ok(())
+}
+
 /// Keep the newest KEEP_FILES images (and always `keep`).
 fn prune(folder: &Path, keep: &str) {
     let Ok(entries) = fs::read_dir(folder) else { return };
@@ -116,6 +138,13 @@ mod tests {
         assert!(fs::read_dir(dir(&base)).unwrap().count() <= KEEP_FILES);
         assert!(import(&base, &base.join("pic.txt")).is_err());
         assert!(read(&base, "../pic.png").is_err());
+        store(&base, "bg-synced.png", b"synced").unwrap();
+        assert_eq!(read(&base, "bg-synced.png").unwrap(), b"synced");
+        // Same name again: the existing file stays.
+        store(&base, "bg-synced.png", b"other").unwrap();
+        assert_eq!(read(&base, "bg-synced.png").unwrap(), b"synced");
+        assert!(store(&base, "../x.png", b"x").is_err());
+        assert!(store(&base, "bg-big.png", &vec![0u8; MAX_IMAGE_BYTES as usize + 1]).is_err());
         let _ = fs::remove_dir_all(&base);
     }
 }

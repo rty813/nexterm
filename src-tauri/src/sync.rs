@@ -42,7 +42,8 @@ pub const CATEGORIES: &[(&str, &[&str])] = &[
     ("sessions", &["sessions"]),
     ("quickCommands", &["quick_commands"]),
     ("themes", &["custom_themes"]),
-    ("settings", &["settings"]),
+    // The terminal background image travels with the settings that name it.
+    ("settings", &["settings", BACKGROUND_FILE]),
     ("senders", &["senders"]),
     ("history", &["command_history", "quick_connect_history"]),
     // Installed plugins (with their packages and configuration) and plugin stores (with access tokens).
@@ -55,11 +56,14 @@ pub const CATEGORIES: &[(&str, &[&str])] = &[
 
 /// Bundle entry holding the plugin credentials (`[{ target, value }]`, sorted by target).
 const CREDENTIALS_FILE: &str = "plugin_credentials";
+/// Bundle entry holding the image `settings.background.file` names: `{ name, data }` (base64).
+/// Not a data file: read from and written to `<data>/backgrounds/` (see `background.rs`).
+const BACKGROUND_FILE: &str = "background_image";
 /// Categories only synced when asked for by name (none given = all the others).
 const DEFAULT_OFF: &[&str] = &["credentials"];
 
 /// Settings that belong to this computer: never exported, kept when importing.
-const LOCAL_SETTING_KEYS: &[&str] = &["sync", "logDir", "zmodemDownloadDir", "xserver", "background", "httpProxy"];
+const LOCAL_SETTING_KEYS: &[&str] = &["sync", "logDir", "zmodemDownloadDir", "xserver", "httpProxy"];
 /// Remote access: the relay (address + token) is shared, the rest (`enabled`, `readOnly`) stays local.
 /// The pairing secret lives in `remote_pairing.json` and is never synced.
 const REMOTE_KEY: &str = "remote";
@@ -225,6 +229,12 @@ pub fn collect(base: &Path, categories: &[String]) -> Map<String, Value> {
             // Unreadable store: leave the entry out rather than sync an empty list.
             if let Ok(list) = crate::plugin_credentials::list_all() {
                 data.insert(file.to_string(), credentials_value(&list));
+            }
+            continue;
+        }
+        if file == BACKGROUND_FILE {
+            if let Some(value) = background_value(base) {
+                data.insert(file.to_string(), value);
             }
             continue;
         }
@@ -476,7 +486,12 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
     // Validate everything before touching a file.
     let mut planned = Vec::new();
     let mut credentials = None;
+    let mut background = None;
     for file in &files {
+        if *file == BACKGROUND_FILE {
+            background = Some(parse_background(&data[*file])?);
+            continue;
+        }
         if *file == CREDENTIALS_FILE {
             let incoming = parse_credentials(&data[*file])?;
             let local = crate::plugin_credentials::list_all()?;
@@ -494,12 +509,17 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
         validate(file, &next)?;
         planned.push((path, next));
     }
-    if planned.is_empty() && credentials.is_none() {
+    if planned.is_empty() && credentials.is_none() && background.is_none() {
         return Ok(Vec::new());
     }
-    // Credentials are not copied into the (plain text) backup folder.
-    let backed: Vec<&str> = files.iter().copied().filter(|f| *f != CREDENTIALS_FILE).collect();
+    // Credentials are not copied into the (plain text) backup folder; a background image is
+    // never overwritten (each has its own name), so it needs no backup.
+    let backed: Vec<&str> = files.iter().copied().filter(|f| *f != CREDENTIALS_FILE && *f != BACKGROUND_FILE).collect();
     backup(base, &backed)?;
+    // The image before the settings naming it, so windows reloading them find the file.
+    if let Some((name, bytes)) = &background {
+        crate::background::store(base, name, bytes)?;
+    }
     for (path, value) in &planned {
         write_json(path, value)?;
     }
@@ -516,6 +536,38 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
         .filter(|(c, fs)| categories.iter().any(|x| x == c) && fs.iter().any(|f| files.contains(f)))
         .map(|(c, _)| c.to_string())
         .collect())
+}
+
+// ------------------------------------------------------------------ background image
+
+/// The image the saved settings use, as a bundle entry; none without one (or when it is gone).
+fn background_value(base: &Path) -> Option<Value> {
+    let settings = read_json(&base.join("settings.json"))?;
+    let name = settings.get("background")?.get("file")?.as_str()?;
+    if name.is_empty() {
+        return None;
+    }
+    let bytes = crate::background::read(base, name).ok()?;
+    if bytes.len() as u64 > crate::background::MAX_IMAGE_BYTES {
+        return None;
+    }
+    Some(serde_json::json!({ "name": name, "data": B64.encode(bytes) }))
+}
+
+/// The bundle's background image, checked: a stored-image name and a size within the limit.
+fn parse_background(value: &Value) -> Result<(String, Vec<u8>), String> {
+    let bad = || format!("{}: {}", BACKGROUND_FILE, code::BAD_FORMAT);
+    let name = value.get("name").and_then(Value::as_str).filter(|n| crate::background::valid_name(n)).ok_or_else(bad)?;
+    let data = value.get("data").and_then(Value::as_str).ok_or_else(bad)?;
+    // base64 is 4/3 of the bytes: refuse oversized input before decoding it.
+    if data.len() as u64 > crate::background::MAX_IMAGE_BYTES / 3 * 4 + 8 {
+        return Err(bad());
+    }
+    let bytes = B64.decode(data).map_err(|_| bad())?;
+    if bytes.len() as u64 > crate::background::MAX_IMAGE_BYTES {
+        return Err(bad());
+    }
+    Ok((name.to_string(), bytes))
 }
 
 // ------------------------------------------------------------------ plugin credentials
@@ -1310,6 +1362,47 @@ mod tests {
         assert!(apply(&base, &bad, &all, ImportMode::Replace).is_err());
         assert!(!base.join("sessions.json").exists());
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn background_image_travels_with_settings() {
+        let from = tmp_dir("bg-from");
+        let to = tmp_dir("bg-to");
+        let src = from.join("pic.png");
+        fs::write(&src, b"\x89PNG image").unwrap();
+        let name = crate::background::import(&from, &src).unwrap();
+        let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+        settings["background"] = json!({ "file": name, "opacity": 0.4, "blur": 2, "fit": "tile" });
+        write_json(&from.join("settings.json"), &settings).unwrap();
+
+        // Only with the settings category; the background settings are no longer local.
+        assert!(!collect(&from, &["themes".to_string()]).contains_key(BACKGROUND_FILE));
+        let cats = vec!["settings".to_string()];
+        let data = collect(&from, &cats);
+        assert_eq!(data["settings"]["background"]["fit"], json!("tile"));
+        assert_eq!(data[BACKGROUND_FILE]["name"], json!(name));
+
+        let applied = apply(&to, &data, &cats, ImportMode::Merge).unwrap();
+        assert_eq!(applied, cats);
+        assert_eq!(crate::background::read(&to, &name).unwrap(), b"\x89PNG image");
+        assert_eq!(read_json(&to.join("settings.json")).unwrap()["background"]["file"], json!(name));
+        // The image never lands in the backup folder.
+        let backups: Vec<_> = fs::read_dir(to.join("backups")).unwrap().flatten().collect();
+        assert!(backups.iter().all(|d| !d.path().join(format!("{BACKGROUND_FILE}.json")).exists()));
+
+        // A bad name or oversized data is refused before anything is written.
+        let mut bad = data.clone();
+        bad.insert(BACKGROUND_FILE.into(), json!({ "name": "../evil.png", "data": "AAAA" }));
+        assert!(apply(&tmp_dir("bg-bad"), &bad, &cats, ImportMode::Merge).is_err());
+        let huge = B64.encode(vec![0u8; crate::background::MAX_IMAGE_BYTES as usize + 1]);
+        bad.insert(BACKGROUND_FILE.into(), json!({ "name": "bg-big.png", "data": huge }));
+        assert!(apply(&tmp_dir("bg-bad2"), &bad, &cats, ImportMode::Merge).is_err());
+
+        // Image file gone: the settings still sync, without an image entry.
+        fs::remove_dir_all(crate::background::dir(&from)).unwrap();
+        assert!(!collect(&from, &cats).contains_key(BACKGROUND_FILE));
+        let _ = fs::remove_dir_all(from);
+        let _ = fs::remove_dir_all(to);
     }
 
     fn sessions_of(base: &Path) -> Vec<String> {

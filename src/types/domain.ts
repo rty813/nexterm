@@ -311,7 +311,7 @@ export interface AppSettings {
   /** Extra characters that end a word on double-click selection. */
   wordSeparators?: string;
   alwaysOnTop?: boolean;
-  /** Image behind the terminals (kept in settings.extra on the Rust side; local, not synced). */
+  /** Image behind the terminals (kept in settings.extra on the Rust side; synced with the image, see sync.rs). */
   background?: TerminalBackground;
   /** Window opacity 0.2 - 1. */
   windowOpacity?: number;
