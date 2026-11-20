@@ -422,6 +422,9 @@ export interface AppSettings {
   /** Built-in X server (xserver.*). */
   xserver?: XServerSettings;
 
+  /** Proxy for the app's own HTTP requests (updates, config sync, plugins). Stays on this computer. */
+  httpProxy?: HttpProxySettings;
+
   /** Remote access through a self-hosted relay (remote.*). */
   remote?: RemoteSettings;
 
@@ -803,4 +806,22 @@ export interface UpdateInfo {
   url: string;
   notes: string;
   publishedAt?: string | null;
+  /** Can be downloaded and installed from the app (else: open `url`). */
+  canInstall: boolean;
+}
+
+/** Rust `http_proxy`: system (default) = environment variables, then the Windows proxy settings. */
+export type HttpProxyMode = "system" | "direct" | "custom";
+
+export interface HttpProxySettings {
+  mode: HttpProxyMode;
+  /** For "custom": http://, https://, socks5:// or socks5h://; a bare host:port means http. */
+  url?: string;
+}
+
+/** `update-progress` event while an update downloads (Rust `update::Progress`). */
+export interface UpdateProgress {
+  received: number;
+  /** 0 when the size is not known. */
+  total: number;
 }

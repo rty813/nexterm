@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseNoteInline, parseReleaseNotes, shouldPromptUpdate, updateCheckEnabled } from "../utils/updateCheck";
+import { formatUpdateSize, parseNoteInline, updatePercent, parseReleaseNotes, shouldPromptUpdate, updateCheckEnabled } from "../utils/updateCheck";
 import type { UpdateInfo } from "../types/domain";
 
 const info = (latest: string, available = true): UpdateInfo => ({
@@ -8,9 +8,20 @@ const info = (latest: string, available = true): UpdateInfo => ({
   available,
   url: "https://github.com/rty813/nexterm/releases/tag/v" + latest,
   notes: "",
+  canInstall: true,
 });
 
 describe("update check", () => {
+  it("formats download progress", () => {
+    const mb = 1024 * 1024;
+    expect(updatePercent({ received: 5, total: 0 })).toBeNull();
+    expect(updatePercent({ received: 3 * mb, total: 12 * mb })).toBe(25);
+    expect(updatePercent({ received: 13 * mb, total: 12 * mb })).toBe(100);
+    expect(formatUpdateSize({ received: 0, total: 0 })).toBe("0.0 MB");
+    expect(formatUpdateSize({ received: 5.5 * mb, total: 0 })).toBe("5.5 MB");
+    expect(formatUpdateSize({ received: 3 * mb, total: 12 * mb })).toBe("3.0 / 12.0 MB");
+  });
+
   it("is on by default", () => {
     expect(updateCheckEnabled({})).toBe(true);
     expect(updateCheckEnabled({ checkUpdates: true })).toBe(true);

@@ -59,7 +59,7 @@ const CREDENTIALS_FILE: &str = "plugin_credentials";
 const DEFAULT_OFF: &[&str] = &["credentials"];
 
 /// Settings that belong to this computer: never exported, kept when importing.
-const LOCAL_SETTING_KEYS: &[&str] = &["sync", "logDir", "zmodemDownloadDir", "xserver", "background"];
+const LOCAL_SETTING_KEYS: &[&str] = &["sync", "logDir", "zmodemDownloadDir", "xserver", "background", "httpProxy"];
 /// Remote access: the relay (address + token) is shared, the rest (`enabled`, `readOnly`) stays local.
 /// The pairing secret lives in `remote_pairing.json` and is never synced.
 const REMOTE_KEY: &str = "remote";
@@ -560,7 +560,7 @@ fn plan_credentials(local: &[(String, String)], incoming: &[(String, String)], m
 // ------------------------------------------------------------------ remote storage
 
 fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
+    crate::http_proxy::apply(reqwest::Client::builder())
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
         .user_agent(concat!("Nexterm/", env!("CARGO_PKG_VERSION")))

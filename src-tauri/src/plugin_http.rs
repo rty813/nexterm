@@ -55,7 +55,7 @@ pub fn plugin_grant(window: WebviewWindow, plugin_id: String, origins: Vec<Strin
     if origins.len() > 16 || origins.iter().any(|value| origin(value).as_ref() != Ok(value)) { return Err("Invalid plugin origins".into()); }
     let capability = uuid::Uuid::new_v4().to_string();
     let (revoked, _) = watch::channel(false);
-    let client = Client::builder().redirect(Policy::none()).timeout(Duration::from_secs(20)).build().map_err(|_| "HTTP client unavailable")?;
+    let client = crate::http_proxy::apply(Client::builder()).redirect(Policy::none()).timeout(Duration::from_secs(20)).build().map_err(|_| "HTTP client unavailable")?;
     grants().lock().map_err(|_| "Permission store unavailable")?.insert(capability.clone(), Arc::new(Grant {
         owner: window.label().into(), plugin_id, credentials, client, origins: Mutex::new(origins), request_network, sessions, revoked, limit: Arc::new(Semaphore::new(4)), secrets: Mutex::new(HashMap::new()),
     }));

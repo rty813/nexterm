@@ -42,6 +42,7 @@ pub mod telnet_conn;
 pub mod term_capture;
 pub mod transfer;
 pub mod update;
+pub mod http_proxy;
 pub mod xserver;
 pub mod xymodem;
 pub mod zmodem;
@@ -239,6 +240,7 @@ fn apply_settings_effects(ctx: &AppContext, settings: &AppSettings) {
     ctx.ask_before_quit
         .store(extra_bool(&settings, "askBeforeCloseWindow", true), Ordering::Relaxed);
     crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
+    crate::http_proxy::configure(crate::http_proxy::from_settings(settings.extra.get("httpProxy")));
     let (history_on, history_limits) = history_config(settings);
     crate::history::configure(history_on, history_limits);
     crate::xserver::configure(xserver_config(settings));
@@ -693,6 +695,42 @@ fn restart_app(app: AppHandle) {
 #[tauri::command]
 async fn check_update() -> Result<crate::update::UpdateInfo, String> {
     crate::update::check().await
+}
+
+/// Settings' proxy "Test": reaches GitHub with the proxy as entered (not yet saved), in ms.
+#[tauri::command]
+async fn test_http_proxy(mode: String, url: String) -> Result<u64, String> {
+    let proxy = match mode.as_str() {
+        "direct" => crate::http_proxy::ProxyMode::Direct,
+        "custom" => crate::http_proxy::ProxyMode::Custom(crate::http_proxy::normalize_url(&url)?),
+        _ => crate::http_proxy::ProxyMode::System,
+    };
+    crate::http_proxy::test(proxy).await
+}
+
+/// Downloads the update the last check offered (`can_install`), with `update-progress` events.
+#[tauri::command]
+async fn download_update(app: AppHandle) -> Result<(), String> {
+    use tauri::Emitter;
+    crate::update::download(|p| {
+        let _ = app.emit("update-progress", p);
+    })
+    .await
+}
+
+/// Stops the update download in progress (`download_update` then fails with "cancelled").
+#[tauri::command]
+fn cancel_update() {
+    crate::update::cancel();
+}
+
+/// Starts the downloaded update and quits; the new version starts when it is installed.
+#[tauri::command]
+fn apply_update(app: AppHandle) -> Result<(), String> {
+    crate::update::apply()?;
+    crate::xserver::stop();
+    app.exit(0);
+    Ok(())
 }
 
 /// Font families installed on this computer, for the terminal font picker.
@@ -1673,6 +1711,7 @@ pub fn run() {
                 let _ = win.set_focus();
             }
             crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
+            crate::http_proxy::configure(crate::http_proxy::from_settings(settings.extra.get("httpProxy")));
             let (history_on, history_limits) = history_config(&settings);
             crate::history::configure(history_on, history_limits);
             app.manage(AppContext {
@@ -1701,6 +1740,8 @@ pub fn run() {
             // Local copies of remote files edited in an earlier run, files dropped then.
             crate::sftp::edit_cleanup();
             let _ = std::fs::remove_dir_all(crate::transfer::staging_root());
+            // What an update left behind: the replaced exe, the downloaded setup.
+            crate::update::cleanup();
 
             let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Nexterm", true, None::<&str>)?;
@@ -1806,6 +1847,10 @@ pub fn run() {
             plugin_store::plugin_store_index,
             plugin_store::plugin_store_fetch,
             check_update,
+            test_http_proxy,
+            download_update,
+            cancel_update,
+            apply_update,
             storage_location_info,
             storage_location_prompt,
             set_storage_location,

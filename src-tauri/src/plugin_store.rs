@@ -69,7 +69,7 @@ pub fn verify_index(bytes: &[u8], signature_text: &str, pinned: Option<&str>) ->
 }
 
 fn client() -> Result<Client, String> {
-    Client::builder()
+    crate::http_proxy::apply(Client::builder())
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(8))
         .redirect(Policy::custom(|attempt| {

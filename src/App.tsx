@@ -82,7 +82,7 @@ import { commandHistory, historyKeyOf } from "./utils/commandHistory";
 import { autoSyncInterval, syncErrorKey, syncReady } from "./utils/configSync";
 import { historyOf, modemOf, remoteOf, sftpOf, syncOf } from "./utils/settingsDefaults";
 import { hostKeyOf } from "./utils/sftpBookmarks";
-import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem, UpdateInfo } from "./types/domain";
+import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem, UpdateInfo, UpdateProgress } from "./types/domain";
 import { AiRequestDialog } from "./components/AiRequestDialog";
 import { PortForwardPanel, type ForwardTarget } from "./components/PortForwardPanel";
 import { ServerMonitorPanel } from "./components/ServerMonitor";
@@ -99,6 +99,7 @@ import { buildSessionTree, type SessionTreeNode } from "./utils/sessionTree";
 import { ACTIONS, DEFAULT_TOOLBAR_HIDDEN, TOOLBAR_LAYOUT_VERSION } from "./utils/actions";
 import { restoreWorkspace, snapshotWorkspace, type WorkspaceSnapshot } from "./utils/workspaceSnapshot";
 import { UPDATE_CHECK_DELAY_MS, shouldPromptUpdate, updateCheckEnabled } from "./utils/updateCheck";
+import { UpdateProgressCard } from "./components/UpdateProgressCard";
 import { ReleaseNotes } from "./components/ReleaseNotes";
 import { PluginActivity, PluginBadges, PluginHost, PluginToolbar, PluginViews, usePluginPlatform } from "./components/StatusPlugins";
 import { plugins } from "./plugins/platform";
@@ -189,6 +190,8 @@ export const App: React.FC = () => {
   /** paneId -> session log file currently being written. */
   const [logPaths, setLogPaths] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<string | null>(null);
+  /** Update download in progress. */
+  const [updateProgress, setUpdateProgress] = useState<{ version: string; progress: UpdateProgress } | null>(null);
   const [portForwardOpen, setPortForwardOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
   /** Pane the forwarding panel was opened for (pane menu); falls back to the active pane. */
@@ -1350,11 +1353,61 @@ export const App: React.FC = () => {
 
   // ---------------------------------------------------------------- shortcuts
 
-  /** Offer a newer release: open its download page, or (startup check only) skip this version. */
+  /** Download the offered update with progress, then restart into it once the user agrees. */
+  const updatingRef = useRef(false);
+  const installUpdate = async (info: UpdateInfo) => {
+    if (updatingRef.current) return;
+    updatingRef.current = true;
+    const version = info.latest;
+    setUpdateProgress({ version, progress: { received: 0, total: 0 } });
+    const unlisten = await backend
+      .onUpdateProgress((progress) => setUpdateProgress({ version, progress }))
+      .catch(() => undefined);
+    let error: string | null = null;
+    try {
+      await backend.downloadUpdate();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      unlisten?.();
+      setUpdateProgress(null);
+      updatingRef.current = false;
+    }
+    if (error === "cancelled") return;
+    if (error !== null) {
+      const retry = await ask({
+        title: t("update.downloadFailedTitle"),
+        message: t("update.downloadFailed"),
+        detail: error,
+        okLabel: t("update.openPage"),
+        cancelLabel: t("update.later"),
+      });
+      if (retry.ok) void backend.openExternal(info.url).catch((e) => setToast(String(e)));
+      return;
+    }
+    const answer = await ask({
+      title: t("update.readyTitle", { version: info.latest }),
+      message: t("update.readyMessage"),
+      icon: <Download size={16} />,
+      okLabel: t("update.restartNow"),
+      cancelLabel: t("update.later"),
+    });
+    if (!answer.ok) {
+      setToast(t("update.readyLater"));
+      return;
+    }
+    await backend.applyUpdate().catch((e) => setToast(t("update.installFailed", { error: String(e) })));
+  };
+  const installUpdateRef = useRef(installUpdate);
+  installUpdateRef.current = installUpdate;
+
+  /** Offer a newer release: install it (or open its download page), or (startup check only) skip this version. */
   const promptUpdate = async (info: UpdateInfo, offerSkip: boolean) => {
     const answer = await ask({
       title: t("update.title", { version: info.latest }),
-      message: t("update.message", { current: info.current, latest: info.latest }),
+      message: info.canInstall
+        ? `${t("update.message", { current: info.current, latest: info.latest })} ${t("update.installHint")}`
+        : t("update.message", { current: info.current, latest: info.latest }),
       icon: <Download size={16} />,
       wide: Boolean(info.notes.trim()),
       body: info.notes.trim() ? (
@@ -1363,11 +1416,12 @@ export const App: React.FC = () => {
           <ReleaseNotes notes={info.notes} lang={i18n.language} />
         </>
       ) : undefined,
-      okLabel: t("update.download"),
+      okLabel: info.canInstall ? t("update.install") : t("update.download"),
       cancelLabel: t("update.later"),
       checkboxLabel: offerSkip ? t("update.skip") : undefined,
     });
-    if (answer.ok) void backend.openExternal(info.url).catch((e) => setToast(String(e)));
+    if (answer.ok && info.canInstall) void installUpdate(info);
+    else if (answer.ok) void backend.openExternal(info.url).catch((e) => setToast(String(e)));
     else if (answer.checked) saveSettings({ ...settingsRef.current, skippedUpdateVersion: info.latest });
   };
   const promptUpdateRef = useRef(promptUpdate);
@@ -2928,6 +2982,7 @@ export const App: React.FC = () => {
           onAgentHooksLocal={(install) => agentHooks(null, install)}
           localHookStatus={() => agentHookStatus(null)}
           onTestNotification={() => void backend.showNotification(t("agent.notify.done", { app: "Claude Code" }), t("agent.testNotifyBody"), "test")}
+          onInstallUpdate={(info) => void installUpdateRef.current(info)}
           onClose={() => setSettingsModalOpen(false)}
           onSave={(next) => {
             saveSettings(next);
@@ -3031,6 +3086,13 @@ export const App: React.FC = () => {
       )}
 
       {toast && <div className="app-toast">{toast}</div>}
+      {updateProgress && (
+        <UpdateProgressCard
+          version={updateProgress.version}
+          progress={updateProgress.progress}
+          onCancel={() => void backend.cancelUpdate()}
+        />
+      )}
       {isMainWindow && !settingsModalOpen && <PluginUpdateNotice onOpen={() => { setSettingsTab("plugins"); setSettingsModalOpen(true); }} />}
 
       {shareDialogLeaf && <ShareDialog paneId={shareDialogLeaf.paneId} title={tabTitle(shareDialogLeaf)} />}

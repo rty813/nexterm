@@ -1717,6 +1717,75 @@ html.ctxmenu-host #root {
   from { opacity: 0; transform: translate(-50%, 8px); }
 }
 
+/* Update download, bottom right above the status bar. */
+.update-progress-card {
+  position: fixed;
+  right: 16px;
+  bottom: 44px;
+  z-index: 900;
+  width: 300px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  color: var(--fg-strong);
+  font-size: 12px;
+  animation: wt-card-in 0.2s var(--ease);
+}
+.update-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--accent);
+}
+.update-progress-title {
+  color: var(--fg-strong);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.update-progress-track {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.update-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+.update-progress-track.indeterminate .update-progress-fill {
+  width: 35%;
+  animation: wt-progress-slide 1.2s ease-in-out infinite;
+}
+.update-progress-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.update-progress-foot .btn-secondary {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+@keyframes wt-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+}
+@keyframes wt-progress-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(290%); }
+}
+
 /* ---------- Buttons ---------- */
 .btn-danger {
   height: 28px;

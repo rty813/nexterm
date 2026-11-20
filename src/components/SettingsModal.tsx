@@ -3,7 +3,7 @@ import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentH
 import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
 import { Globe, Keyboard, Monitor, Mouse, Palette, PanelTop, Puzzle, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
-import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
+import type { AppSettings, HttpProxyMode, HttpProxySettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
 import { PluginManager } from "./StatusPlugins";
@@ -52,6 +52,8 @@ interface SettingsModalProps {
   onTestNotification: () => void;
   /** Imported / synced data was written to this computer. */
   onConfigApplied?: (categories: SyncCategory[]) => void;
+  /** Download and install an update the check found (`canInstall`). */
+  onInstallUpdate?: (info: UpdateInfo) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -67,6 +69,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   localHookStatus,
   onTestNotification,
   onConfigApplied,
+  onInstallUpdate,
   sessions = [],
 }) => {
   // Hook install status on this computer (undefined while reading).
@@ -470,7 +473,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             />
             <span>{t("update.checkAtStartup")}</span>
           </label>
-          <UpdateCheckRow />
+          <UpdateCheckRow onInstall={onInstallUpdate} />
+
+          <h4 className="section-heading">{t("httpProxy.section")}</h4>
+          <HttpProxyEditor
+            value={draft.httpProxy ?? { mode: "system" }}
+            onChange={(httpProxy) => setDraft({ ...draft, httpProxy })}
+          />
 
 
           <label className="field">
@@ -526,8 +535,61 @@ const AgentHookStatusLine: React.FC<{ status: HookStatus | null | undefined }> =
   );
 };
 
-/** "Check now" with the result inline: up to date, a newer release (with a download link) or the error. */
-const UpdateCheckRow: React.FC = () => {
+/** Direct / system / custom proxy for the app's own HTTP requests, with a connection test. */
+const HttpProxyEditor: React.FC<{ value: HttpProxySettings; onChange: (v: HttpProxySettings) => void }> = ({ value, onChange }) => {
+  const { t } = useTranslation();
+  const [test, setTest] = useState<{ kind: "idle" } | { kind: "testing" } | { kind: "ok"; ms: number } | { kind: "failed"; error: string }>({
+    kind: "idle",
+  });
+  const update = (v: HttpProxySettings) => {
+    setTest({ kind: "idle" });
+    onChange(v);
+  };
+  const run = () => {
+    setTest({ kind: "testing" });
+    backend
+      .testHttpProxy(value.mode, value.url ?? "")
+      .then((ms) => setTest({ kind: "ok", ms }))
+      .catch((e) => setTest({ kind: "failed", error: String(e) }));
+  };
+  return (
+    <>
+      <div className="form-grid-2">
+        <label className="field">
+          <span>{t("httpProxy.mode")}</span>
+          <select className="text-input" value={value.mode} onChange={(e) => update({ ...value, mode: e.target.value as HttpProxyMode })}>
+            <option value="system">{t("httpProxy.system")}</option>
+            <option value="direct">{t("httpProxy.direct")}</option>
+            <option value="custom">{t("httpProxy.custom")}</option>
+          </select>
+        </label>
+        {value.mode === "custom" && (
+          <label className="field">
+            <span>{t("httpProxy.url")}</span>
+            <input
+              className="text-input"
+              value={value.url ?? ""}
+              placeholder="http://127.0.0.1:7890"
+              spellCheck={false}
+              onChange={(e) => update({ ...value, url: e.target.value })}
+            />
+          </label>
+        )}
+      </div>
+      <span className="adv-hint">{t(`httpProxy.${value.mode}Hint`)}</span>
+      <div className="agent-hooks-row">
+        <button type="button" className="btn-secondary" disabled={test.kind === "testing"} onClick={run}>
+          {test.kind === "testing" ? t("httpProxy.testing") : t("httpProxy.test")}
+        </button>
+        {test.kind === "ok" && <span className="adv-hint">{t("httpProxy.testOk", { ms: test.ms })}</span>}
+        {test.kind === "failed" && <span className="adv-hint">{t("httpProxy.testFailed", { error: test.error })}</span>}
+      </div>
+    </>
+  );
+};
+
+/** "Check now" with the result inline: up to date, a newer release (install / download) or the error. */
+const UpdateCheckRow: React.FC<{ onInstall?: (info: UpdateInfo) => void }> = ({ onInstall }) => {
   const { t } = useTranslation();
   const [state, setState] = useState<
     { kind: "idle" } | { kind: "checking" } | { kind: "done"; info: UpdateInfo } | { kind: "failed"; error: string }
@@ -555,9 +617,15 @@ const UpdateCheckRow: React.FC = () => {
       {state.kind === "done" && state.info.available && (
         <>
           <span className="adv-hint">{t("update.message", { current: state.info.current, latest: state.info.latest })}</span>
-          <button type="button" className="btn-primary" onClick={() => void backend.openExternal(state.info.url)}>
-            {t("update.download")}
-          </button>
+          {state.info.canInstall && onInstall ? (
+            <button type="button" className="btn-primary" onClick={() => onInstall(state.info)}>
+              {t("update.install")}
+            </button>
+          ) : (
+            <button type="button" className="btn-primary" onClick={() => void backend.openExternal(state.info.url)}>
+              {t("update.download")}
+            </button>
+          )}
         </>
       )}
       {state.kind === "failed" && <span className="adv-hint">{t("update.failed", { error: state.error })}</span>}

@@ -34,6 +34,7 @@ import type {
   SystemFont,
   ThemeDefinition,
   UpdateInfo,
+  UpdateProgress,
 } from "../types/domain";
 import type { HistoryInfo, HistoryPage } from "../utils/historyView";
 
@@ -1474,6 +1475,31 @@ export const backend = {
   async checkUpdate(): Promise<UpdateInfo> {
     if (!isTauriRuntime()) throw new Error("not in Tauri");
     return invoke<UpdateInfo>("check_update");
+  },
+
+  /** Reaches GitHub through the proxy as entered (not yet saved); round trip in ms. */
+  async testHttpProxy(mode: string, url: string): Promise<number> {
+    if (!isTauriRuntime()) throw new Error("not in Tauri");
+    return invoke<number>("test_http_proxy", { mode, url });
+  },
+
+  /** Downloads the update the last check offered; progress arrives via `onUpdateProgress`. */
+  async downloadUpdate(): Promise<void> {
+    await invoke("download_update");
+  },
+
+  /** Stops the update download; `downloadUpdate` then rejects with "cancelled". */
+  async cancelUpdate(): Promise<void> {
+    await invoke("cancel_update");
+  },
+
+  /** Starts the downloaded update and quits the app. */
+  async applyUpdate(): Promise<void> {
+    await invoke("apply_update");
+  },
+
+  async onUpdateProgress(handler: (p: UpdateProgress) => void): Promise<UnlistenFn> {
+    return listen<UpdateProgress>("update-progress", (e) => handler(e.payload));
   },
 
   /** Command names for completion, from WindTerm's terminal/commands (empty when absent). */

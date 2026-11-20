@@ -1,4 +1,4 @@
-import type { AppSettings, UpdateInfo } from "../types/domain";
+import type { AppSettings, UpdateInfo, UpdateProgress } from "../types/domain";
 
 /** Wait after startup before checking, so the first connections are not slowed down. */
 export const UPDATE_CHECK_DELAY_MS = 5000;
@@ -11,6 +11,18 @@ export function updateCheckEnabled(settings: Pick<AppSettings, "checkUpdates">):
 /** Prompt at startup for a newer release the user has not chosen to skip. */
 export function shouldPromptUpdate(info: UpdateInfo, settings: Pick<AppSettings, "skippedUpdateVersion">): boolean {
   return info.available && info.latest !== settings.skippedUpdateVersion;
+}
+
+/** Whole percent downloaded, or null while the size is not known. */
+export function updatePercent(p: UpdateProgress): number | null {
+  if (p.total <= 0) return null;
+  return Math.min(100, Math.floor((p.received / p.total) * 100));
+}
+
+/** "5.6 / 12.4 MB", or "5.6 MB" when the size is not known. */
+export function formatUpdateSize(p: UpdateProgress): string {
+  const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+  return p.total > 0 ? `${mb(p.received)} / ${mb(p.total)} MB` : `${mb(p.received)} MB`;
 }
 
 export interface NoteBlock {
