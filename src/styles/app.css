@@ -868,6 +868,31 @@ textarea {
 .terminal-pane.pane-split-mode {
   border: 1px solid transparent;
 }
+
+/* Background image (services/terminalBackground.ts): drawn over the theme's background
+   color and under the pane's content; the terminal itself is transparent then. */
+.has-term-bg .terminal-pane {
+  isolation: isolate;
+}
+.has-term-bg .terminal-pane::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: var(--term-bg-image);
+  background-size: var(--term-bg-size, cover);
+  background-repeat: var(--term-bg-repeat, no-repeat);
+  background-position: center;
+  opacity: var(--term-bg-opacity, 0.3);
+  filter: blur(var(--term-bg-blur, 0px));
+}
+.has-term-bg .fold-gutter {
+  background: transparent;
+}
+.has-term-bg .ts-gutter {
+  background: color-mix(in srgb, var(--term-bg) 60%, transparent);
+}
 .terminal-pane.pane-split-mode.pane-active {
   border-color: var(--accent);
 }
@@ -3128,6 +3153,12 @@ html.ctxmenu-host #root {
   background: #e81123;
   color: #fff;
 }
+.titlebar-btn.titlebar-pin {
+  width: 38px;
+}
+.titlebar-btn.titlebar-pin.active {
+  color: var(--accent);
+}
 .settings-section-title {
   margin-top: 6px;
   font-size: 12px;
@@ -5063,4 +5094,205 @@ html.ctxmenu-host #root {
 .mon-table th:not(:first-child),
 .mon-table td:not(:first-child) {
   text-align: right;
+}
+
+/* Settings > Theme (components/SettingsTheme.tsx) */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+}
+.theme-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--bg-elevated);
+  transition: border-color 0.12s linear, box-shadow 0.12s linear;
+}
+.theme-card:hover {
+  border-color: var(--border-strong);
+}
+.theme-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.theme-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.theme-swatch {
+  height: 64px;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.theme-swatch-bar {
+  height: 10px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+}
+.theme-swatch-bar span {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+}
+.theme-swatch-text {
+  flex: 1;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.theme-swatch-colors {
+  display: flex;
+  gap: 3px;
+  padding: 0 8px 7px;
+}
+.theme-swatch-colors span {
+  width: 12px;
+  height: 6px;
+  border-radius: 2px;
+}
+.theme-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 2px 4px 2px 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+.theme-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.theme-card-actions {
+  display: flex;
+  flex-shrink: 0;
+}
+.theme-card-actions .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+.theme-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.theme-editor {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 10px 14px 4px;
+  margin: 4px 0 12px;
+}
+.theme-editor legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.theme-light-row {
+  align-self: end;
+  min-height: 30px;
+}
+.theme-color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 6px 12px;
+  margin: 6px 0 10px;
+}
+.theme-ansi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin: 6px 0 10px;
+}
+.theme-color-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.theme-color-field input[type="color"] {
+  flex-shrink: 0;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.theme-color-field input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 1px;
+}
+.theme-color-field input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+.theme-color-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.theme-color-text.text-input {
+  flex: 0 0 74px;
+  width: 74px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.theme-color-text.invalid {
+  border-color: #e5484d;
+}
+.theme-sample {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px 12px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.theme-sample-image {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-position: center;
+}
+.theme-sample-text {
+  white-space: pre;
+  overflow: hidden;
+}
+.theme-sample-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  vertical-align: text-bottom;
+}
+.theme-sample-colors {
+  display: flex;
+  gap: 3px;
+  margin-top: 8px;
+}
+.theme-sample-colors span {
+  flex: 1;
+  height: 8px;
+  border-radius: 2px;
 }

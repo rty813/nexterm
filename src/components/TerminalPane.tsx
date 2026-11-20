@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 
 import { buildXtermTheme } from "../constants/themes";
+import { backgroundOf } from "../utils/themeCustom";
 import { backend, isTauriRuntime, type RemoteAuth, type RemoteLoginPayload } from "../services/backend";
 import { terminalBus } from "../services/terminalBus";
 import { registerMcpScreen } from "../services/mcpScreen";
@@ -372,6 +373,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const share = shareOfPane(shares, leaf.paneId);
   const shareInfo = share ? summarizeShare(share) : null;
   const scheme = resolveScheme(leaf.session.system || undefined, leaf.session.protocol);
+  // A background image is painted behind the pane (services/terminalBackground.ts).
+  const transparentBg = Boolean(backgroundOf(settings.background).file);
   const schemeRef = useRef(scheme);
   schemeRef.current = scheme;
   const themeRef = useRef(theme);
@@ -399,7 +402,9 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       fontFamily: settings.fontFamily,
       fontSize: settings.fontSize,
       scrollback: settings.scrollback,
-      theme: buildXtermTheme(theme, isRemote),
+      theme: buildXtermTheme(theme, isRemote, transparentBg),
+      // A background image shows through (settings.background); otherwise opaque for crisper text.
+      allowTransparency: transparentBg,
       convertEol: false,
       // Overview ruler drawn over the (widened) scrollbar: search hits, highlights, selection.
       overviewRulerWidth: 14,
@@ -1091,7 +1096,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
-    term.options.theme = buildXtermTheme(theme, isRemote);
+    term.options.allowTransparency = transparentBg;
+    term.options.theme = buildXtermTheme(theme, isRemote, transparentBg);
     term.options.fontFamily = settings.fontFamily;
     term.options.fontSize = settings.fontSize;
     term.options.cursorBlink = settings.cursorBlink;
@@ -1112,7 +1118,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       // ignore
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme, settings, isRemote, scheme, termOptions.altIsMeta]);
+  }, [theme, settings, isRemote, scheme, termOptions.altIsMeta, transparentBg]);
 
   // Ambiguous-width characters: applies to text written from now on (a BBS redraws on its own,
   // anything else on the next screen refresh).

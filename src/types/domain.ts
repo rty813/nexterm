@@ -219,6 +219,17 @@ export interface QuickBarSettings {
   sortAlpha?: boolean;
 }
 
+/** Terminal background image (see utils/themeCustom.ts for defaults and limits). */
+export interface TerminalBackground {
+  /** Stored file name in `<data>/backgrounds/` ("" or missing = no image). */
+  file?: string;
+  /** How strongly the image shows over the theme's background color, 0.05 - 1. */
+  opacity?: number;
+  /** Blur in px, 0 - 20. */
+  blur?: number;
+  fit?: "cover" | "contain" | "tile" | "center";
+}
+
 export interface ThemeDefinition {
   id: string;
   name: string;
@@ -300,6 +311,8 @@ export interface AppSettings {
   /** Extra characters that end a word on double-click selection. */
   wordSeparators?: string;
   alwaysOnTop?: boolean;
+  /** Image behind the terminals (kept in settings.extra on the Rust side; local, not synced). */
+  background?: TerminalBackground;
   /** Window opacity 0.2 - 1. */
   windowOpacity?: number;
   /** actionId -> key combo, e.g. "Ctrl+Shift+F"; "" disables the shortcut. */

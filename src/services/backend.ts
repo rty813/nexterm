@@ -32,6 +32,7 @@ import type {
   StorageLocationInfo,
   StorageMode,
   SystemFont,
+  ThemeDefinition,
   UpdateInfo,
 } from "../types/domain";
 import type { HistoryInfo, HistoryPage } from "../utils/historyView";
@@ -1242,6 +1243,34 @@ export const backend = {
   async onWindowEvent<T>(event: string, handler: (payload: T) => void): Promise<UnlistenFn> {
     if (!isTauriRuntime()) return () => {};
     return getCurrentWindow().listen<T>(event, (e) => handler(e.payload));
+  },
+
+  /** Replace the saved custom themes; every window reloads them (`config-applied` with "themes"). */
+  async saveCustomThemes(themes: ThemeDefinition[]): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("save_custom_themes", { themes });
+    await emit("config-applied", ["themes"]);
+  },
+
+  /** Pick an image file for the terminal background (null: cancelled). */
+  async pickImage(title: string): Promise<string | null> {
+    if (!isTauriRuntime()) return null;
+    const selected = await open({
+      title,
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }],
+    });
+    return typeof selected === "string" ? selected : null;
+  },
+
+  /** Copy an image into the data folder; returns the stored name for settings.background.file. */
+  async importBackgroundImage(path: string): Promise<string> {
+    return invoke<string>("import_background_image", { path });
+  },
+
+  async readBackgroundImage(name: string): Promise<ArrayBuffer> {
+    return invoke<ArrayBuffer>("read_background_image", { name });
   },
 
   async emitSettingsChanged(): Promise<void> {

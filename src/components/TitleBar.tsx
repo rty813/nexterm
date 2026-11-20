@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Copy, Minus, Square, X } from "lucide-react";
+import { Copy, Minus, Pin, Square, X } from "lucide-react";
 import { isTauriRuntime } from "../services/backend";
 
 /** When the user last started dragging the window by our title bar (for docking). */
@@ -11,9 +11,17 @@ const INTERACTIVE = "button, input, select, textarea, a, [role='button'], .no-dr
 
 /**
  * Our own window title bar (the native frame is off): drag to move, double-click to
- * maximize, and minimize / maximize / close buttons. `children` (the toolbar) sit in it.
+ * maximize, and pin (always on top) / minimize / maximize / close buttons. `children`
+ * (the toolbar) sit in it.
  */
-export const TitleBar: React.FC<{ title: string; children?: React.ReactNode; status?: React.ReactNode }> = ({ title, children, status }) => {
+export const TitleBar: React.FC<{
+  title: string;
+  children?: React.ReactNode;
+  status?: React.ReactNode;
+  /** Always on top (settings.alwaysOnTop); the pin button shows when onTogglePin is given. */
+  pinned?: boolean;
+  onTogglePin?: () => void;
+}> = ({ title, children, status, pinned = false, onTogglePin }) => {
   const { t } = useTranslation();
   const [maximized, setMaximized] = useState(false);
   const desktop = isTauriRuntime();
@@ -79,6 +87,17 @@ export const TitleBar: React.FC<{ title: string; children?: React.ReactNode; sta
       {status}
       {desktop && (
         <div className="titlebar-controls">
+          {onTogglePin && (
+            <button
+              type="button"
+              className={`titlebar-btn titlebar-pin ${pinned ? "active" : ""}`}
+              title={pinned ? t("titlebar.unpin") : t("titlebar.pin")}
+              aria-pressed={pinned}
+              onClick={onTogglePin}
+            >
+              <Pin size={13} fill={pinned ? "currentColor" : "none"} style={pinned ? undefined : { transform: "rotate(45deg)" }} />
+            </button>
+          )}
           <button type="button" className="titlebar-btn" title={t("titlebar.minimize")} onClick={() => withWindow((w) => w.minimize())}>
             <Minus size={14} />
           </button>

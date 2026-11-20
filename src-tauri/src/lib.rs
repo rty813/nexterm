@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod anti_idle;
 pub mod app_paths;
+pub mod background;
 pub mod charset;
 pub mod commands;
 pub mod fonts;
@@ -592,6 +593,27 @@ fn save_data_file(ctx: State<'_, AppContext>, name: String, value: serde_json::V
     let text = serde_json::to_string(&value).map_err(|e| e.to_string())?;
     std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+/// Replace the saved custom themes (the theme editor in settings).
+#[tauri::command]
+fn save_custom_themes(ctx: State<'_, AppContext>, themes: Vec<crate::models::ImportedTheme>) -> Result<(), String> {
+    let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
+    storage.save_themes(&themes).map_err(|e| e.to_string())
+}
+
+/// Copy a picked image into the data folder for the terminal background; returns its stored name.
+#[tauri::command]
+fn import_background_image(ctx: State<'_, AppContext>, path: String) -> Result<String, String> {
+    let base = ctx.storage.lock().map_err(|e| e.to_string())?.base_dir().to_path_buf();
+    crate::background::import(&base, std::path::Path::new(&path))
+}
+
+/// The stored background image as raw bytes (an ArrayBuffer in the page, not JSON).
+#[tauri::command]
+fn read_background_image(ctx: State<'_, AppContext>, name: String) -> Result<tauri::ipc::Response, String> {
+    let base = ctx.storage.lock().map_err(|e| e.to_string())?.base_dir().to_path_buf();
+    crate::background::read(&base, &name).map(tauri::ipc::Response::new)
 }
 
 /// Save terminal output (Save to file).
@@ -1815,6 +1837,9 @@ pub fn run() {
             load_data_file,
             record_session_use,
             save_data_file,
+            save_custom_themes,
+            import_background_image,
+            read_background_image,
             write_text_file,
             open_external,
             command_catalog,

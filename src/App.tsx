@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useTranslation } from "react-i18next";
 import { Download, Folder, Minimize2 } from "lucide-react";
 import { applyThemeCssVars, BUILTIN_THEMES } from "./constants/themes";
+import { applyTerminalBackground } from "./services/terminalBackground";
 import { backend, currentWindowLabel, isTauriRuntime, type RemoteAuth, type RemoteTab } from "./services/backend";
 import { actionForCombo, comboFromEvent, resolveKeymap } from "./utils/actions";
 import { terminalBus } from "./services/terminalBus";
@@ -906,6 +907,10 @@ export const App: React.FC = () => {
   useEffect(() => {
     void backend.setWindowOpacity(settings.windowOpacity ?? 1);
   }, [settings.windowOpacity]);
+  // Terminal background image (Settings > Theme).
+  useEffect(() => {
+    if (themeReady) applyTerminalBackground(settings.background);
+  }, [settings.background, themeReady]);
 
   // Other windows saving settings (shortcuts, toolbar ...) apply here too.
   useEffect(() => {
@@ -2584,7 +2589,12 @@ export const App: React.FC = () => {
     <ContextMenuProvider>
     <div className={`app-shell ${focusMode ? "focus-mode" : ""}`}>
       {isMainWindow && <PluginHost locked={locked} />}
-      <TitleBar title={windowTitle} status={isMainWindow && !locked && <PluginBadges />}>
+      <TitleBar
+        title={windowTitle}
+        status={isMainWindow && !locked && <PluginBadges />}
+        pinned={Boolean(settings.alwaysOnTop)}
+        onTogglePin={() => saveSettings({ ...settingsRef.current, alwaysOnTop: !settingsRef.current.alwaysOnTop })}
+      >
         {!focusMode && isMainWindow ? (
           <>
           <Toolbar
@@ -2908,6 +2918,11 @@ export const App: React.FC = () => {
         <SettingsModal
           settings={settings}
           themes={allThemes}
+          customThemes={customThemes}
+          onSaveThemes={async (list) => {
+            setCustomThemes(list);
+            await backend.saveCustomThemes(list);
+          }}
           initialTab={settingsTab}
           sessions={sessions}
           onAgentHooksLocal={(install) => agentHooks(null, install)}

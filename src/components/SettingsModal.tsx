@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentHooks";
 import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
-import { Globe, Keyboard, Monitor, Mouse, PanelTop, Puzzle, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
+import { Globe, Keyboard, Monitor, Mouse, Palette, PanelTop, Puzzle, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
 import type { AppSettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
 import { PluginManager } from "./StatusPlugins";
-export type SettingsTab = "general" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "triggers" | "keys" | "toolbar" | "plugins";
+export type SettingsTab = "general" | "theme" | "terminal" | "mouse" | "logs" | "xserver" | "remote" | "sync" | "triggers" | "keys" | "toolbar" | "plugins";
 import { KeymapEditor, ToolbarEditor } from "./SettingsExtra";
 import { TriggerEditor } from "./TriggerEditor";
 import { RemoteSettingsEditor } from "./SettingsRemote";
@@ -15,9 +15,11 @@ import { SyncSettingsEditor } from "./SettingsSync";
 import { useCloseGuard } from "./useCloseGuard";
 import { FontFamilyField } from "./FontFamilyField";
 import { NumberInput } from "./NumberInput";
+import { ThemeSettings } from "./SettingsTheme";
 
 const settingsSections = [
   { id: "general", icon: Settings2 },
+  { id: "theme", icon: Palette },
   { id: "terminal", icon: TerminalSquare },
   { id: "mouse", icon: Mouse },
   { id: "logs", icon: ScrollText },
@@ -33,6 +35,9 @@ const settingsSections = [
 interface SettingsModalProps {
   settings: AppSettings;
   themes: ThemeDefinition[];
+  /** The user's own themes (edited in the Theme tab). */
+  customThemes: ThemeDefinition[];
+  onSaveThemes: (list: ThemeDefinition[]) => Promise<void>;
   onClose: () => void;
   onSave: (next: AppSettings) => void;
   /** Open on a given tab (e.g. "toolbar" from the toolbar's context menu). */
@@ -52,6 +57,8 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   settings,
   themes,
+  customThemes,
+  onSaveThemes,
   onClose,
   onSave,
   initialTab = "general",
@@ -138,6 +145,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         >
           {tab === "keys" && <KeymapEditor draft={draft} onChange={setDraft} />}
           {tab === "plugins" && <PluginManager />}
+          {tab === "theme" && (
+            <ThemeSettings draft={draft} onChange={setDraft} themes={themes} customThemes={customThemes} onSaveThemes={onSaveThemes} />
+          )}
           {tab === "toolbar" && <ToolbarEditor draft={draft} onChange={setDraft} />}
           {tab === "triggers" && <TriggerEditor draft={draft} onChange={setDraft} />}
           {tab === "terminal" && <TerminalSettings draft={draft} onChange={setDraft} sessions={sessions} />}
@@ -171,19 +181,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <label className="field">
               <span>{t("settingsModal.theme")}</span>
-              <select
-                className="text-input"
-                value={draft.themeId}
-                onChange={(e) =>
-                  setDraft({ ...draft, themeId: e.target.value })
-                }
-              >
-                {themes.map((th) => (
-                  <option key={th.id} value={th.id}>
-                    {th.name}
-                  </option>
-                ))}
-              </select>
+              <div className="input-with-btn">
+                <select
+                  className="text-input"
+                  value={draft.themeId}
+                  onChange={(e) =>
+                    setDraft({ ...draft, themeId: e.target.value })
+                  }
+                >
+                  {themes.map((th) => (
+                    <option key={th.id} value={th.id}>
+                      {th.name}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setTab("theme")}>
+                  {t("themeSettings.more")}
+                </button>
+              </div>
             </label>
           </div>
 
