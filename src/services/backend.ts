@@ -943,7 +943,8 @@ export const backend = {
 
   async setAlwaysOnTop(on: boolean): Promise<void> {
     if (!isTauriRuntime()) return;
-    await getCurrentWindow().setAlwaysOnTop(on).catch(() => undefined);
+    // Through the backend: it restores the window opacity the change would drop.
+    await invoke("set_window_always_on_top", { on }).catch(() => undefined);
   },
 
   async pickFiles(title: string): Promise<string[]> {

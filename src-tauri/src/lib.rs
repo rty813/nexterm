@@ -42,6 +42,7 @@ pub mod telnet_conn;
 pub mod term_capture;
 pub mod transfer;
 pub mod update;
+pub mod window_opacity;
 pub mod http_proxy;
 pub mod xserver;
 pub mod xymodem;
@@ -195,6 +196,9 @@ fn window_color([r, g, b]: [u8; 3]) -> tauri::window::Color {
 fn set_window_background(app: AppHandle, ctx: State<'_, AppContext>, rgb: [u8; 3]) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.set_background_color(Some(window_color(rgb)));
+        // A theme change must not leave a translucent window opaque.
+        let w = win.as_ref().window();
+        let _ = win.run_on_main_thread(move || crate::window_opacity::ensure(&w));
     }
     let dir = ctx.storage.lock().map_err(|e| e.to_string())?.base_dir().to_path_buf();
     if read_window_background(&dir) == Some(rgb) {
@@ -1288,31 +1292,27 @@ fn list_charsets() -> Vec<String> {
     crate::charset::CHARSETS.iter().map(|(n, _)| n.to_string()).collect()
 }
 
-/// Whole-window opacity (0.2 - 1.0), like WindTerm's translucent window.
+/// Whole-window opacity (0.2 - 1.0), like WindTerm's translucent window. Kept per window
+/// and put back after tao resets the window's style (see `window_opacity.rs`).
 #[tauri::command]
 fn set_window_opacity(window: tauri::WebviewWindow, opacity: f64) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
-        };
-        let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
-        let alpha = (opacity.clamp(0.2, 1.0) * 255.0).round() as u8;
-        unsafe {
-            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            if alpha >= 255 {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style & !(WS_EX_LAYERED as isize));
-            } else {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED as isize);
-                SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
-            }
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (window, opacity);
-    }
-    Ok(())
+    crate::window_opacity::remember(window.label(), opacity);
+    // On the main thread, in order with tao's own window changes.
+    let win = window.as_ref().window();
+    window
+        .run_on_main_thread(move || crate::window_opacity::apply(&win))
+        .map_err(|e| e.to_string())
+}
+
+/// Always on top. Changing it makes tao rewrite the window style, which drops the
+/// opacity: put it back right after, on the main thread (queued behind the change).
+#[tauri::command]
+fn set_window_always_on_top(window: tauri::WebviewWindow, on: bool) -> Result<(), String> {
+    window.set_always_on_top(on).map_err(|e| e.to_string())?;
+    let win = window.as_ref().window();
+    window
+        .run_on_main_thread(move || crate::window_opacity::ensure(&win))
+        .map_err(|e| e.to_string())
 }
 
 /// Whether the primary mouse button is held right now. A window dragged by its title
@@ -1818,7 +1818,17 @@ pub fn run() {
                     }
                 }
             }
+            // Maximize / restore / un-minimize change tao's window flags, which resets the
+            // window style and with it the opacity.
+            // tao may send the event before it rewrites the style: check again once the
+            // main thread is done with the change.
+            WindowEvent::Resized(_) | WindowEvent::Focused(true) => {
+                crate::window_opacity::ensure(window);
+                let w = window.clone();
+                let _ = window.run_on_main_thread(move || crate::window_opacity::ensure(&w));
+            }
             WindowEvent::Destroyed => {
+                crate::window_opacity::forget(window.label());
                 crate::plugin_http::forget_window(window.label());
                 if let Ok(mut m) = locked_counts().lock() {
                     m.remove(window.label());
@@ -1912,6 +1922,7 @@ pub fn run() {
             list_charsets,
             list_system_fonts,
             set_window_opacity,
+            set_window_always_on_top,
             stash_pane_transfer,
             take_pane_transfer,
             mouse_primary_down,
