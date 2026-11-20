@@ -474,6 +474,7 @@ export const resources = {
           "超过设定秒数没有输入时自动发送一段内容，防止服务器因无操作注销（TMOUT、autologout、exec-timeout）。全屏程序（vim、top 等）运行时或命令执行中不发送。支持转义：\\0 \\n \\r \\t \\b \\e \\\\ \\xHH；留空发送 \\0（NUL，在 shell 中无可见效果）。最短 5 秒。",
         cancel: "取消",
         saveOnly: "仅保存",
+        connectOnly: "仅连接",
         saveAndConnect: "保存并立即连接",
       },
       importModal: {
@@ -1099,6 +1100,7 @@ export const resources = {
           "When nothing has been typed for this many seconds, send a string so the server does not log you out for inactivity (TMOUT, autologout, exec-timeout). Not sent while a full-screen program (vim, top ...) or a command is running. Escapes: \\0 \\n \\r \\t \\b \\e \\\\ \\xHH; empty sends \\0 (NUL, invisible in shells). Minimum 5 seconds.",
         cancel: "Cancel",
         saveOnly: "Save Only",
+        connectOnly: "Connect Only",
         saveAndConnect: "Save & Connect",
       },
       importModal: {

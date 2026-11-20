@@ -32,6 +32,8 @@ interface SessionModalProps {
   groups?: string[];
   onClose: () => void;
   onSave: (session: SessionConfig, connectNow: boolean) => void;
+  /** Connect without saving; offered only for a new session. */
+  onConnect?: (session: SessionConfig) => void;
 }
 
 function makeUuid(): string {
@@ -46,6 +48,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   groups = [],
   onClose,
   onSave,
+  onConnect,
 }) => {
   const { t } = useTranslation();
   const [newId] = useState(makeUuid);
@@ -214,7 +217,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           onSubmit={(e) => {
             e.preventDefault();
             const submitter = (e.nativeEvent as SubmitEvent).submitter as HTMLElement | null;
-            onSave(buildResult(), submitter?.dataset.connect === "1");
+            const mode = submitter?.dataset.connect;
+            if (mode === "only" && onConnect) onConnect(buildResult());
+            else onSave(buildResult(), mode === "1");
           }}
         >
           <div className="proto-picker" role="radiogroup" aria-label={t("sessionModal.protocol")}>
@@ -629,6 +634,11 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             <button type="button" className="btn-ghost" onClick={requestClose}>
               {t("sessionModal.cancel")}
             </button>
+            {onConnect && (!initial || isNew) && (
+              <button type="submit" className="btn-secondary" data-connect="only">
+                {t("sessionModal.connectOnly")}
+              </button>
+            )}
             <button type="submit" className="btn-secondary">
               {t("sessionModal.saveOnly")}
             </button>

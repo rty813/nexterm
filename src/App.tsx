@@ -2958,6 +2958,10 @@ export const App: React.FC = () => {
           groups={Array.from(new Set(sessions.map((x) => x.group).filter(Boolean))).sort()}
           onClose={() => setSessionModalState({ open: false, editing: null })}
           onSave={handleSaveSessionModal}
+          onConnect={(session) => {
+            setSessionModalState({ open: false, editing: null });
+            openSessionInNewTab(session);
+          }}
         />
       )}
 
