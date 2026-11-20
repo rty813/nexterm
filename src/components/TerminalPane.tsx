@@ -377,7 +377,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const share = shareOfPane(shares, leaf.paneId);
   const shareInfo = share ? summarizeShare(share) : null;
   const scheme = resolveScheme(leaf.session.system || undefined, leaf.session.protocol);
-  // A background image is painted behind the pane (services/terminalBackground.ts).
+  // A background image is painted once behind the whole workspace (services/terminalBackground.ts).
   const transparentBg = Boolean(backgroundOf(settings.background).file);
   const schemeRef = useRef(scheme);
   schemeRef.current = scheme;

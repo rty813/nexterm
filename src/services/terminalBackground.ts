@@ -4,7 +4,7 @@ import { backgroundCss, backgroundOf } from "../utils/themeCustom";
 
 /**
  * Terminal background image: the stored file is read once per window into a blob URL and
- * painted by `.terminal-pane::before` (styles/app.css) from CSS variables on <html>. The
+ * painted once for the whole workspace by `.group-stage::before` (styles/app.css) from CSS variables on <html>. The
  * terminals draw a transparent background while settings.background.file is set (see TerminalPane).
  */
 let loadedFile = "";

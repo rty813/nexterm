@@ -869,16 +869,22 @@ textarea {
   border: 1px solid transparent;
 }
 
-/* Background image (services/terminalBackground.ts): drawn over the theme's background
-   color and under the pane's content; the terminal itself is transparent then. */
-.has-term-bg .terminal-pane {
+/* Background image (services/terminalBackground.ts): one image for the whole workspace,
+   drawn over the theme's background color behind every group; panes and terminals are
+   transparent then, so each pane shows its part of the same picture. */
+.has-term-bg .group-stage {
+  background: var(--term-bg);
   isolation: isolate;
 }
-.has-term-bg .terminal-pane::before {
+.has-term-bg .group-stage > .split-slot,
+.has-term-bg .terminal-pane {
+  background: transparent;
+}
+.has-term-bg .group-stage::before {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: -1;
+  z-index: 0;
   pointer-events: none;
   background-image: var(--term-bg-image);
   background-size: var(--term-bg-size, cover);
@@ -3398,10 +3404,15 @@ html.ctxmenu-host #root {
   opacity: 0.55;
 }
 
-/* Alternating row colors: the parity flips with the scroll position so stripes stay with lines. */
-.xterm[data-alt-rows="0"] .xterm-rows > div:nth-child(even),
-.xterm[data-alt-rows="1"] .xterm-rows > div:nth-child(odd) {
-  background-color: var(--alt-row-bg);
+/* Alternating row colors (utils/screenOverlay.ts): a translucent striped layer over the
+   screen; the script sets the stripe period (two rows) and shifts it with the scroll position. */
+.xterm-alt-rows {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background-image: linear-gradient(to bottom, transparent 50%, var(--alt-row-bg) 50%);
+  background-repeat: repeat-y;
 }
 .xterm-ws-overlay {
   position: absolute;

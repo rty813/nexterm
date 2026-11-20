@@ -23,13 +23,15 @@ export function mixColor(bg: string, fg: string, amount: number): string {
 
 /**
  * WindTerm display details drawn over xterm's DOM renderer:
- * - alternating row colors: CSS on the row elements, flipped with the scroll position
- *   so the stripes stay with their lines;
+ * - alternating row colors: a translucent striped layer over the screen (the WebGL
+ *   renderer has no row elements to style), shifted with the scroll position so the
+ *   stripes stay with their lines;
  * - visible whitespace: a canvas over the screen with a dot on every space written by
  *   the program (erased cells stay blank, as in WindTerm).
  */
 export class ScreenOverlay implements IDisposable {
   private canvas: HTMLCanvasElement | null = null;
+  private stripes: HTMLDivElement | null = null;
   private frame = 0;
   private readonly subs: IDisposable[];
 
@@ -57,13 +59,19 @@ export class ScreenOverlay implements IDisposable {
     this.subs.forEach((s) => s.dispose());
     this.canvas?.remove();
     this.canvas = null;
-    this.term.element?.removeAttribute("data-alt-rows");
+    this.stripes?.remove();
+    this.stripes = null;
   }
 
   private apply(): void {
     const el = this.term.element;
     if (!el) return;
-    el.style.setProperty("--alt-row-bg", mixColor(this.opts.bg, this.opts.fg, 0.045));
+    // Translucent, so it also works over a background image.
+    el.style.setProperty("--alt-row-bg", `color-mix(in srgb, ${this.opts.fg} 4.5%, transparent)`);
+    if (!this.opts.alternateRows) {
+      this.stripes?.remove();
+      this.stripes = null;
+    }
     if (this.opts.whitespace === "none") {
       this.canvas?.remove();
       this.canvas = null;
@@ -80,16 +88,29 @@ export class ScreenOverlay implements IDisposable {
     });
   }
 
+  /** Every other buffer line tinted: odd absolute lines, so the stripes move with scrolling. */
+  private paintStripes(screen: HTMLElement, viewportY: number): void {
+    if (!this.stripes || this.stripes.parentElement !== screen) {
+      this.stripes?.remove();
+      this.stripes = document.createElement("div");
+      this.stripes.className = "xterm-alt-rows";
+      screen.appendChild(this.stripes);
+    }
+    const rowHeight = screen.clientHeight / Math.max(1, this.term.rows);
+    const s = this.stripes.style;
+    s.backgroundSize = `100% ${rowHeight * 2}px`;
+    s.backgroundPositionY = viewportY % 2 ? `${-rowHeight}px` : "0px";
+  }
+
   private paint(): void {
     const el = this.term.element;
     if (!el) return;
     const buf = this.term.buffer.active;
-    if (this.opts.alternateRows) el.setAttribute("data-alt-rows", String(buf.viewportY % 2));
-    else el.removeAttribute("data-alt-rows");
-
-    if (this.opts.whitespace === "none") return;
     const screen = el.querySelector(".xterm-screen") as HTMLElement | null;
     if (!screen) return;
+    if (this.opts.alternateRows) this.paintStripes(screen, buf.viewportY);
+
+    if (this.opts.whitespace === "none") return;
     if (!this.canvas) {
       this.canvas = document.createElement("canvas");
       this.canvas.className = "xterm-ws-overlay";
