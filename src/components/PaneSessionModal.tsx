@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import type { TerminalLeafNode } from "../types/domain";
 import { tabTitle } from "../utils/layout";
-import type { PaneSessionEdits } from "../utils/paneSession";
+import { hasSavedPassword, type PaneSessionEdits } from "../utils/paneSession";
 import { initialAdvanced, SessionAdvanced } from "./SessionAdvanced";
 import { useCloseGuard } from "./useCloseGuard";
 
@@ -70,7 +70,7 @@ export function PaneSessionModal({ leaf, isSaved, groups, onClose, onApply }: Pa
           </label>
           <SessionAdvanced protocol={leaf.session.protocol} value={draft.advanced} onChange={(advanced) => setDraft({ ...draft, advanced })} terminalOnly />
           <p className="adv-hint">{t("sessionForm.reconnectHint")}</p>
-          {!isSaved && leaf.session.authType === "password" && leaf.session.password && !leaf.session.credentialHandoff && (
+          {!isSaved && leaf.session.authType === "password" && hasSavedPassword(leaf.session) && !leaf.session.credentialHandoff && (
             <label className="checkbox-row"><input type="checkbox" checked={rememberPassword} onChange={(event) => setRememberPassword(event.target.checked)} />{t("pane.rememberPwd")}</label>
           )}
           {error && <p role="alert">{t("storageLoc.failed", { error })}</p>}

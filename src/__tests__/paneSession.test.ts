@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_TERMINAL_OPTIONS, type SessionConfig, type TerminalLeafNode } from "../types/domain";
-import { applyPaneSessionEdits, savePaneProfile, type PaneSessionEdits } from "../utils/paneSession";
+import { applyPaneSessionEdits, hasSavedPassword, savePaneProfile, type PaneSessionEdits } from "../utils/paneSession";
 import { parseQuickConnectInput } from "../utils/quickConnect";
 import { snapshotWorkspace } from "../utils/workspaceSnapshot";
 
@@ -53,5 +53,14 @@ describe("settings for an open session", () => {
     expect(handoff).not.toHaveProperty("credentialHandoff");
     expect(JSON.stringify(handoff)).not.toContain("secret");
     expect(live.jumpHost?.passphrase).toBe("secret-phrase");
+  });
+});
+
+describe("hasSavedPassword", () => {
+  it("counts a blank password as saved", () => {
+    expect(hasSavedPassword({ password: "" })).toBe(true);
+    expect(hasSavedPassword({ password: "x" })).toBe(true);
+    expect(hasSavedPassword({})).toBe(false);
+    expect(hasSavedPassword({ password: undefined })).toBe(false);
   });
 });

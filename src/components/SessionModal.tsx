@@ -159,7 +159,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       port: protocol === "serial" ? 0 : Number(port) || (protocol === "ssh" ? 22 : 0),
       username: username.trim(),
       authType: protocol === "ssh" ? authType : "none",
-      password: password || undefined,
+      password: password || (initial?.password === "" ? "" : undefined),
       privateKeyPath: privateKeyPath.trim() || undefined,
       passphrase: passphrase || undefined,
       jumpHost: jumpCfg,

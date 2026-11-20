@@ -103,6 +103,7 @@ function translateInput(data: string, o: TerminalOptions): string {
   return out;
 }
 import { sessionTargetSummary } from "../utils/sessionSummary";
+import { hasSavedPassword } from "../utils/paneSession";
 
 /** Workspace-level state and actions every pane needs (menus, logging, sync input). */
 export interface PaneExtras {
@@ -323,7 +324,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const needsUsername = isSsh && !leaf.session.username.trim();
   const usesPassword = isSsh && leaf.session.authType === "password";
   const needsInitialPassword =
-    needsUsername || (usesPassword && !leaf.session.password && !leaf.session.credentialHandoff);
+    needsUsername || (usesPassword && !hasSavedPassword(leaf.session) && !leaf.session.credentialHandoff);
 
   const [awaitingPassword, setAwaitingPassword] =
     useState<boolean>(needsInitialPassword);

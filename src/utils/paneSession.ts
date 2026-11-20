@@ -2,6 +2,11 @@ import type { SessionConfig, TerminalLeafNode } from "../types/domain";
 
 export type PaneSessionEdits = Pick<SessionConfig, "label" | "group" | "term" | "charset" | "system" | "termOptions" | "tabColor">;
 
+/** A saved password, including an empty one (servers that accept a blank password). `undefined`/`null` = not saved. */
+export function hasSavedPassword(session: Pick<SessionConfig, "password">): boolean {
+  return typeof session.password === "string";
+}
+
 export function withoutSessionSecrets(session: SessionConfig): SessionConfig {
   const { password, passphrase, credentialHandoff, ...config } = session;
   if (config.jumpHost) config.jumpHost = { ...config.jumpHost, password: undefined, passphrase: undefined };

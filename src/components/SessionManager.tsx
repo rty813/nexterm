@@ -17,6 +17,7 @@ import { sessionTargetSummary } from "../utils/sessionSummary";
 import { compactMenu, useContextMenu } from "./ContextMenu";
 import { ProtocolBadge } from "./ProtocolBadge";
 import { SessionModal } from "./SessionModal";
+import { hasSavedPassword } from "../utils/paneSession";
 
 type SortKey = "label" | "group" | "protocol" | "target";
 
@@ -418,7 +419,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
                   {s.protocol === "ssh"
                     ? s.authType === "privatekey"
                       ? t("manager.authKey")
-                      : s.password
+                      : hasSavedPassword(s)
                       ? t("manager.authSavedPwd")
                       : t("manager.authPwd")
                     : "—"}

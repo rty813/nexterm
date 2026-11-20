@@ -55,7 +55,7 @@ import { quickPayload } from "./utils/quickCommands";
 import { syncTargets } from "./utils/syncInput";
 import { SessionModal } from "./components/SessionModal";
 import { PaneSessionModal } from "./components/PaneSessionModal";
-import { applyPaneSessionEdits, savePaneProfile } from "./utils/paneSession";
+import { applyPaneSessionEdits, hasSavedPassword, savePaneProfile } from "./utils/paneSession";
 import { SessionManager } from "./components/SessionManager";
 import { ImportModal } from "./components/ImportModal";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
@@ -1942,7 +1942,7 @@ export const App: React.FC = () => {
     const pane = openSessionInNewTab(session);
     // Same rule as the pane's own login prompt: no connection until the user types these.
     const needsLogin =
-      session.protocol === "ssh" && (!session.username.trim() || (session.authType === "password" && !session.password));
+      session.protocol === "ssh" && (!session.username.trim() || (session.authType === "password" && !hasSavedPassword(session)));
     void backend.mcpOpenRespond(req.requestId, { accept: true, pane, needsLogin, title: session.label });
   };
 
