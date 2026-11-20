@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentHooks";
 import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
-import { Globe, Keyboard, Monitor, Mouse, Palette, PanelTop, Puzzle, RefreshCw, ScrollText, Settings2, TerminalSquare, X, Zap } from "lucide-react";
+import { Globe, Keyboard, Monitor, Mouse, Palette, PanelTop, Puzzle, RefreshCw, ScrollText, Search, Settings2, TerminalSquare, X, Zap } from "lucide-react";
+import { findSettingElement, searchSettings, type SettingsSearchHit } from "../utils/settingsSearch";
 import type { AppSettings, HttpProxyMode, HttpProxySettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
@@ -89,7 +90,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     navigation.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
     if (content.current) content.current.scrollTop = 0;
   }, [tab]);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+
+  // Option search: the results replace the tab list while there is a query.
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [activeHit, setActiveHit] = useState(0);
+  const [jump, setJump] = useState<{ tab: SettingsTab; label: string; seq: number } | null>(null);
+  const hits = useMemo(() => {
+    const languages = [i18n.language, ...["zh-CN", "en-US"].filter((l) => l !== i18n.language)];
+    const fixed = languages.map((l) => i18n.getFixedT(l));
+    return searchSettings(query, (key) => fixed.map((tl) => String(tl(key))), settingsSections.map((s) => s.id));
+  }, [query, i18n, i18n.language]);
+  useEffect(() => setActiveHit(0), [query]);
+  const openHit = (hit: SettingsSearchHit, index: number) => {
+    setActiveHit(index);
+    setTab(hit.tab);
+    setJump(hit.isTab ? null : { tab: hit.tab, label: hit.label, seq: Date.now() });
+  };
+  // Scroll to the chosen option and flash it once its tab has rendered.
+  useEffect(() => {
+    if (!jump || jump.tab !== tab || !content.current) return;
+    const root = content.current;
+    let frame = 0;
+    let tries = 0;
+    const find = () => {
+      const el = findSettingElement(root, jump.label);
+      if (!el) {
+        // Some tabs fill in after loading; give them a few frames.
+        if (++tries < 20) frame = requestAnimationFrame(find);
+        return;
+      }
+      el.scrollIntoView({ block: "center" });
+      el.classList.remove("settings-flash");
+      void el.offsetWidth;
+      el.classList.add("settings-flash");
+      el.addEventListener("animationend", () => el.classList.remove("settings-flash"), { once: true });
+    };
+    frame = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(frame);
+  }, [jump, tab]);
+
   const [draft, setDraft] = useState<AppSettings>({
     ...settings,
     language: settings.language || "zh-CN",
@@ -99,7 +140,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return (
     <div className="modal-backdrop" onMouseDown={requestClose}>
-      <div className="modal-panel modal-lg settings-panel" role="dialog" aria-modal="true" aria-labelledby={`${settingsId}-title`} onMouseDown={(e) => e.stopPropagation()}>
+      <div className="modal-panel modal-lg settings-panel" role="dialog" aria-modal="true" aria-labelledby={`${settingsId}-title`} onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          e.stopPropagation();
+          searchInput.current?.focus();
+          searchInput.current?.select();
+        }
+      }}>
         <div className="modal-header">
           <h3 id={`${settingsId}-title`}>{t("settingsModal.title")}</h3>
           <button type="button" className="icon-btn" aria-label={t("settingsModal.cancel")} onClick={requestClose}>
@@ -109,6 +157,68 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {prompt}
 
         <div className="settings-layout">
+        <div className="settings-nav">
+        <div className="settings-search">
+          <Search size={14} aria-hidden="true" />
+          <input
+            ref={searchInput}
+            type="search"
+            className="text-input"
+            value={query}
+            placeholder={t("settingsSearch.placeholder")}
+            aria-label={t("settingsSearch.placeholder")}
+            aria-controls={`${settingsId}-results`}
+            spellCheck={false}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && query) {
+                e.preventDefault();
+                setQuery("");
+              } else if (hits.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                e.preventDefault();
+                const step = e.key === "ArrowDown" ? 1 : hits.length - 1;
+                const next = (activeHit + step) % hits.length;
+                setActiveHit(next);
+                document.getElementById(`${settingsId}-hit-${next}`)?.scrollIntoView({ block: "nearest" });
+              } else if (e.key === "Enter" && hits[activeHit]) {
+                e.preventDefault();
+                openHit(hits[activeHit], activeHit);
+              }
+            }}
+          />
+          {query && (
+            <button type="button" className="icon-btn" aria-label={t("settingsSearch.clear")} onClick={() => { setQuery(""); searchInput.current?.focus(); }}>
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        {query.trim() ? (
+          <div id={`${settingsId}-results`} className="settings-search-results" role="listbox" aria-label={t("settingsSearch.results")}>
+            {hits.length === 0 && <p className="settings-search-empty">{t("settingsSearch.noResults")}</p>}
+            {hits.map((hit, i) => {
+              const Icon = settingsSections.find((s) => s.id === hit.tab)?.icon ?? Settings2;
+              return (
+                <button
+                  key={`${hit.tab}:${hit.key}`}
+                  id={`${settingsId}-hit-${i}`}
+                  type="button"
+                  role="option"
+                  aria-selected={i === activeHit}
+                  tabIndex={-1}
+                  className={`settings-search-hit ${i === activeHit ? "active" : ""}`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => openHit(hit, i)}
+                >
+                  <Icon size={14} aria-hidden="true" />
+                  <span className="settings-search-hit-text">
+                    <span className="settings-search-hit-label">{hit.label}</span>
+                    {!hit.isTab && <span className="settings-search-hit-tab">{t(`settingsModal.tab.${hit.tab}`)}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
         <div ref={navigation} className="adv-tabs settings-tabs" role="tablist" aria-label={t("settingsModal.title")} aria-orientation="vertical" onKeyDown={(event) => {
           if (event.altKey || event.ctrlKey || event.metaKey) return;
           const currentIndex = settingsSections.findIndex(section => section.id === tab);
@@ -132,6 +242,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </span>
             </button>
           ))}
+        </div>
+        )}
         </div>
 
         <form

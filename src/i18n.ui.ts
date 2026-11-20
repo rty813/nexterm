@@ -5,6 +5,7 @@
 export const uiResources = {
   "zh-CN": {
     settingsModal: { tab: { theme: "主题" } },
+    settingsSearch: { placeholder: "搜索设置 (Ctrl+F)", clear: "清除搜索", results: "搜索结果", noResults: "没有匹配的设置" },
     titlebar: { pin: "窗口置顶", unpin: "取消置顶" },
     themeSettings: {
       more: "更多…",
@@ -411,6 +412,7 @@ export const uiResources = {
   },
   "en-US": {
     settingsModal: { tab: { theme: "Theme" } },
+    settingsSearch: { placeholder: "Search settings (Ctrl+F)", clear: "Clear search", results: "Search results", noResults: "No matching settings" },
     titlebar: { pin: "Always on Top", unpin: "Unpin from Top" },
     themeSettings: {
       more: "More…",
