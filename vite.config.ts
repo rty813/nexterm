@@ -23,7 +23,7 @@ function xtermWebglPatch(): Plugin {
 }
 
 const xtermWebglEsbuildPatch = {
-  name: "nexterm-xterm-webgl-patch-v1",
+  name: "nexterm-xterm-webgl-patch-v2",
   setup(build: { onLoad: (o: { filter: RegExp }, cb: (a: { path: string }) => Promise<{ contents: string; loader: "js" }>) => void }) {
     build.onLoad({ filter: WEBGL_ADDON_FILE }, async ({ path }) => ({
       contents: patchWebglAddon(await readFile(path, "utf8")),

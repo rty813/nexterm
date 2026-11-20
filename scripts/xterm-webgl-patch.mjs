@@ -22,6 +22,9 @@
 // rebuilt instead. (PR #6042 is covered by the per-renderer merge generation below; 0.18.0
 // has no oversized-glyph page, so that part of #6043 does not apply.)
 //
+// Also fixes (Nexterm only, see the last section of REPLACEMENTS) default-background cells
+// with underline / dim / italic drawing opaque black over a background image.
+//
 // Differences from upstream: upstream resets the atlas' `_requestClearModel` flag in
 // beginFrame(), but the atlas is shared between terminals with the same font settings, so
 // whichever pane rendered first would swallow the flag. Here each renderer remembers the
@@ -115,6 +118,18 @@ const REPLACEMENTS = [
     name: "close the merge branch",
     from: "this._onAddTextureAtlasCanvas.fire(n.canvas)}const e=new v(this._document,this._textureSize);",
     to: "this._onAddTextureAtlasCanvas.fire(n.canvas)}}const e=new v(this._document,this._textureSize);",
+  },
+  // --- Nexterm fix (not upstream): translucent theme background. ---
+  {
+    // Underline (extended attributes), dim and italic are flag bits stored in a cell's bg
+    // word, so such cells get a background rectangle even with the default background. Its
+    // alpha was hard-coded to 1: with a transparent theme background (a background image,
+    // allowTransparency) those cells became opaque black blocks (fish underlines valid
+    // paths, codex uses dim). Keep alpha 1 for an explicit or inverse background; otherwise
+    // use the theme background's own alpha. Still present in addon-webgl 0.19.0.
+    name: "default background keeps the theme alpha",
+    from: "g=(l>>8&255)/255,v=1,this._addRectangle(e.attributes,t,c,d,(o-r)",
+    to: "g=(l>>8&255)/255,v=67108864&i||50331648&s?1:(255&this._themeService.colors.background.rgba)/255,this._addRectangle(e.attributes,t,c,d,(o-r)",
   },
   {
     // Defensive backstop: never index past the renderer's texture units.
