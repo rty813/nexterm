@@ -166,10 +166,20 @@ export const App: React.FC = () => {
   const [ws, setWs] = useState<WorkspaceState>({ root: null, activeGroupId: null });
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
-  const { ui, setSidebarOpen, setSidebarWidth, setQuickBarOpen, setSidebarRecentOpen } = usePersistentUiState(
-    currentWindowLabel() === "main"
-  );
-  const { sidebarOpen, sidebarWidth } = ui;
+  const {
+    ui,
+    setSidebarOpen,
+    setSidebarWidth,
+    setQuickBarOpen,
+    setSidebarRecentOpen,
+    setSenderOpen,
+    setHistoryOpen,
+    setFilesOpen,
+    setMonitorOpen,
+    setPortForwardOpen,
+    setTmuxOpen,
+  } = usePersistentUiState(currentWindowLabel() === "main");
+  const { sidebarOpen, sidebarWidth, senderOpen, historyOpen, filesOpen, monitorOpen, portForwardOpen, tmuxOpen } = ui;
   // With no quick commands the bar stays out of the way, unless asked for (to add one).
   const [quickBarAsked, setQuickBarAsked] = useState(false);
   const quickBarOpen = ui.quickBarOpen && (quickCommands.length > 0 || quickBarAsked);
@@ -192,8 +202,6 @@ export const App: React.FC = () => {
   const [toast, setToast] = useState<string | null>(null);
   /** Update download in progress. */
   const [updateProgress, setUpdateProgress] = useState<{ version: string; progress: UpdateProgress } | null>(null);
-  const [portForwardOpen, setPortForwardOpen] = useState(false);
-  const [monitorOpen, setMonitorOpen] = useState(false);
   /** Pane the forwarding panel was opened for (pane menu); falls back to the active pane. */
   const [forwardPaneId, setForwardPaneId] = useState<string | null>(null);
 
@@ -233,14 +241,12 @@ export const App: React.FC = () => {
     []
   );
   const [pasteRequest, setPasteRequest] = useState<{ text: string; paste: (text: string) => void } | null>(null);
-  const [senderOpen, setSenderOpen] = useState(false);
+  // Panel open flags (sender, history, files, monitor, port forwarding, tmux) live in `ui`
+  // so they are restored on the next start.
   const [senderPaneId, setSenderPaneId] = useState<string | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  /** SFTP file browser, the pane it was opened on, and the open file previews. */
-  const [filesOpen, setFilesOpen] = useState(false);
+  /** SFTP file browser: the pane it was opened on, and the open file previews. */
   const [filesPaneId, setFilesPaneId] = useState<string | null>(null);
-  /** tmux sessions panel, and the pane it was opened on from the pane menu. */
-  const [tmuxOpen, setTmuxOpen] = useState(false);
+  /** tmux sessions panel: the pane it was opened on from the pane menu. */
   const [tmuxPaneId, setTmuxPaneId] = useState<string | null>(null);
   const [previews, setPreviews] = useState<PreviewRequest[]>([]);
   const [senders, setSenders] = useState<SenderItem[]>([]);

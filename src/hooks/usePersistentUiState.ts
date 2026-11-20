@@ -7,28 +7,54 @@ export interface UiState {
   quickBarOpen: boolean;
   /** Collapsed sidebar sections ("recent", ...). */
   sidebarRecentOpen: boolean;
+  /** Side panels left open at exit, reopened on the next start. */
+  senderOpen: boolean;
+  historyOpen: boolean;
+  filesOpen: boolean;
+  monitorOpen: boolean;
+  portForwardOpen: boolean;
+  tmuxOpen: boolean;
 }
 
-const DEFAULTS: UiState = { sidebarOpen: true, sidebarWidth: 268, quickBarOpen: true, sidebarRecentOpen: true };
+export const UI_DEFAULTS: UiState = {
+  sidebarOpen: true,
+  sidebarWidth: 268,
+  quickBarOpen: true,
+  sidebarRecentOpen: true,
+  senderOpen: false,
+  historyOpen: false,
+  filesOpen: false,
+  monitorOpen: false,
+  portForwardOpen: false,
+  tmuxOpen: false,
+};
+
+/** Merges saved ui_state.json over the current state, keeping only well-typed values. */
+export function mergeUiState(cur: UiState, saved: unknown): UiState {
+  if (!saved || typeof saved !== "object") return cur;
+  const src = saved as Record<string, unknown>;
+  const next = { ...cur };
+  for (const key of Object.keys(UI_DEFAULTS) as (keyof UiState)[]) {
+    if (key === "sidebarWidth") continue;
+    if (typeof src[key] === "boolean") (next as Record<string, unknown>)[key] = src[key];
+  }
+  const width = Number(src.sidebarWidth);
+  if (Number.isFinite(width) && width > 0) next.sidebarWidth = Math.min(480, Math.max(190, width));
+  return next;
+}
 
 /**
- * Layout chrome the user arranged (sidebar open / width, quick bar ...), kept in
+ * Layout chrome the user arranged (sidebar open / width, quick bar, side panels ...), kept in
  * ui_state.json. Only the main window persists it; other windows start from defaults.
  */
 export function usePersistentUiState(persist: boolean) {
-  const [ui, setUi] = useState<UiState>(DEFAULTS);
+  const [ui, setUi] = useState<UiState>(UI_DEFAULTS);
   const loaded = useRef(!persist);
 
   useEffect(() => {
     if (!persist) return;
     void backend.loadDataFile<Partial<UiState>>("ui_state").then((saved) => {
-      if (saved && typeof saved === "object") {
-        setUi((cur) => ({
-          ...cur,
-          ...saved,
-          sidebarWidth: Math.min(480, Math.max(190, Number(saved.sidebarWidth) || cur.sidebarWidth)),
-        }));
-      }
+      setUi((cur) => mergeUiState(cur, saved));
       loaded.current = true;
     });
   }, [persist]);
@@ -51,5 +77,11 @@ export function usePersistentUiState(persist: boolean) {
     setSidebarWidth: set("sidebarWidth"),
     setQuickBarOpen: set("quickBarOpen"),
     setSidebarRecentOpen: set("sidebarRecentOpen"),
+    setSenderOpen: set("senderOpen"),
+    setHistoryOpen: set("historyOpen"),
+    setFilesOpen: set("filesOpen"),
+    setMonitorOpen: set("monitorOpen"),
+    setPortForwardOpen: set("portForwardOpen"),
+    setTmuxOpen: set("tmuxOpen"),
   };
 }
