@@ -41,7 +41,7 @@ Windows 10 / 11 only. Current version: `0.1.9`.
 
 ### Windows & Input
 
-- **Splits & Multi-Window**: Searchable nested session tree; arbitrary nested split panes, drag-to-rearrange, and tear-off tabs into separate windows. Drag a session from the sidebar onto the terminals to open it there: drop it on a pane's edge to split, or in the middle to add a tab.
+- **Splits & Multi-Window**: Searchable nested session tree; arbitrary nested split panes, drag-to-rearrange, and tear-off tabs into separate windows. Drag a session from the sidebar onto the terminals to open it there: drop it on a pane's edge to split, or in the middle to add a tab. The button left of the split buttons on the tab bar opens a menu of saved sessions, grouped as in the sidebar, to open one as a new tab in that pane group. The pin at the top right of the title bar keeps the window on top.
 - **Fast Input**: **Broadcast input** (to current tab panes or all tabs), timed multi-session Sender (text or **hex bytes**), Command Palette, grouped Quick Commands, and **history/dictionary auto-completion**.
 - **Quick-Connect Bar**: Connect instantly with `ssh user@host:22`, `ssh -p 2222 -i key user@host`, `powershell`, or `wsl`. Right-click the tab or terminal and choose **Session settings and save…** to adjust just that tab or save it to the session list without disconnecting.
 - **Command Alerts & Readability**: One-shot **"Notify When Command Finishes"** alerts (with duration and exit code), output folding, highlight rules, Focus Mode (`F11`), and workspace lock.
@@ -50,7 +50,7 @@ Windows 10 / 11 only. Current version: `0.1.9`.
 
 Open **Settings → Plugins** and choose a local `.nexterm-plugin` file. The installer shows when it is reading and validating the package, then lets you review the plugin's name and permissions before authorizing installation. To update, select a package with the same ID and approve the replacement. From the plugin list you can enable, disable, reload, reorder or uninstall plugins, hide individual entries, and open a plugin's settings dialog using the gear on its row.
 
-The platform is available in the current source tree. If your installed version has no Plugins entry, [build Nexterm from source](#building). Only local Nexterm packages are supported, not VS Code `.vsix` files. Plugins and their settings are not included in cloud sync. **Install only plugins you trust**: the permission checks are not an audited sandbox for hostile code.
+The platform is available in the current source tree. If your installed version has no Plugins entry, [build Nexterm from source](#building). Plugins can also come from a plugin store: paste the store's address on the **Store** tab; packages are verified against the key the store declared when you added it, and Nexterm offers updates at startup ([publishing a store, Chinese](docs/plugin-store.zh-CN.md)). VS Code `.vsix` files are not supported. Plugins, their settings and stores can be included in [config sync](#config-sync--backup); the secrets plugins keep in Windows Credential Manager are a separate category, off by default. **Install only plugins you trust**: the permission checks are not an audited sandbox for hostile code.
 
 **Build your first plugin: the Hello counter**
 
@@ -119,16 +119,17 @@ Patterns recognized in terminal output, like WindTerm's triggers. Every match on
 
 ### Config Sync & Backup
 
-- **Cloud Sync Across PCs**: Under **Settings → Sync & Backup**, sync sessions, quick commands, custom themes, settings, senders, and command history to **S3-compatible storage** (AWS S3, Cloudflare R2, MinIO, Aliyun OSS, Tencent COS, ...), **WebDAV** (Nextcloud, Synology, Jianguoyun, ...), a **GitHub Gist** (secret, with revision history), or a **local / network folder** (OneDrive, Dropbox, SMB shares, ...). Optional auto sync at startup and on an interval.
-- **Conflict Handling & Machine-Local Settings**: Detects whether to upload or download; when both sides changed, choose to merge (by ID), keep local, or keep remote. Each PC keeps its own sync target, log folder, X server, and remote access on/off and read-only switches; the relay address and token are synced.
+- **Cloud Sync Across PCs**: Under **Settings → Sync & Backup**, sync sessions, quick commands, custom themes, settings, senders, command history and plugins (optionally also the passwords and tokens plugins keep in Windows Credential Manager) to **S3-compatible storage** (AWS S3, Cloudflare R2, MinIO, Aliyun OSS, Tencent COS, ...), **WebDAV** (Nextcloud, Synology, Jianguoyun, ...), a **GitHub Gist** (secret, with revision history), or a **local / network folder** (OneDrive, Dropbox, SMB shares, ...). Optional auto sync at startup and on an interval.
+- **Conflict Handling & Machine-Local Settings**: Detects whether to upload or download; when both sides changed, choose to merge (by ID), keep local, or keep remote. Each PC keeps its own sync target, log folder, X server, terminal background image, network proxy, and remote access on/off and read-only switches; the relay address and token are synced.
 - **Encrypted Export / Import**: Export selected categories to a single JSON file, optionally password-protected (PBKDF2 + AES-256-GCM), and import by merging or replacing. The current config is backed up to `backups/` in the data folder before every import or download (last 10 kept).
 
 ### Other
 
 - **Server Resources**: For SSH sessions on Linux servers, the **Server Resources** panel (from **More** or the command palette; it can also be added to the toolbar) shows CPU, memory and swap, load, network rates per interface, disk usage and uptime. It uses the session's existing connection, so no extra login is needed. Other systems show "not supported".
 - **Easy Migration**: Import sessions, quick commands, and color schemes from **WindTerm**, hosts from `~/.ssh/config`, and sessions from **Xshell** (the `Sessions` folder, found automatically, or `.xsh` / exported `.xts` files) and **MobaXterm** (`MobaXterm.ini` or exported `.mxtsessions`). Folders become session groups; SSH, Telnet, serial and local shell sessions are imported, other types (RDP, VNC, FTP …) are skipped and counted. Saved passwords are not imported: enter them on first connect.
-- **Customization**: 4 built-in themes + custom themes, configurable shortcuts and toolbar, in English and Simplified Chinese.
-- **Update Check**: Checks GitHub for a newer release at startup and offers to open its download page (or skip that version). Turn it off or check by hand under **Settings → General**.
+- **Customization**: 20 built-in themes (including Dracula, One Dark / Light, Nord, Solarized, Gruvbox, Tokyo Night, Catppuccin, Rosé Pine, Monokai, GitHub and Synthwave), picked from cards under **Settings → Theme**, where you can also create, edit and delete custom themes based on any of them (interface, terminal and ANSI 16 colors). An optional terminal background image (PNG, JPG, GIF, WebP or BMP) has adjustable strength, blur and fit, and stays on this PC. Configurable shortcuts and toolbar, in English and Simplified Chinese.
+- **Updates**: Checks GitHub for a newer release at startup (or skip that version). **Update now** downloads it in the background with a progress card, checks its size and SHA-256, then restarts into the new version, whether Nexterm was installed with the setup, the MSI or runs as the portable `nexterm.exe`. Turn the check off or check by hand under **Settings → General**.
+- **Network Proxy**: Nexterm's own requests (update check and download, config sync, plugins) use the system proxy by default (Windows proxy settings, or `HTTPS_PROXY` and similar variables). Under **Settings → General** you can switch to a direct connection or a custom `http://`, `https://` or `socks5://` proxy and test it. Terminal connections use their per-session proxy instead.
 
 ## Performance
 
