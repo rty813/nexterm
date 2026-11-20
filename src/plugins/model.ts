@@ -125,6 +125,12 @@ export function sessionChoices(value: unknown): PluginSessionChoice[] {
   });
 }
 export const sessionSourceKey = (pluginId: string, sourceId: string, itemId?: string) => `plugin:${pluginId}:${sourceId}${itemId === undefined ? "" : ":" + encodeURIComponent(itemId)}`;
+/** Which plugin session item (and account) a temporary SSH tab was opened from; kept with the tab between runs. */
+export interface PluginSessionOrigin { pluginId: string; sourceId: string; itemId: string; choiceId?: string }
+export function pluginSessionOrigin(value: unknown): PluginSessionOrigin | undefined {
+  if (!isRecord(value) || !boundedText(value.pluginId, 200) || !boundedText(value.sourceId, 200) || !boundedText(value.itemId, 200) || (value.choiceId !== undefined && !boundedText(value.choiceId, 200))) return undefined;
+  return {pluginId: value.pluginId, sourceId: value.sourceId, itemId: value.itemId, ...(value.choiceId !== undefined ? {choiceId: value.choiceId} : {})};
+}
 
 export function temporarySsh(value: unknown): SessionConfig {
   if (!isRecord(value) || !text(value.host) || !/^[a-zA-Z0-9.:-]+$/.test(value.host) || !text(value.username) || /[\r\n\0]/.test(value.username) || !Number.isInteger(value.port) || Number(value.port) < 1 || Number(value.port) > 65535 || !text(value.label) || (value.passwordKey !== undefined && !identifier(value.passwordKey))) throw new Error("Invalid SSH connection parameters");

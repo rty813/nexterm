@@ -1,15 +1,18 @@
 import type { LayoutNode, PaneGroup, SessionConfig, SplitDirection, TerminalLeafNode, WorkspaceState } from "../types/domain";
 import { withoutSessionSecrets } from "./paneSession";
+import { pluginSessionOrigin, type PluginSessionOrigin } from "../plugins/model";
 
 /**
  * The workspace as saved between runs: split tree, tab order, active tabs, tab titles,
  * colors and locks. Saved sessions are stored by id (their secrets stay in
  * sessions.json); ad-hoc tabs (quick shells, quick connect) keep their config without
- * passwords.
+ * passwords. A tab a plugin opened also keeps which plugin item it came from, so it can get
+ * its credentials from the plugin again instead of asking for a password.
  */
 export interface TabSnapshot {
   sessionId?: string;
   session?: SessionConfig;
+  plugin?: PluginSessionOrigin;
   title?: string;
   color?: string | null;
   locked?: boolean;
@@ -26,15 +29,17 @@ export interface WorkspaceSnapshot {
   activeGroup: number;
 }
 
-function tabOf(leaf: TerminalLeafNode, saved: Set<string>): TabSnapshot {
+function tabOf(leaf: TerminalLeafNode, saved: Set<string>, pluginOrigin?: (sessionId: string) => PluginSessionOrigin | undefined): TabSnapshot {
   const tab: TabSnapshot = saved.has(leaf.session.id) ? { sessionId: leaf.session.id } : { session: withoutSessionSecrets(leaf.session) };
+  const plugin = tab.session && leaf.session.credentialHandoff ? pluginOrigin?.(leaf.session.id) : undefined;
+  if (plugin) tab.plugin = plugin;
   if (leaf.title) tab.title = leaf.title;
   if (leaf.color) tab.color = leaf.color;
   if (leaf.locked) tab.locked = true;
   return tab;
 }
 
-export function snapshotWorkspace(ws: WorkspaceState, savedSessionIds: Iterable<string>): WorkspaceSnapshot {
+export function snapshotWorkspace(ws: WorkspaceState, savedSessionIds: Iterable<string>, pluginOrigin?: (sessionId: string) => PluginSessionOrigin | undefined): WorkspaceSnapshot {
   const saved = new Set(savedSessionIds);
   const groupIds: string[] = [];
   const walk = (node: LayoutNode): NodeSnapshot => {
@@ -42,7 +47,7 @@ export function snapshotWorkspace(ws: WorkspaceState, savedSessionIds: Iterable<
       groupIds.push(node.id);
       return {
         kind: "group",
-        tabs: node.tabs.map((l) => tabOf(l, saved)),
+        tabs: node.tabs.map((l) => tabOf(l, saved, pluginOrigin)),
         active: Math.max(0, node.tabs.findIndex((l) => l.paneId === node.activeTabId)),
       };
     }
@@ -56,6 +61,8 @@ export interface RestoreDeps {
   sessions: SessionConfig[];
   makeLeaf: (session: SessionConfig) => TerminalLeafNode;
   newId: (prefix: string) => string;
+  /** A restored tab that a plugin opened: link its session to the plugin item again. */
+  adoptPluginSession?: (sessionId: string, origin: PluginSessionOrigin) => void;
 }
 
 /**
@@ -72,8 +79,12 @@ export function restoreWorkspace(snap: WorkspaceSnapshot | null | undefined, dep
       const tabs: TerminalLeafNode[] = [];
       let activeTabId: string | null = null;
       node.tabs.forEach((tab, i) => {
-        const session = tab.sessionId ? byId.get(tab.sessionId) : tab.session;
-        if (!session) return;
+        const saved = tab.sessionId ? byId.get(tab.sessionId) : tab.session;
+        if (!saved) return;
+        // Its password comes from the plugin again (TerminalPane asks for it before connecting).
+        const plugin = !tab.sessionId && deps.adoptPluginSession && saved.protocol === "ssh" ? pluginSessionOrigin(tab.plugin) : undefined;
+        const session = plugin ? { ...saved, authType: "password" as const, credentialHandoff: true } : saved;
+        if (plugin) deps.adoptPluginSession!(session.id, plugin);
         const leaf: TerminalLeafNode = {
           ...deps.makeLeaf(session),
           ...(tab.title ? { title: tab.title } : {}),

@@ -81,6 +81,31 @@ describe("workspace snapshot", () => {
     expect(back.activeGroupId).toBe(allGroups(back.root)[0].id);
   });
 
+  it("keeps the plugin item of a plugin tab, without its password, and links it again on restore", () => {
+    const origin = { pluginId: "orca.bastion", sourceId: "hosts", itemId: "asset", choiceId: "root" };
+    const bastion = session("bastion-1", { host: "gw.example", username: "me#root#asset", password: "typed", credentialHandoff: true });
+    const plain = session("plain-1");
+    const pluginWs: WorkspaceState = { root: group("g", [leaf("a", bastion), leaf("b", plain), leaf("c", web)]), activeGroupId: "g" };
+    const origins = (id: string) => (id === "bastion-1" || id === "web" ? origin : undefined);
+    const snap = snapshotWorkspace(pluginWs, ["web"], origins);
+    expect(JSON.stringify(snap)).not.toContain("typed");
+    if (snap.root?.kind !== "group") throw new Error("group expected");
+    expect(snap.root.tabs.map((tab) => tab.plugin)).toEqual([origin, undefined, undefined]);
+
+    const adopted: [string, unknown][] = [];
+    const back = restoreWorkspace(JSON.parse(JSON.stringify(snap)), { ...deps([web]), adoptPluginSession: (id, value) => adopted.push([id, value]) });
+    expect(adopted).toEqual([["bastion-1", origin]]);
+    const [restored, other] = allLeaves(back.root);
+    expect(restored.session).toMatchObject({ id: "bastion-1", authType: "password", credentialHandoff: true });
+    expect(restored.session.password).toBeUndefined();
+    expect(other.session.credentialHandoff).toBeUndefined();
+
+    // A malformed origin restores a plain tab that asks for the password.
+    snap.root.tabs[0].plugin = { pluginId: "", sourceId: "hosts", itemId: "asset" };
+    const plainBack = restoreWorkspace(snap, { ...deps([web]), adoptPluginSession: () => { throw new Error("not adopted"); } });
+    expect(allLeaves(plainBack.root)[0].session.credentialHandoff).toBeUndefined();
+  });
+
   it("returns an empty workspace for missing or unknown snapshots", () => {
     expect(restoreWorkspace(null, deps([])).root).toBeNull();
     expect(restoreWorkspace({ version: 2 } as never, deps([])).root).toBeNull();

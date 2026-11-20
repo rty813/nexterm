@@ -72,6 +72,8 @@
 .plugin-source-login { margin: 4px 8px 8px 28px; display: inline-flex; gap: 5px; align-items: center; font-size: 11px; }
 .plugin-source-session { padding-left: 28px; }
 .plugin-source-session:focus-within .session-row-actions { display: flex; }
+.plugin-source-session.is-connecting .session-row-actions { display: flex; }
+.plugin-source-connecting { display: flex; align-items: center; gap: 6px; }
 .plugin-source-group { display: flex; align-items: center; gap: 6px; padding: 6px 6px 3px 28px; font-size: 11px; color: var(--fg-muted); min-width: 0; }
 .plugin-source-group span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-source-pages { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 28px; margin: 2px 8px; }

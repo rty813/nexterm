@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { backend, isTauriRuntime } from "../services/backend";
 import i18n from "../i18n";
-import { httpsOrigin, isModalLocation, isRecord, parsePackage, pluginSource, sessionCatalog, sessionChoices, sessionSourceKey, temporarySsh, type DockedViewLocation, type InstalledPlugin, type PluginSource, type PluginPackage, type PluginView, type PluginSessionCatalog, type PluginSessionChoice } from "./model";
+import { httpsOrigin, isModalLocation, isRecord, parsePackage, pluginSource, sessionCatalog, sessionChoices, sessionSourceKey, temporarySsh, type DockedViewLocation, type PluginSessionOrigin, type InstalledPlugin, type PluginSource, type PluginPackage, type PluginView, type PluginSessionCatalog, type PluginSessionChoice } from "./model";
 import type { SessionConfig } from "../types/domain";
 
 /**
@@ -92,6 +92,8 @@ export interface Runtime {
   events: Map<string, unknown>;
   sources: Map<string, PluginSessionCatalog>;
   sourceBusy: Set<string>;
+  /** The item each source is resolving a connection for (shown in the session bar). */
+  sourceConnecting: Map<string, string>;
   sourceErrors: Map<string, string>;
   error?: string;
 }
@@ -110,7 +112,12 @@ export class PluginPlatform {
   private isLocked = false;
   get locked() { return this.isLocked; }
   set locked(value: boolean) { if (this.isLocked === value) return; this.isLocked = value; if (value) this.chooseSessionAccount(undefined); this.emit(); }
-  private sessionOrigins = new Map<string, {pluginId: string; key: string}>();
+  /** Open temporary SSH sessions by session id: the plugin item they came from. Kept while the plugin restarts. */
+  private sessionOrigins = new Map<string, PluginSessionOrigin & {key: string}>();
+  /** Sessions whose credential handoff was just staged by `openSsh`, for their first connect. */
+  private freshHandoffs = new Set<string>();
+  /** Credential renewals run one at a time per plugin (its HTTP requests are limited). */
+  private renewals = new Map<string, Promise<unknown>>();
   accountPrompt?: {pluginId: string; sourceId: string; title: string; choices: PluginSessionChoice[]; finish: (id?: string) => void};
   lastError = "";
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => {this.listeners.delete(listener);}; };
@@ -155,6 +162,7 @@ export class PluginPlatform {
   remove(id: string) {
     this.persist(this.entries.filter(entry => entry.bundle.manifest.id !== id));
     this.stop(id);
+    for (const [sessionId, origin] of this.sessionOrigins) if (origin.pluginId === id) this.sessionOrigins.delete(sessionId);
     if (isTauriRuntime()) return invoke<void>("plugin_forget_credentials", {pluginId: id});
   }
   revokeNetwork(id: string) { this.persist(this.entries.map(entry => entry.bundle.manifest.id === id ? {...entry, approvedOrigins: [], revision: crypto.randomUUID()} : entry)); this.stop(id); }
@@ -174,7 +182,7 @@ export class PluginPlatform {
     this.generations.set(manifest.id, generation);
     const origins = [...new Set([...manifest.permissions.network, ...(manifest.permissions.networkRequest ? entry.approvedOrigins ?? [] : [])])];
     const capability = isTauriRuntime() ? await invoke<string>("plugin_grant", {pluginId: manifest.id, origins, requestNetwork: manifest.permissions.networkRequest === true, sessions: manifest.permissions.sessions === "open", credentials: manifest.permissions.credentials === "store"}) : "browser-preview";
-    const runtime: Runtime = {entry, capability, origins: new Set(origins), clients: new Set(), events: new Map(), status: new Map(), sources: new Map((manifest.contributes.sessionSources ?? []).map(source => [source.id, {state: "loading", items: []}])), sourceBusy: new Set(), sourceErrors: new Map()};
+    const runtime: Runtime = {entry, capability, origins: new Set(origins), clients: new Set(), events: new Map(), status: new Map(), sources: new Map((manifest.contributes.sessionSources ?? []).map(source => [source.id, {state: "loading", items: []}])), sourceBusy: new Set(), sourceConnecting: new Map(), sourceErrors: new Map()};
     if (!this.entries.includes(entry) || !entry.enabled || this.generations.get(manifest.id) !== generation) { if (isTauriRuntime()) void invoke("plugin_revoke", {capability}).catch(() => undefined); throw new Error("Plugin activation cancelled"); }
     this.runtimes.set(manifest.id, runtime); this.emit(); return runtime;
   }
@@ -182,7 +190,6 @@ export class PluginPlatform {
     this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
     const runtime = this.runtimes.get(id);
     if (this.accountPrompt?.pluginId === id) this.chooseSessionAccount(undefined);
-    for (const [sessionId, origin] of this.sessionOrigins) if (origin.pluginId === id) this.sessionOrigins.delete(sessionId);
     if (runtime) {runtime.background?.close(); for (const client of runtime.clients) client.close(); if (isTauriRuntime()) void invoke("plugin_revoke", {capability: runtime.capability}).catch(() => undefined); this.runtimes.delete(id);}
     this.opened = this.opened.filter(item => item.pluginId !== id);
     for (const location of ["sidebar", "panel", "tab"] as const) if (!this.opened.some(item => item.pluginId + ":" + item.view.id === this.active[location])) delete this.active[location];
@@ -209,11 +216,87 @@ export class PluginPlatform {
       const manifest = entry.bundle.manifest;
       const runtime = this.runtimes.get(manifest.id);
       if (!runtime) return [];
-      return (manifest.contributes.sessionSources ?? []).filter(source => !entry.hidden.includes(source.id)).map(source => ({...source, pluginId: manifest.id, pluginName: manifest.name, catalog: runtime.sources.get(source.id)!, busy: runtime.sourceBusy.has(source.id), error: runtime.sourceErrors.get(source.id)}));
+      return (manifest.contributes.sessionSources ?? []).filter(source => !entry.hidden.includes(source.id)).map(source => ({...source, pluginId: manifest.id, pluginName: manifest.name, catalog: runtime.sources.get(source.id)!, busy: runtime.sourceBusy.has(source.id), connecting: runtime.sourceConnecting.get(source.id), error: runtime.sourceErrors.get(source.id)}));
     });
   }
   sessionKey(id: string) { return this.sessionOrigins.get(id)?.key ?? id; }
-  pruneSessionOrigins(activeIds: Set<string>) { for (const id of this.sessionOrigins.keys()) if (!activeIds.has(id)) this.sessionOrigins.delete(id); }
+  pruneSessionOrigins(activeIds: Set<string>) {
+    for (const id of this.sessionOrigins.keys()) if (!activeIds.has(id)) this.sessionOrigins.delete(id);
+    for (const id of this.freshHandoffs) if (!activeIds.has(id)) this.freshHandoffs.delete(id);
+  }
+  /** The plugin item a session was opened from, to save with the workspace. */
+  sessionOrigin(id: string): PluginSessionOrigin | undefined {
+    const origin = this.sessionOrigins.get(id);
+    return origin && {pluginId: origin.pluginId, sourceId: origin.sourceId, itemId: origin.itemId, ...(origin.choiceId !== undefined ? {choiceId: origin.choiceId} : {})};
+  }
+  /** A restored tab: link it to its plugin item again, so it can get credentials from the plugin. */
+  adoptSession(id: string, origin: PluginSessionOrigin) { this.sessionOrigins.set(id, {...origin, key: sessionSourceKey(origin.pluginId, origin.sourceId, origin.itemId)}); }
+  /** Name of the plugin a session was opened from. */
+  sessionPluginName(id: string) {
+    const pluginId = this.sessionOrigins.get(id)?.pluginId;
+    return pluginId ? this.entries.find(entry => entry.bundle.manifest.id === pluginId)?.bundle.manifest.name : undefined;
+  }
+  /**
+   * Make sure a plugin's credential handoff is staged before `session` connects: right after `openSsh` it already is;
+   * for a reconnect or a restored tab, ask the plugin for the same item (and account) again, once it has signed in and
+   * listed it. The plugin must return the very destination the tab already has, so nothing is confirmed again.
+   * Resolves false when the plugin cannot provide credentials (removed, disabled, signed out, item no longer listed,
+   * timeout); the user types the password instead. `wanted` turns false when the pane no longer needs it.
+   */
+  renewCredentials(session: SessionConfig, wanted: () => boolean = () => true, timeoutMs = 30000): Promise<boolean> {
+    if (this.freshHandoffs.delete(session.id)) return Promise.resolve(true);
+    const origin = this.sessionOrigins.get(session.id);
+    if (!origin) return Promise.resolve(false);
+    const previous = this.renewals.get(origin.pluginId) ?? Promise.resolve();
+    const run = previous.then(() => this.renew(session, origin, wanted, timeoutMs)).catch(() => false);
+    this.renewals.set(origin.pluginId, run);
+    void run.finally(() => {if (this.renewals.get(origin.pluginId) === run) this.renewals.delete(origin.pluginId);});
+    return run;
+  }
+  private async renew(session: SessionConfig, origin: PluginSessionOrigin, wanted: () => boolean, timeoutMs: number) {
+    if (!wanted()) return false;
+    await this.load();
+    const available = (runtime: Runtime) => {
+      const catalog = runtime.sources.get(origin.sourceId);
+      return this.runtimes.get(origin.pluginId) === runtime && !!runtime.background && !!catalog && ["ready", "loading"].includes(catalog.state) && catalog.items.some(item => item.id === origin.itemId) && !runtime.entry.hidden.includes(origin.sourceId) && !this.locked && wanted();
+    };
+    const runtime = await this.until(() => {
+      if (!wanted()) return false;
+      const entry = this.entries.find(entry => entry.bundle.manifest.id === origin.pluginId);
+      if (!entry?.enabled || entry.hidden.includes(origin.sourceId) || this.failures.has(origin.pluginId) || entry.bundle.manifest.permissions.sessions !== "open") return false;
+      const runtime = this.runtimes.get(origin.pluginId);
+      const catalog = runtime?.sources.get(origin.sourceId);
+      if (!runtime || !catalog) return undefined;
+      if (available(runtime)) return runtime;
+      // Fully listed without the item: it is no longer authorized.
+      return catalog.state === "ready" ? false : undefined;
+    }, timeoutMs);
+    if (!runtime) return false;
+    const result = await runtime.background!.call("sessionSource:" + origin.sourceId, {itemId: origin.itemId, ...(origin.choiceId !== undefined ? {choiceId: origin.choiceId} : {})});
+    if (!available(runtime) || !isRecord(result) || !isRecord(result.connection) || result.choices !== undefined) return false;
+    const connection = result.connection;
+    const target = temporarySsh(connection);
+    if (typeof connection.passwordKey !== "string" || target.host !== session.host || target.port !== session.port || target.username !== session.username) return false;
+    await invoke("plugin_stage_ssh", {capability: runtime.capability, instanceId: session.id, secretKey: connection.passwordKey, host: session.host, port: session.port, username: session.username});
+    return available(runtime);
+  }
+  /** Wait until `check` gives a value (false = give up), checking on every change and every second. */
+  private until<Value>(check: () => Value | false | undefined, timeoutMs: number): Promise<Value | false> {
+    return new Promise(resolve => {
+      let done = false;
+      const test = () => {
+        if (done) return;
+        let value: Value | false | undefined;
+        try {value = check();} catch {value = false;}
+        if (value === undefined) return;
+        done = true; clearTimeout(timeout); clearInterval(poll); unsubscribe(); resolve(value);
+      };
+      const timeout = setTimeout(() => {if (!done) {done = true; clearInterval(poll); unsubscribe(); resolve(false);}}, timeoutMs);
+      const poll = setInterval(test, 1000);
+      const unsubscribe = this.subscribe(test);
+      test();
+    });
+  }
   chooseSessionAccount(id?: string) { this.accountPrompt?.finish(id); }
   private chooseAccount(pluginId: string, sourceId: string, title: string, choices: PluginSessionChoice[]): Promise<string | undefined> {
     if (this.accountPrompt) throw new Error(i18n.t("plugin.accountPromptBusy"));
@@ -242,26 +325,29 @@ export class PluginPlatform {
     const item = catalog?.items.find(item => item.id === itemId);
     if (!runtime?.background || !catalog || !["ready", "loading"].includes(catalog.state) || !item || runtime.sourceBusy.has(sourceId) || runtime.entry.hidden.includes(sourceId) || this.locked) return;
     const current = () => {const latest = runtime.sources.get(sourceId); return this.runtimes.get(pluginId) === runtime && !!latest && ["ready", "loading"].includes(latest.state) && latest.items.includes(item) && !runtime.entry.hidden.includes(sourceId) && !this.locked;};
-    runtime.sourceBusy.add(sourceId); runtime.sourceErrors.delete(sourceId); this.emit();
+    runtime.sourceBusy.add(sourceId); runtime.sourceConnecting.set(sourceId, itemId); runtime.sourceErrors.delete(sourceId); this.emit();
+    let choiceId: string | undefined;
     try {
       let result = await runtime.background.call("sessionSource:" + sourceId, {itemId});
       if (!current()) throw new Error(i18n.t("plugin.sourceChanged"));
       if (isRecord(result) && result.choices !== undefined && result.connection === undefined) {
         const choices = sessionChoices(result.choices);
-        const choiceId = await this.chooseAccount(pluginId, sourceId, catalog.items.find(item => item.id === itemId)!.label, choices);
+        runtime.sourceConnecting.delete(sourceId); this.emit();
+        choiceId = await this.chooseAccount(pluginId, sourceId, catalog.items.find(item => item.id === itemId)!.label, choices);
         if (!choiceId) return;
         if (!current()) throw new Error(i18n.t("plugin.sourceChanged"));
+        runtime.sourceConnecting.set(sourceId, itemId); this.emit();
         result = await runtime.background.call("sessionSource:" + sourceId, {itemId, choiceId});
       }
       if (!current()) throw new Error(i18n.t("plugin.sourceChanged"));
       if (!isRecord(result) || result.connection === undefined || result.choices !== undefined) throw new Error(i18n.t("plugin.invalidConnection"));
-      await this.openSsh(runtime, result.connection, sessionSourceKey(pluginId, sourceId, itemId), current, true);
+      await this.openSsh(runtime, result.connection, {pluginId, sourceId, itemId, ...(choiceId !== undefined ? {choiceId} : {})}, current, true);
     } catch (reason) { if (this.runtimes.get(pluginId) === runtime) runtime.sourceErrors.set(sourceId, String(reason).replace(/^(?:Error:\s*)+/, "")); }
-    finally { runtime.sourceBusy.delete(sourceId); this.emit(); }
+    finally { runtime.sourceBusy.delete(sourceId); runtime.sourceConnecting.delete(sourceId); this.emit(); }
   }
   // userPicked: the user clicked this item in the session bar. Then no prompt when the SSH host is the host of an
   // origin the plugin can already reach, since the connection can't carry the plugin's secrets anywhere new.
-  private async openSsh(runtime: Runtime, value: unknown, sourceKey?: string, current = () => this.runtimes.get(runtime.entry.bundle.manifest.id) === runtime && !this.locked, userPicked = false) {
+  private async openSsh(runtime: Runtime, value: unknown, origin?: PluginSessionOrigin, current = () => this.runtimes.get(runtime.entry.bundle.manifest.id) === runtime && !this.locked, userPicked = false) {
     if (runtime.entry.bundle.manifest.permissions.sessions !== "open") throw new Error("Session permission not granted");
     const session = temporarySsh(value);
     const known = userPicked && [...runtime.origins].some(origin => new URL(origin).hostname === session.host.toLowerCase());
@@ -278,9 +364,10 @@ export class PluginPlatform {
       session.credentialHandoff = true;
     }
     if (!this.onSession) throw new Error("Session service unavailable");
-    if (sourceKey) this.sessionOrigins.set(session.id, {pluginId: runtime.entry.bundle.manifest.id, key: sourceKey});
+    if (origin) this.adoptSession(session.id, origin);
+    if (session.credentialHandoff) this.freshHandoffs.add(session.id);
     try { return {paneId: this.onSession(session)}; }
-    catch (reason) { this.sessionOrigins.delete(session.id); throw reason; }
+    catch (reason) { this.sessionOrigins.delete(session.id); this.freshHandoffs.delete(session.id); throw reason; }
   }
   private async requestNetwork(runtime: Runtime, origin: string): Promise<boolean> {
     httpsOrigin(origin);

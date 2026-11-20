@@ -403,7 +403,7 @@ export const App: React.FC = () => {
     } else if (mode === "last") {
       // The whole layout (splits, tab order, titles ...); older versions only saved the list.
       void backend.loadDataFile<WorkspaceSnapshot>("last_workspace").then((snap) => {
-        const back = restoreWorkspace(snap, { sessions: saved, makeLeaf, newId: uid });
+        const back = restoreWorkspace(snap, { sessions: saved, makeLeaf, newId: uid, adoptPluginSession: (id, origin) => plugins.adoptSession(id, origin) });
         if (back.root) {
           setWs((prev) => (prev.root ? prev : back));
           return;
@@ -422,7 +422,7 @@ export const App: React.FC = () => {
     if (!startupDone.current || currentWindowLabel() !== "main") return;
     const timer = window.setTimeout(() => {
       const ids = sessions.map((x) => x.id);
-      const snap = snapshotWorkspace(wsRef.current, ids);
+      const snap = snapshotWorkspace(wsRef.current, ids, (id) => plugins.sessionOrigin(id));
       const text = JSON.stringify(snap);
       if (text === lastSavedLayout.current) return;
       lastSavedLayout.current = text;

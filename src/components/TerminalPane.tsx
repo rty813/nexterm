@@ -7,6 +7,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { remoteMirror } from "../services/remoteMirror";
 import { HISTORY_RESET, bannerLine, resetForReconnect, resetTerminal } from "../utils/reconnectReset";
 import { pluginContextMenu } from "./StatusPlugins";
+import { plugins } from "../plugins/platform";
 import { shareStore, useShareStore } from "../services/shares";
 import { shareOfPane, summarizeShare } from "../utils/share";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -16,6 +17,7 @@ import {
   ChevronsUpDown,
   Columns2,
   KeyRound,
+  LoaderCircle,
   RotateCw,
   Rows2,
   Search,
@@ -329,6 +331,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
 
   const [awaitingPassword, setAwaitingPassword] =
     useState<boolean>(needsInitialPassword);
+  /** Waiting for the plugin that opened this tab to hand over its password (the plugin's name). */
+  const [waitingPlugin, setWaitingPlugin] = useState<string | null>(null);
   const [passwordInput, setPasswordInput] = useState<string>("");
   const [usernameInput, setUsernameInput] = useState<string>(leaf.session.username);
   const highlighterRef = useRef<OutputHighlighter | null>(null);
@@ -1049,6 +1053,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     const cols = term?.cols ?? 100;
     const rows = term?.rows ?? 30;
     let cancelled = false;
+    let waitingTimer: number | undefined;
     const connect = () => {
       if (cancelled) return;
       // Duplicated SSH tab: open a channel on the source pane's connection (first connect only).
@@ -1064,6 +1069,24 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
             void backend.resizeTerminal(leaf.paneId, current.cols, current.rows);
           }
         });
+    };
+    // A tab a plugin opened gets a one-time password handoff for each connection: ask the plugin for it
+    // again (reconnect, restored tab); without one the user types the password.
+    const start = () => {
+      if (cancelled) return;
+      const session = leaf.session;
+      const duplicate = leaf.reconnectCount === 0 && Boolean(leaf.reuseFrom);
+      if (duplicate || !(isSsh && session.credentialHandoff && typeof session.password !== "string")) return connect();
+      waitingTimer = window.setTimeout(() => {
+        if (!cancelled) setWaitingPlugin(plugins.sessionPluginName(session.id) ?? "");
+      }, 300);
+      void plugins.renewCredentials(session, () => !cancelled).then((staged) => {
+        window.clearTimeout(waitingTimer);
+        if (cancelled) return;
+        setWaitingPlugin(null);
+        if (staged) connect();
+        else setAwaitingPassword(true);
+      });
     };
     const serializer = serializeRef.current;
     if (leaf.reconnectCount > 0 && term && serializer) {
@@ -1082,13 +1105,15 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       }).then(() => {
         // Phones and share viewers get the reset screen as a whole.
         remoteMirror.refresh(leaf.paneId);
-        connect();
+        start();
       });
     } else {
-      connect();
+      start();
     }
     return () => {
       cancelled = true;
+      window.clearTimeout(waitingTimer);
+      setWaitingPlugin(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leaf.paneId, leaf.reconnectCount, awaitingPassword]);
@@ -1804,6 +1829,23 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           }}
           onHighlight={(pattern, options, color) => extras.onAddHighlight(leaf.paneId, pattern, options, color)}
         />
+      )}
+
+      {waitingPlugin !== null && !awaitingPassword && (
+        <div className="pane-auth-overlay" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="pane-auth-card" role="status">
+            <div className="pane-auth-header">
+              <LoaderCircle size={16} className="plugin-session-spinner" />
+              <span>{t("pane.pluginCredentials", { name: waitingPlugin || t("plugin.title") })}</span>
+            </div>
+            <div className="pane-auth-footer">
+              <span>{targetSummary}</span>
+              <button type="button" className="btn-ghost btn-sm" onClick={() => setAwaitingPassword(true)}>
+                {t("pane.enterPassword")}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {awaitingPassword && (

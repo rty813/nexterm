@@ -175,6 +175,74 @@ describe("generic plugin session sources", () => {
     await platform.connectSource("test.plugin","hosts","asset");
     expect(platform.onSession).not.toHaveBeenCalled(); expect(platform.accountPrompt).toBeUndefined();
   });
+  const opened = () => (platform.onSession as ReturnType<typeof vi.fn>).mock.calls[0][0] as SessionConfig;
+  const stagings = () => native.invoke.mock.calls.filter(([method]) => method === "plugin_stage_ssh");
+  it("shows which item is resolving until the account prompt or the terminal opens", async () => {
+    const {call} = await source(); const resolver = deferred<unknown>(); call.mockReturnValueOnce(resolver.promise);
+    const pending = platform.connectSource("test.plugin","hosts","asset");
+    expect(platform.sessionSources()[0].connecting).toBe("asset");
+    resolver.resolve({choices:[{id:"root",label:"Root"}]});
+    await vi.waitFor(() => expect(platform.accountPrompt).toBeDefined());
+    expect(platform.sessionSources()[0].connecting).toBeUndefined();
+    platform.chooseSessionAccount("root"); await pending;
+    expect(platform.sessionSources()[0]).toMatchObject({busy:false,connecting:undefined});
+  });
+  it("uses the staged handoff for the first connect and asks the plugin again for the same account on reconnect", async () => {
+    const {call} = await source(); call.mockResolvedValueOnce({choices:[{id:"reader",label:"Reader"},{id:"root",label:"Root"}]});
+    const pending = platform.connectSource("test.plugin","hosts","asset");
+    await vi.waitFor(() => expect(platform.accountPrompt).toBeDefined()); platform.chooseSessionAccount("root"); await pending;
+    const session = opened();
+    expect(platform.sessionOrigin(session.id)).toEqual({pluginId:"test.plugin",sourceId:"hosts",itemId:"asset",choiceId:"root"});
+    expect(await platform.renewCredentials(session)).toBe(true); expect(call).toHaveBeenCalledTimes(2); expect(stagings()).toHaveLength(1);
+    expect(await platform.renewCredentials(session)).toBe(true);
+    expect(call).toHaveBeenLastCalledWith("sessionSource:hosts",{itemId:"asset",choiceId:"root"});
+    expect(stagings()).toHaveLength(2); expect(stagings()[1][1]).toMatchObject({instanceId:session.id,secretKey:"ssh-password",host:ssh.host,port:ssh.port,username:ssh.username});
+    expect(native.confirm).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ["another host", {connection:{...ssh,host:"other.example.com"}}],
+    ["another account", {connection:{...ssh,username:"user#root#asset"}}],
+    ["no password key", {connection:{...ssh,passwordKey:undefined}}],
+    ["an account choice", {choices:[{id:"root",label:"Root"}]}],
+  ])("does not hand over credentials when the plugin now returns %s", async (_case, response) => {
+    const {call} = await source(); await platform.connectSource("test.plugin","hosts","asset");
+    const session = opened(); await platform.renewCredentials(session);
+    call.mockResolvedValueOnce(response);
+    expect(await platform.renewCredentials(session)).toBe(false); expect(stagings()).toHaveLength(1);
+  });
+  it("waits for a restored tab's plugin to sign in and list the item, then stages without confirming", async () => {
+    const {runtime,call} = await source();
+    await platform.dispatch(runtime,"background","sessions.updateSource",{id:"hosts",catalog:{state:"signedOut",items:[]}});
+    const session = {id:"restored",label:"Asset",group:"",protocol:"ssh",host:ssh.host,port:ssh.port,username:ssh.username,authType:"password",credentialHandoff:true,term:"xterm",keepAliveSecs:30} as SessionConfig;
+    platform.adoptSession(session.id,{pluginId:"test.plugin",sourceId:"hosts",itemId:"asset"});
+    expect(platform.sessionKey(session.id)).toBe("plugin:test.plugin:hosts:asset"); expect(platform.sessionPluginName(session.id)).toBe("Test");
+    const renewed = platform.renewCredentials(session);
+    await platform.dispatch(runtime,"background","sessions.updateSource",{id:"hosts",catalog:{state:"loading",items:[]}});
+    expect(call).not.toHaveBeenCalled();
+    await platform.dispatch(runtime,"background","sessions.updateSource",{id:"hosts",catalog:{state:"loading",items:catalog.items}});
+    expect(await renewed).toBe(true);
+    expect(call).toHaveBeenCalledWith("sessionSource:hosts",{itemId:"asset"}); expect(stagings()[0][1]).toMatchObject({instanceId:"restored"});
+    expect(native.confirm).not.toHaveBeenCalled();
+  });
+  it("gives up when the item is no longer listed, the plugin is gone, the pane closes or it times out", async () => {
+    const {runtime,call} = await source();
+    const session = {id:"restored",label:"Asset",group:"",protocol:"ssh",host:ssh.host,port:ssh.port,username:ssh.username,authType:"password",credentialHandoff:true,term:"xterm",keepAliveSecs:30} as SessionConfig;
+    platform.adoptSession(session.id,{pluginId:"test.plugin",sourceId:"hosts",itemId:"gone"});
+    expect(await platform.renewCredentials(session)).toBe(false);
+    platform.adoptSession(session.id,{pluginId:"test.plugin",sourceId:"hosts",itemId:"asset"});
+    expect(await platform.renewCredentials(session,() => false)).toBe(false);
+    await platform.dispatch(runtime,"background","sessions.updateSource",{id:"hosts",catalog:{state:"signedOut",items:[]}});
+    expect(await platform.renewCredentials(session,undefined,20)).toBe(false);
+    expect(await platform.renewCredentials({...session,id:"unknown"})).toBe(false);
+    platform.toggle("test.plugin",false); expect(await platform.renewCredentials(session)).toBe(false);
+    expect(call).not.toHaveBeenCalled(); expect(stagings()).toHaveLength(0);
+  });
+  it("keeps session links while the plugin restarts and drops them when it is uninstalled", async () => {
+    await source(); await platform.connectSource("test.plugin","hosts","asset");
+    const session = opened();
+    platform.stop("test.plugin"); expect(platform.sessionKey(session.id)).toBe("plugin:test.plugin:hosts:asset");
+    await platform.remove("test.plugin"); expect(platform.sessionKey(session.id)).toBe(session.id);
+  });
 });
 
 describe("plugin lifecycle", () => {
