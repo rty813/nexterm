@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, Highlighter, List, Search, X } from "lucide-react";
 import type { IDecoration, IMarker, Terminal } from "@xterm/xterm";
-import { buildMatcher, contrastText, findAll, HIGHLIGHT_PRESETS, matchAtRow, type BufferMatch } from "../utils/textMatch";
+import { buildMatcher, contrastText, findAll, HIGHLIGHT_PRESETS, locateMatch, type BufferMatch } from "../utils/textMatch";
 import { backend, type HistoryMatch, type HistoryQuery } from "../services/backend";
 import type { HistoryScroll } from "../services/historyScroll";
 import { useContextMenu } from "./ContextMenu";
@@ -250,10 +250,16 @@ export const TerminalSearch: React.FC<{
       const row = await history.reveal(m.line);
       if (seq !== stepSeq.current) return;
       clear(activePaint);
-      const bm = row === null ? null : matchAtRow(term, row, m.start, m.end);
+      const bm = row === null ? null : locateMatch(term, row, m);
       if (bm) {
         activePaint.current = paint(bm, accent, contrastText(accent), accent);
         term.select(bm.col, bm.row, bm.cells);
+        const buf = term.buffer.active;
+        if (bm.row < buf.viewportY || bm.row >= buf.viewportY + term.rows) {
+          term.scrollToLine(Math.max(0, Math.min(bm.row - Math.floor(term.rows / 3), buf.length - term.rows)));
+        }
+      } else {
+        term.clearSelection();
       }
       const rank = await backend.historyRank(paneId, spec, m.line, m.start).catch(() => null);
       if (seq === stepSeq.current) setFullRank(rank);

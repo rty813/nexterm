@@ -95,6 +95,72 @@ export function findAll(term: Terminal, re: RegExp, limit = 2000): { matches: Bu
   return { matches, truncated: false };
 }
 
+/** The buffer row where the logical line holding row `row` starts. */
+function lineStart(term: Terminal, row: number): number {
+  const buf = term.buffer.active;
+  let y = row;
+  while (y > 0 && buf.getLine(y)?.isWrapped) y--;
+  return y;
+}
+
+/**
+ * A full-history match in the buffer, near buffer row `row`. The history (a headless
+ * terminal in the backend) and xterm.js need not split the output into the same lines
+ * (TUI redraws, reflow after a resize), so the row a history line maps to can be a few
+ * lines off: check that the match's context is really there, else take the nearest
+ * logical line within `radius` rows that holds it. Null when it is nowhere near.
+ */
+export function locateMatch(
+  term: Terminal,
+  row: number,
+  m: { start: number; end: number; ctx: string; ctxOffset: number },
+  radius = 400
+): BufferMatch | null {
+  const buf = term.buffer.active;
+  const rel = m.start - m.ctxOffset;
+  const len = m.end - m.start;
+  if (buf.length === 0 || rel < 0 || len <= 0 || rel + len > m.ctx.length) return null;
+  // The buffer's rows lose trailing blanks; so may the context.
+  const ctx = m.ctx.replace(/\s+$/, "");
+  const needle = m.ctx.slice(rel, rel + len);
+  const tryLine = (start: number): BufferMatch | null => {
+    const exact = matchAtRow(term, start, m.start, m.end);
+    if (exact && exact.lineText.startsWith(ctx, m.ctxOffset)) return exact;
+    const text = logicalLineAt(term, start)?.text;
+    if (!text) return null;
+    const idx = text.indexOf(ctx);
+    if (idx < 0 || text.slice(idx + rel, idx + rel + len) !== needle) return null;
+    return matchAtRow(term, start, idx + rel, idx + rel + len);
+  };
+  const first = lineStart(term, Math.max(0, Math.min(row, buf.length - 1)));
+  const hit = tryLine(first);
+  if (hit) return hit;
+  // Walk outwards, one logical line at a time in each direction.
+  let down = first;
+  let up = first;
+  let more = true;
+  while (more) {
+    more = false;
+    if (down - first < radius) {
+      let y = down + 1;
+      while (y < buf.length && buf.getLine(y)?.isWrapped) y++;
+      if (y < buf.length) {
+        down = y;
+        more = true;
+        const h = tryLine(down);
+        if (h) return h;
+      }
+    }
+    if (first - up < radius && up > 0) {
+      up = lineStart(term, up - 1);
+      more = true;
+      const h = tryLine(up);
+      if (h) return h;
+    }
+  }
+  return null;
+}
+
 /**
  * The cells of UTF-16 range [start, end) of the logical line that starts at buffer row
  * `row` (a match the full-history search found there). Null when the range is not there.
