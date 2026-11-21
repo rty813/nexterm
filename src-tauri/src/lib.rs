@@ -35,6 +35,7 @@ pub mod sftp;
 pub mod shell_integration;
 pub mod ssh_conn;
 pub mod storage;
+mod local_secrets;
 pub mod storage_location;
 pub mod sync;
 pub mod tcp_conn;
@@ -210,8 +211,8 @@ fn set_window_background(app: AppHandle, ctx: State<'_, AppContext>, rgb: [u8; 3
 
 #[tauri::command]
 fn load_initial_state(ctx: State<'_, AppContext>) -> Result<AppStateSnapshot, String> {
-    let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
-    Ok(storage.load_snapshot())
+    let mut storage = ctx.storage.lock().map_err(|e| e.to_string())?;
+    storage.load_snapshot().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -377,7 +378,7 @@ fn config_export(ctx: State<'_, AppContext>, path: String, categories: Vec<Strin
     let categories = sync::normalize_categories(&categories);
     let data = {
         let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
-        sync::collect(storage.base_dir(), &categories)
+        sync::collect(storage.base_dir(), &categories)?
     };
     let bytes = sync::seal(&data, &password)?;
     std::fs::write(&path, bytes).map_err(|e| format!("{}: {}", path, e))
@@ -1611,17 +1612,21 @@ fn read_windterm_quick_commands() -> Result<Option<Vec<models::QuickCommand>>, S
 }
 
 #[tauri::command]
-fn execute_import(
+async fn execute_import(
     ctx: State<'_, AppContext>,
     source_type: String,
     path: String,
+    windterm_master: Option<String>,
 ) -> Result<ImportResult, String> {
-    let res = import_from_path(&source_type, &path).map_err(|e| format!("{:#}", e))?;
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let master = windterm_master.map(zeroize::Zeroizing::new);
+        import_from_path(&source_type, &path, master.as_ref().map(|s| s.as_str()))
+    }).await.map_err(|e| e.to_string())?.map_err(|e| format!("{:#}", e))?;
 
     let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
 
     if !res.sessions.is_empty() {
-        let mut existing = storage.load_sessions().unwrap_or_default();
+        let mut existing = storage.load_sessions().map_err(|e| e.to_string())?;
         for incoming in &res.sessions {
             if let Some(pos) = existing.iter().position(|s| s.id == incoming.id) {
                 existing[pos] = incoming.clone();

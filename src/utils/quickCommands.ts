@@ -59,9 +59,37 @@ export function parseQuickIcon(icon: string | undefined): { shape: QuickIconShap
   };
 }
 
-/** What a text command sends: every line break is Enter (CR), plus Enter at the end if asked. */
+const SIMPLE_ESCAPES: Record<string, string> = {
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  a: "\x07",
+  b: "\b",
+  e: "\x1b",
+  f: "\f",
+  v: "\v",
+  "0": "\0",
+  "\\": "\\",
+};
+
+/**
+ * Backslash escapes as WindTerm sends them: \n \r \t \a \b \e \f \v \0 \\, \xHH and
+ * \uHHHH. Anything else (`\.`, a truncated `\x4`) is sent as typed.
+ */
+export function unescapeQuickText(text: string): string {
+  return text.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (all, esc: string) => {
+    if (esc.length > 1) return String.fromCharCode(parseInt(esc.slice(1), 16));
+    return SIMPLE_ESCAPES[esc] ?? all;
+  });
+}
+
+/**
+ * What a text command sends: backslash escapes decoded when the command asks for it
+ * (WindTerm imports, or the editor's checkbox; the text itself keeps them), every line
+ * break as Enter (CR), plus Enter at the end if asked.
+ */
 export function quickPayload(qc: QuickCommand): string {
-  const text = qc.command.replace(/\r\n|\n/g, "\r");
+  const text = (qc.escapes ? unescapeQuickText(qc.command) : qc.command).replace(/\r\n|\n/g, "\r");
   return qc.appendNewline && !text.endsWith("\r") ? `${text}\r` : text;
 }
 

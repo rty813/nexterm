@@ -406,8 +406,8 @@ const CFG_SYNC_ZH = {
   fileName: "文件名",
   password: "加密密码",
   passwordPh: "留空则不加密",
-  plainWarn: "未设置加密密码：会话里保存的密码和密钥口令会以明文写入文件。",
-  plainCredWarn: "未设置加密密码：会话密码、密钥口令和插件凭据都会以明文写入文件，建议设置加密密码。",
+  plainWarn: "包含已保存会话时，导出或上传必须设置加密密码。",
+  plainCredWarn: "包含会话或插件凭据时，导出或上传必须设置加密密码。",
   content: "同步内容",
   cat: {
     sessions: "会话",
@@ -479,6 +479,9 @@ const CFG_SYNC_ZH = {
   },
   err: {
     passwordRequired: "文件已加密，请输入密码",
+    exportPasswordRequired: "文件包含已保存会话或插件凭据，请设置加密密码后重试。",
+    localDataUnreadable: "当前 Windows 账户无法解密本机的会话或同步配置（可能来自其他电脑或账户）。请重启 Nexterm，它会把原文件改名保留，然后从带密码的导出文件恢复。",
+    localDataInvalid: "本机的会话或设置文件已损坏。请重启 Nexterm，它会把原文件改名保留，然后从带密码的导出文件恢复。",
     badPassword: "密码错误，或文件已损坏",
     badFormat: "不是 Nexterm 配置文件",
     newerVersion: "文件来自更新版本的 Nexterm，请先升级",
@@ -534,8 +537,8 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
   fileName: "File name",
   password: "Encryption password",
   passwordPh: "Empty = not encrypted",
-  plainWarn: "No encryption password: saved session passwords and key passphrases are written to the file in plain text.",
-  plainCredWarn: "No encryption password: session passwords, key passphrases and plugin credentials are written to the file in plain text. Set a password.",
+  plainWarn: "An encryption password is required to export or upload saved sessions.",
+  plainCredWarn: "An encryption password is required to export or upload sessions or plugin credentials.",
   content: "What to sync",
   cat: {
     sessions: "Sessions",
@@ -607,6 +610,9 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
   },
   err: {
     passwordRequired: "The file is encrypted: enter its password",
+    exportPasswordRequired: "Set an encryption password to export or upload saved sessions or plugin credentials.",
+    localDataUnreadable: "This Windows account cannot decrypt the local sessions or sync settings (they may come from another PC or account). Restart Nexterm to keep the original file under a new name, then restore from a password-protected export.",
+    localDataInvalid: "The local sessions or settings file is damaged. Restart Nexterm to keep the original file under a new name, then restore from a password-protected export.",
     badPassword: "Wrong password, or the file is damaged",
     badFormat: "Not a Nexterm config file",
     newerVersion: "The file is from a newer Nexterm: update first",

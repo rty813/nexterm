@@ -1,7 +1,7 @@
 import type { SyncSettings } from "../types/domain";
 
-/** Error codes the backend returns for known failures (Rust `sync::code`, plus "busy"). */
-const ERROR_CODES = ["passwordRequired", "badPassword", "badFormat", "newerVersion", "remoteEmpty", "noProvider", "busy"];
+/** Error codes the backend returns for known failures (Rust `sync::code` and `local_secrets`, plus "busy"). */
+const ERROR_CODES = ["passwordRequired", "exportPasswordRequired", "localDataUnreadable", "localDataInvalid", "badPassword", "badFormat", "newerVersion", "remoteEmpty", "noProvider", "busy"];
 
 /** i18n key of a backend error, or null when it is a plain message (network, HTTP ...). */
 export function syncErrorKey(err: unknown): string | null {

@@ -19,6 +19,20 @@ describe("quick command text", () => {
     expect(quickPayload(qc("a", "g", { command: "ip link\r", appendNewline: true }))).toBe("ip link\r");
   });
 
+  it("decodes backslash escapes when sending, like WindTerm", () => {
+    // Off unless the command asks for it (WindTerm imports): backslashes go out as typed.
+    expect(quickPayload(qc("a", "g", { command: "printf 'a\\nb' C:\\tools" }))).toBe("printf 'a\\nb' C:\\tools");
+    const plain = qc;
+    const qcEsc = (id: string, group: string, extra: Partial<QuickCommand> = {}) => plain(id, group, { escapes: true, ...extra });
+    expect(quickPayload(qcEsc("a", "g", { command: "ls\\r" }))).toBe("ls\r");
+    expect(quickPayload(qcEsc("a", "g", { command: "a\\nb\\tc\\x03\\e[A" }))).toBe("a\rb\tc\x03\x1b[A");
+    expect(quickPayload(qcEsc("a", "g", { command: "echo \\\\n \\. \\x4" }))).toBe("echo \\n \\. \\x4");
+    // An escaped CR at the end counts as Enter: no second one.
+    expect(quickPayload(qcEsc("a", "g", { command: "ip link\\r", appendNewline: true }))).toBe("ip link\r");
+    // The editor keeps the escapes as written.
+    expect(toEditor(qc("a", "g", { command: "ls\\r" })).text).toBe("ls\\r");
+  });
+
   it("round-trips through the editor", () => {
     const imported = qc("a", "g", { command: "export A=1\rexport B=2\r" });
     const ed = toEditor(imported);

@@ -3073,13 +3073,16 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 name = "nexterm"
 version = "0.1.10"
 dependencies = [
+ "aes",
  "alacritty_terminal",
  "anyhow",
  "base64 0.22.1",
+ "cbc",
  "chrono",
  "dirs 5.0.1",
  "flate2",
  "futures-util",
+ "pbkdf2",
  "portable-pty",
  "qrcode",
  "regex",
@@ -3090,6 +3093,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
+ "sha3",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -3102,6 +3106,7 @@ dependencies = [
  "uuid",
  "windows",
  "windows-sys 0.52.0",
+ "zeroize",
  "zip",
  "zstd",
 ]

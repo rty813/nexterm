@@ -5,6 +5,9 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+mod windterm_login;
+use windterm_login::{Login, ProfileKey};
+
 use crate::models::{
     AuthType, DiscoveryCandidate, ImportResult, ImportedTheme, JumpHostConfig, ProtocolType,
     ProxyConfig, QuickCommand, SerialConfig, SessionConfig, TunnelConfig, X11Config,
@@ -66,7 +69,14 @@ pub fn strip_json_comments(input: &str) -> String {
 
 /// Parse WindTerm `user.sessions` JSON content into `SessionConfig` items.
 pub fn parse_windterm_sessions(raw: &str) -> Result<Vec<SessionConfig>> {
-    let cleaned = strip_json_comments(raw);
+    parse_windterm_sessions_with_login(raw, |_| Ok(None))
+}
+
+fn parse_windterm_sessions_with_login(
+    raw: &str,
+    mut read_login: impl FnMut(&str) -> Result<Option<Login>>,
+) -> Result<Vec<SessionConfig>> {
+    let cleaned = strip_json_comments(raw.trim_start_matches('\u{feff}'));
     let val: Value =
         serde_json::from_str(&cleaned).context("Invalid WindTerm user.sessions JSON")?;
     let arr = val
@@ -99,12 +109,15 @@ pub fn parse_windterm_sessions(raw: &str) -> Result<Vec<SessionConfig>> {
             .and_then(|v| v.as_u64())
             .unwrap_or(60);
 
-        let explicit_user = get_str("session.username")
+        let mut explicit_user = get_str("session.username")
             .or_else(|| get_str("ssh.username"))
             .or_else(|| get_str("session.user"))
+            .or_else(|| get_str("ssh.user"))
             .unwrap_or_default();
+        let mut password = None;
+        let mut passphrase = None;
 
-        let private_key = get_str("ssh.identityFilePath.windows")
+        let mut private_key = get_str("ssh.identityFilePath.windows")
             .or_else(|| get_str("ssh.identityFilePath"))
             .or_else(|| get_str("ssh.privateKey"))
             .map(|s| expand_tilde(&s));
@@ -123,9 +136,19 @@ pub fn parse_windterm_sessions(raw: &str) -> Result<Vec<SessionConfig>> {
 
         let (protocol, host, username, shell_command) = match proto_raw.as_str() {
             "ssh" | "ssh2" => {
-                // WindTerm keeps the login user in the encrypted `session.autoLogin` blob,
-                // so unless the target is written as user@host the user is unknown here;
-                // leave it empty and let the connect flow ask for it.
+                if let Some(blob) = obj.get("session.autoLogin").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    if let Some(mut login) = read_login(blob)? {
+                        password = login.take_password();
+                        let (key_path, key_pass) = login.take_key();
+                        if private_key.is_none() {
+                            private_key = key_path.map(|s| expand_tilde(&s));
+                        }
+                        passphrase = key_pass;
+                        if !login.username.is_empty() {
+                            explicit_user = login.username;
+                        }
+                    }
+                }
                 let (u, h) = split_user_host(&target, &explicit_user);
                 (ProtocolType::Ssh, h, u, None)
             }
@@ -207,7 +230,7 @@ pub fn parse_windterm_sessions(raw: &str) -> Result<Vec<SessionConfig>> {
         });
 
         let auth_type = if protocol == ProtocolType::Ssh {
-            if use_public_key || private_key.is_some() {
+            if private_key.is_some() || (use_public_key && password.is_none()) {
                 AuthType::PrivateKey
             } else {
                 AuthType::Password
@@ -225,9 +248,9 @@ pub fn parse_windterm_sessions(raw: &str) -> Result<Vec<SessionConfig>> {
             port,
             username,
             auth_type,
-            password: None,
+            password,
             private_key_path: private_key,
-            passphrase: None,
+            passphrase,
             jump_host: None,
             term,
             keep_alive_secs,
@@ -372,6 +395,7 @@ pub fn parse_windterm_quickbar(raw: &str) -> Result<Vec<QuickCommand>> {
             shortcut: None,
             kind: None,
             action: None,
+            escapes: Some(true),
         });
     }
     Ok(result)
@@ -807,13 +831,31 @@ fn scan_windterm_profiles_dir(
     }
 }
 
-pub fn import_from_path(source_type: &str, path_str: &str) -> Result<ImportResult> {
+pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Option<&str>) -> Result<ImportResult> {
     let path = Path::new(path_str);
     match source_type {
         "windterm_sessions" => {
             let raw = fs::read_to_string(path)
                 .with_context(|| format!("读取文件失败: {}", path_str))?;
-            let sessions = parse_windterm_sessions(&raw)?;
+            let mut key = None;
+            let (mut passwords_skipped, mut opened, mut failed) = (0, 0, 0);
+            let sessions = parse_windterm_sessions_with_login(&raw, |blob| {
+                let Some(master) = windterm_master else {
+                    passwords_skipped += 1;
+                    return Ok(None);
+                };
+                if key.is_none() {
+                    key = Some(ProfileKey::load(path, master)?);
+                }
+                // One stale or damaged login (copied from another profile) skips only that
+                // session's login; if none can be opened the key is wrong (checked below).
+                match key.as_ref().unwrap().decrypt(blob) {
+                    Ok(login) => { opened += 1; Ok(Some(login)) }
+                    Err(_) => { failed += 1; Ok(None) }
+                }
+            })?;
+            anyhow::ensure!(opened > 0 || failed == 0, "windtermDecryptFailed");
+            passwords_skipped += failed;
             let count = sessions.len();
             Ok(ImportResult {
                 sessions,
@@ -821,7 +863,7 @@ pub fn import_from_path(source_type: &str, path_str: &str) -> Result<ImportResul
                 quick_commands: Vec::new(),
                 summary: format!("已从 WindTerm user.sessions 成功导入 {} 个会话", count),
                 skipped: 0,
-                passwords_skipped: 0,
+                passwords_skipped,
                 keys_missing: 0,
             })
         }
@@ -1033,6 +1075,74 @@ pub fn expand_tilde(path_str: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windterm_import_saved_logins() {
+        let cases = [
+            ("测试 master ", true, "6bqD6OZezOBD02/SdMpOlwjAi22OmiHjaozFPl0FI7gW0x8L09hZz6eFBUPQ34RmcAesG9rFYuKyZP8U6acQU5CZ54CzmoigiYnb05gp/Ds="),
+            ("", false, "aYRrVYjRVtHwNZfwT4vJjEXVuyw3wN4IcTVHMO2W8JiC8q+s/fDWSJi+NtTn7wByvouyZ+w1KVcGDy7wDHksbomlzWcqD5liMqUKQ1LmVLk="),
+        ];
+        for (master, protected, blob) in cases {
+            let profile = tempfile::tempdir().unwrap();
+            let dir = if protected { profile.path().join("terminal") } else { profile.path().to_owned() };
+            fs::create_dir_all(&dir).unwrap();
+            let file = dir.join("user.sessions");
+            let input = serde_json::json!([{
+                "session.autoLogin": blob, "session.target": "old-user@example.test", "ssh.authPublicKey": true
+            }, {"session.protocol":"Serial", "session.autoLogin":"not-an-ssh-login"}]);
+            fs::write(&file, input.to_string()).unwrap();
+            let import = |master| import_from_path("windterm_sessions", file.to_str().unwrap(), master);
+            let skipped = import(None).unwrap();
+            assert_eq!(skipped.passwords_skipped, 1);
+            assert_eq!(skipped.sessions[0].username, "old-user");
+            assert!(skipped.sessions[0].password.is_none());
+            assert_eq!(import(Some(master)).unwrap_err().to_string(), "windtermProfile");
+            fs::write(profile.path().join("user.config"), serde_json::json!({
+                "application.fingerprint": "test-profile", "application.masterPassword": protected
+            }).to_string()).unwrap();
+            if protected {
+                assert_eq!(import(Some("")).unwrap_err().to_string(), "windtermMasterRequired");
+                assert_eq!(import(Some("wrong")).unwrap_err().to_string(), "windtermDecryptFailed");
+            } else {
+                // No master password set: a typed one is ignored.
+                assert_eq!(import(Some("typed anyway")).unwrap().sessions[0].username, "测试");
+            }
+            let result = import(Some(master)).unwrap();
+            assert_eq!(result.passwords_skipped, 0);
+            // A damaged login next to a good one skips only that session's login.
+            let mut more = input.clone();
+            more.as_array_mut().unwrap().push(serde_json::json!({"session.autoLogin": "AAAA", "session.target": "other.test"}));
+            fs::write(&file, more.to_string()).unwrap();
+            let partial = import(Some(master)).unwrap();
+            assert_eq!(partial.passwords_skipped, 1);
+            assert!(partial.sessions[0].password.is_some() && partial.sessions[2].password.is_none());
+            fs::write(&file, input.to_string()).unwrap();
+            let session = &result.sessions[0];
+            assert_eq!(session.host, "example.test");
+            assert_eq!(session.username, "测试");
+            assert_eq!(session.password.as_deref(), Some(" p@ss 密码 "));
+            assert_eq!(session.auth_type, AuthType::Password);
+        }
+    }
+
+    #[test]
+    fn windterm_disabled_password_is_not_imported() {
+        let mut login: Login = serde_json::from_str(r#"{"session.user":"jsmith","PasswordEnabled":false,"Password":"unused"}"#).unwrap();
+        assert_eq!(login.username, "jsmith");
+        assert!(login.take_password().is_none());
+    }
+
+    #[test]
+    fn windterm_login_key_and_passphrase() {
+        // Shapes seen in real WindTerm 2.x logins: Windows entries win, empty ones fall back.
+        let mut login: Login = serde_json::from_str(r#"{"session.user":"u","Public Key":
+            {"pass":"unix-pass","path":"~/.ssh/a","windows.pass":"","windows.path":"C:/k/id"}}"#).unwrap();
+        assert_eq!(login.take_key(), (Some("C:/k/id".into()), Some("unix-pass".into())));
+        let mut login: Login = serde_json::from_str(r#"{"Public Key":{"pass":null,"path":""}}"#).unwrap();
+        assert_eq!(login.take_key(), (None, None));
+        let mut login: Login = serde_json::from_str(r#"{"session.user":"u"}"#).unwrap();
+        assert_eq!(login.take_key(), (None, None));
+    }
 
     #[test]
     fn test_parse_windterm_sessions_ssh_and_tcp() {

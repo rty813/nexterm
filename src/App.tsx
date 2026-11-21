@@ -200,6 +200,11 @@ export const App: React.FC = () => {
   /** paneId -> session log file currently being written. */
   const [logPaths, setLogPaths] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<string | null>(null);
+  /** A backend error as shown to the user: known codes translated, other text as is. */
+  const backendErrorText = (err: unknown) => {
+    const key = syncErrorKey(err);
+    return key ? t(key) : String(err);
+  };
   /** Update download in progress. */
   const [updateProgress, setUpdateProgress] = useState<{ version: string; progress: UpdateProgress } | null>(null);
   /** Pane the forwarding panel was opened for (pane menu); falls back to the active pane. */
@@ -316,9 +321,13 @@ export const App: React.FC = () => {
       commandHistory.configure(historyOf(snap.settings));
       void commandHistory.load();
       setInitialSnapshot(snap);
+      // Local files this Windows account could not open were set aside: say so once.
+      const notes = (snap.notices ?? []).map((n) =>
+        t(n.file === "sessions" ? "localData.sessionsSetAside" : "localData.settingsSetAside", { kept: n.kept }));
+      if (notes.length) setToast(notes.join(" "));
     }).catch((err) => {
       console.error("load initial state", err);
-      if (mounted) setLoadFailed(true);
+      if (mounted) { setLoadFailed(true); setToast(backendErrorText(err)); }
     });
     void backend.loadDataFile<SenderItem[]>("senders").then((list) => {
       if (mounted && Array.isArray(list)) setSenders(list);
@@ -808,8 +817,17 @@ export const App: React.FC = () => {
   const activeLeaf = useMemo(() => activeLeafOf(activeGroup) ?? null, [activeGroup]);
 
   const persistSessions = (next: SessionConfig[]) => {
+    // Saving over data that failed to load would lose it.
+    if (loadFailed) {
+      setToast(t("localData.loadFailedNoSave"));
+      return;
+    }
+    const previous = sessionsRef.current;
     setSessions(next);
-    void backend.saveSessions(next).then(() => backend.emitSessionsChanged());
+    void backend.saveSessions(next).then(() => backend.emitSessionsChanged(), (err) => {
+      setSessions((current) => current === next ? previous : current);
+      setToast(backendErrorText(err));
+    });
   };
 
   // Connected SSH tabs in this window, for the port forwarding panel.

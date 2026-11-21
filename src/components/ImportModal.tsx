@@ -4,11 +4,18 @@ import { CheckCircle2, Download, FolderOpen, RefreshCw, X } from "lucide-react";
 import { backend } from "../services/backend";
 import type { TFunction } from "i18next";
 import type { DiscoveryCandidate, ImportResult } from "../types/domain";
+import { syncErrorKey } from "../utils/configSync";
 
 /** Result line: localized for the session importers that report counts, else the backend text. */
 function importFeedback(res: ImportResult, sourceType: string, t: TFunction): string {
-  if (sourceType !== "xshell_sessions" && sourceType !== "mobaxterm") return res.summary;
+  if (!["windterm_sessions", "xshell_sessions", "mobaxterm"].includes(sourceType)) return res.summary;
   const parts = [t("importModal.importedSessions", { count: res.sessions.length })];
+  if (sourceType === "windterm_sessions") {
+    const count = res.sessions.filter((session) => session.password).length;
+    if (count) parts.push(t("importModal.windtermPasswords", { count }));
+    if (res.passwordsSkipped) parts.push(t("importModal.windtermSkipped", { count: res.passwordsSkipped }));
+    return parts.join(" · ");
+  }
   if (res.skipped) parts.push(t("importModal.skipped", { count: res.skipped }));
   if (res.passwordsSkipped) parts.push(t("importModal.passwordsSkipped", { count: res.passwordsSkipped }));
   if (res.keysMissing) parts.push(t("importModal.keysMissing", { count: res.keysMissing }));
@@ -39,6 +46,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [withLogin, setWithLogin] = useState(false);
+  const [master, setMaster] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const refreshCandidates = async () => {
     setLoading(true);
@@ -58,14 +68,23 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   }, []);
 
   const runImport = async (sourceType: string, path: string) => {
+    if (importing) return;
+    setImporting(true);
     setError(null);
     setFeedback(null);
     try {
-      const res = await backend.executeImport(sourceType, path);
+      const password = sourceType === "windterm_sessions" && withLogin ? master : undefined;
+      setMaster("");
+      const res = await backend.executeImport(sourceType, path, password);
       setFeedback(importFeedback(res, sourceType, t));
       onImported(res);
     } catch (err) {
-      setError(String(err));
+      const reason = String(err);
+      const known = syncErrorKey(reason);
+      setError(["windtermProfile", "windtermMasterRequired", "windtermDecryptFailed"].includes(reason)
+        ? t(`importModal.${reason}`) : known ? t(known) : reason);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -126,7 +145,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           </button>
         </div>
 
-        <div className="modal-body">
+        <div className="modal-body" aria-busy={importing}>
           <h4 className="section-heading">{t("importModal.manualHeading")}</h4>
           <div className="import-sources">
             <span className="import-source-name">WindTerm</span>
@@ -140,6 +159,19 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               <button type="button" className="btn-secondary btn-sm" onClick={() => void browseFile("windterm_theme")}>
                 <FolderOpen size={13} /> {t("importModal.pick.theme")}
               </button>
+            </div>
+
+            <span />
+            <div>
+              <label className="checkbox-row"><input type="checkbox" checked={withLogin} disabled={importing} onChange={(event) => {
+                setWithLogin(event.target.checked);
+                setMaster("");
+              }} />{t("importModal.windtermLogin")}</label>
+              {withLogin && <>
+                <p className="adv-hint">{t("importModal.windtermStorage")}</p>
+                <label>{t("importModal.windtermMaster")}<input type="password" autoComplete="off" value={master}
+                  disabled={importing} onChange={(event) => setMaster(event.target.value)} /></label>
+              </>}
             </div>
 
             <span className="import-source-name">Xshell</span>
@@ -167,6 +199,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             </div>
           </div>
           <p className="adv-hint">{t("importModal.credentialsNote")}</p>
+
+          {importing && <div role="status">{t("importModal.importing")}</div>}
 
           {feedback && (
             <div className="alert-success">

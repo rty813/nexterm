@@ -205,6 +205,8 @@ export interface QuickCommand {
   /** "text" (default) sends `command`; "action" runs the app action `action`. */
   kind?: "text" | "action";
   action?: string;
+  /** Decode backslash escapes (\r \n \t \xHH ...) when sending, like WindTerm. Set on WindTerm imports. */
+  escapes?: boolean;
 }
 
 /** How the quick bar lays out its commands (Quick Commands dialog options). */
@@ -642,6 +644,15 @@ export interface AppStateSnapshot {
   quickCommands: QuickCommand[];
   customThemes: ThemeDefinition[];
   settings: AppSettings;
+  /** Local files that could not be used and were set aside (shown to the user once). */
+  notices?: StorageNotice[];
+}
+
+/** A local data file this Windows account could not open (or a damaged one), kept as `kept`. */
+export interface StorageNotice {
+  /** "sessions": the list started empty; "settings": the parts that could not be opened were reset. */
+  file: "sessions" | "settings";
+  kept: string;
 }
 
 export interface DiscoveryCandidate {

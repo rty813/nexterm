@@ -560,6 +560,16 @@ export const QuickCommandManager: React.FC<QuickCommandManagerProps> = ({
                     <span>{t("quickManager.enterAtEnd")}</span>
                   </label>
                 )}
+                {!isAction && (
+                  <label className="checkbox-row qm-enter">
+                    <input
+                      type="checkbox"
+                      checked={!!selected.escapes}
+                      onChange={(e) => patch(selected.id, { escapes: e.target.checked || undefined })}
+                    />
+                    <span>{t("quickManager.escapes")}</span>
+                  </label>
+                )}
               </>
             )}
           </div>

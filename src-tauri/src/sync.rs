@@ -32,6 +32,7 @@ use serde_json::{Map, Value};
 
 use crate::models::{AppSettings, ImportedTheme, QuickCommand, SessionConfig};
 use crate::storage::Storage;
+use crate::local_secrets::{self, Kind};
 
 pub const FORMAT: &str = "nexterm-config";
 pub const VERSION: u64 = 1;
@@ -222,7 +223,7 @@ fn strip_local_settings(value: &mut Value) {
 }
 
 /// The selected data files as a `data` object (absent files are left out).
-pub fn collect(base: &Path, categories: &[String]) -> Map<String, Value> {
+pub fn collect(base: &Path, categories: &[String]) -> Result<Map<String, Value>, String> {
     let mut data = Map::new();
     for file in files_of(categories) {
         if file == CREDENTIALS_FILE {
@@ -238,13 +239,18 @@ pub fn collect(base: &Path, categories: &[String]) -> Map<String, Value> {
             }
             continue;
         }
-        let Some(mut value) = read_json(&base.join(format!("{file}.json"))) else { continue };
+        let path = base.join(format!("{file}.json"));
+        let value = match Kind::named(file) {
+            Some(kind) => kind.read(&path, false).map_err(|e| e.to_string())?,
+            None => read_json(&path),
+        };
+        let Some(mut value) = value else { continue };
         if file == "settings" {
             strip_local_settings(&mut value);
         }
         data.insert(file.to_string(), value);
     }
-    data
+    Ok(data)
 }
 
 /// Hash of a `data` object (serde_json's map is ordered, so this is stable).
@@ -272,6 +278,7 @@ fn derive_key(password: &str, salt: &[u8], iterations: u32) -> LessSafeKey {
 
 /// Serialize a bundle, encrypting `data` when a password is given.
 pub fn seal(data: &Map<String, Value>, password: &str) -> Result<Vec<u8>, String> {
+    require_export_password(data, password)?;
     let mut out = Map::new();
     out.insert("format".into(), FORMAT.into());
     out.insert("version".into(), VERSION.into());
@@ -303,6 +310,14 @@ pub fn seal(data: &Map<String, Value>, password: &str) -> Result<Vec<u8>, String
         out.insert("ciphertext".into(), B64.encode(buf).into());
     }
     serde_json::to_vec_pretty(&Value::Object(out)).map_err(|e| e.to_string())
+}
+
+fn require_export_password(data: &Map<String, Value>, password: &str) -> Result<(), String> {
+    if password.is_empty() && ["sessions", CREDENTIALS_FILE].iter().any(|key|
+        data.get(*key).is_some_and(|v| v.as_array().is_none_or(|items| !items.is_empty()))) {
+        return Err("exportPasswordRequired".into());
+    }
+    Ok(())
 }
 
 /// A bundle read back, `data` still sealed when it is encrypted.
@@ -467,6 +482,16 @@ fn backup(base: &Path, files: &[&str]) -> Result<PathBuf, String> {
     for file in files {
         let src = base.join(format!("{file}.json"));
         if src.exists() {
+            if let Some(kind) = Kind::named(file) {
+                // Encrypt plain text first so the copy holds none. A file that cannot be
+                // opened is still copied when it is all ciphertext (it is being replaced).
+                match kind.read(&src, true) {
+                    Ok(_) => (),
+                    Err(e) if local_secrets::recoverable(&e) && local_secrets::sealed_on_disk(kind, &src) => (),
+                    Err(e) if local_secrets::recoverable(&e) => continue,
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
             fs::copy(&src, dir.join(format!("{file}.json"))).map_err(|e| e.to_string())?;
         }
     }
@@ -485,6 +510,7 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
     let files: Vec<&str> = files_of(categories).into_iter().filter(|f| data.contains_key(*f)).collect();
     // Validate everything before touching a file.
     let mut planned = Vec::new();
+    let mut unreadable = Vec::new();
     let mut credentials = None;
     let mut background = None;
     for file in &files {
@@ -499,7 +525,22 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
             continue;
         }
         let path = base.join(format!("{file}.json"));
-        let local = read_json(&path);
+        let local = match Kind::named(file) {
+            // Restoring is how a file this account cannot open is recovered: go on with what
+            // can be read (nothing for sessions) and keep the original file next to it.
+            Some(kind) => match kind.read(&path, false) {
+                Ok(local) => local,
+                Err(e) if local_secrets::recoverable(&e) => {
+                    unreadable.push(path.clone());
+                    match kind {
+                        Kind::Sessions => None,
+                        Kind::Settings => kind.read_salvaged(&path).map_err(|e| e.to_string())?,
+                    }
+                }
+                Err(e) => return Err(e.to_string()),
+            },
+            None => read_json(&path),
+        };
         let incoming = &data[*file];
         let next = match (*file, mode, local) {
             ("settings", _, local) => merge_settings(&local.unwrap_or(Value::Null), incoming, mode),
@@ -507,6 +548,10 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
             _ => incoming.clone(),
         };
         validate(file, &next)?;
+        let next = match Kind::named(file) {
+            Some(kind) => kind.protect(next).map_err(|e| e.to_string())?,
+            None => next,
+        };
         planned.push((path, next));
     }
     if planned.is_empty() && credentials.is_none() && background.is_none() {
@@ -516,12 +561,15 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
     // never overwritten (each has its own name), so it needs no backup.
     let backed: Vec<&str> = files.iter().copied().filter(|f| *f != CREDENTIALS_FILE && *f != BACKGROUND_FILE).collect();
     backup(base, &backed)?;
+    for path in &unreadable {
+        local_secrets::set_aside(path, true).map_err(|e| e.to_string())?;
+    }
     // The image before the settings naming it, so windows reloading them find the file.
     if let Some((name, bytes)) = &background {
         crate::background::store(base, name, bytes)?;
     }
     for (path, value) in &planned {
-        write_json(path, value)?;
+        local_secrets::write_atomic(path, value).map_err(|e| e.to_string())?;
     }
     if let Some(plan) = credentials {
         for (target, value) in &plan.set {
@@ -1080,7 +1128,7 @@ pub async fn run(storage: &Mutex<Storage>, cfg: &SyncConfig, action: SyncAction)
     let categories = normalize_categories(&cfg.categories);
     let target = cfg.target_id();
     let mut state = load_state(&base);
-    let local = collect(&base, &categories);
+    let local = collect(&base, &categories)?;
     let local_hash = data_hash(&local);
     let remote = match remote_get(cfg).await? {
         Some(bytes) => Some(Envelope::parse(&bytes)?),
@@ -1110,8 +1158,11 @@ pub async fn run(storage: &Mutex<Storage>, cfg: &SyncConfig, action: SyncAction)
         (SyncAction::Merge, _) => {
             let remote = remote.as_ref().expect("checked above");
             let data = remote.open(&cfg.password)?;
+            require_export_password(&local, &cfg.password)?;
+            let selected: Map<_, _> = files_of(&categories).into_iter().filter_map(|key| data.get(key).map(|value| (key.to_owned(), value.clone()))).collect();
+            require_export_password(&selected, &cfg.password)?;
             outcome.applied = apply_locked(storage, &data, &categories, ImportMode::Merge)?;
-            let merged = collect(&base, &categories);
+            let merged = collect(&base, &categories)?;
             remote_put(cfg, seal(&merged, &cfg.password)?).await?;
             outcome.result = "merged".into();
             let h = data_hash(&merged);
@@ -1127,7 +1178,7 @@ pub async fn run(storage: &Mutex<Storage>, cfg: &SyncConfig, action: SyncAction)
             let data = remote.open(&cfg.password)?;
             outcome.applied = apply_locked(storage, &data, &categories, ImportMode::Replace)?;
             outcome.result = "downloaded".into();
-            (data_hash(&collect(&base, &categories)), remote.hash.clone())
+            (data_hash(&collect(&base, &categories)?), remote.hash.clone())
         }
         (_, Decision::Conflict) => {
             outcome.result = "conflict".into();
@@ -1216,12 +1267,12 @@ mod tests {
     #[test]
     fn seal_roundtrip_plain_and_encrypted() {
         let mut data = Map::new();
-        data.insert("sessions".into(), json!([{ "id": "1" }]));
+        data.insert("quick_commands".into(), json!([{ "id": "1" }]));
         let plain = Envelope::parse(&seal(&data, "").unwrap()).unwrap();
         assert!(!plain.encrypted());
         assert_eq!(plain.open("").unwrap(), data);
         assert_eq!(plain.hash, data_hash(&data));
-        assert_eq!(plain.categories().unwrap(), vec!["sessions".to_string()]);
+        assert_eq!(plain.categories().unwrap(), vec!["quickCommands".to_string()]);
 
         let sealed = seal(&data, "pw").unwrap();
         assert!(!String::from_utf8_lossy(&sealed).contains("\"id\""));
@@ -1239,6 +1290,40 @@ mod tests {
         assert_eq!(Envelope::parse(b"not json").unwrap_err(), code::BAD_FORMAT);
         let newer = json!({ "format": FORMAT, "version": VERSION + 1, "data": {} });
         assert_eq!(Envelope::parse(newer.to_string().as_bytes()).unwrap_err(), code::NEWER_VERSION);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn session_exports_require_password_and_restore_to_local_ciphertext() {
+        let dir = tempfile::tempdir().unwrap();
+        let cats = vec!["sessions".to_owned()];
+        let mut entry = session("first");
+        entry["password"] = json!("fixture-secret");
+        let data = Map::from_iter([("sessions".into(), json!([entry]))]);
+        assert_eq!(seal(&data, "").unwrap_err(), "exportPasswordRequired");
+        let bytes = seal(&data, "export-key").unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("fixture-secret"));
+        let opened = Envelope::parse(&bytes).unwrap().open("export-key").unwrap();
+        let path = dir.path().join("sessions.json");
+        write_json(&path, &data["sessions"]).unwrap();
+        apply(dir.path(), &opened, &cats, ImportMode::Replace).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("fixture-secret"));
+        assert_eq!(collect(dir.path(), &cats).unwrap(), data);
+        for entry in fs::read_dir(dir.path().join("backups")).unwrap() {
+            let path = entry.unwrap().path().join("sessions.json");
+            assert!(!fs::read_to_string(&path).unwrap().contains("fixture-secret"));
+            assert_eq!(Kind::Sessions.read(&path, false).unwrap().unwrap(), data["sessions"]);
+        }
+
+        // A sessions file this account cannot open does not block restoring; it is kept.
+        let mut foreign: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        foreign["ciphertext"] = json!("YWJj");
+        fs::write(&path, foreign.to_string()).unwrap();
+        apply(dir.path(), &opened, &cats, ImportMode::Merge).unwrap();
+        assert_eq!(collect(dir.path(), &cats).unwrap(), data);
+        let kept = fs::read_dir(dir.path()).unwrap().flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("sessions.json.unreadable-")).count();
+        assert_eq!(kept, 1);
     }
 
     #[test]
@@ -1274,7 +1359,7 @@ mod tests {
         write_json(&dir.join("plugins.json"), &json!([{ "id": "team.a", "enabled": true, "config": { "user": "me" } }])).unwrap();
         write_json(&dir.join("plugin_stores.json"), &json!([{ "id": "2648d2bab1b4c559", "token": "t" }])).unwrap();
         let categories = vec!["plugins".to_string()];
-        let data = collect(&dir, &categories);
+        let data = collect(&dir, &categories).unwrap();
         assert_eq!(data.keys().cloned().collect::<Vec<_>>(), vec!["plugin_stores", "plugins"]);
         // Another computer's plugins merge by id; local ones it does not know about stay.
         let mut incoming = data.clone();
@@ -1338,7 +1423,7 @@ mod tests {
         write_json(&base.join("senders.json"), &json!([{ "id": "s1" }])).unwrap();
 
         let all = normalize_categories(&[]);
-        let data = collect(&base, &all);
+        let data = collect(&base, &all).unwrap();
         assert!(data["settings"].get("sync").is_none());
         assert!(data.contains_key("senders"));
         assert!(!data.contains_key("sessions"));
@@ -1350,7 +1435,7 @@ mod tests {
         incoming.insert("senders".into(), json!([{ "id": "s2" }]));
         let applied = apply(&base, &incoming, &all, ImportMode::Merge).unwrap();
         assert_eq!(applied, vec!["settings".to_string(), "senders".to_string()]);
-        let saved = read_json(&base.join("settings.json")).unwrap();
+        let saved = Kind::Settings.read(&base.join("settings.json"), false).unwrap().unwrap();
         assert_eq!(saved["fontSize"], json!(20));
         assert_eq!(saved["sync"], json!({ "provider": "folder" }));
         assert_eq!(read_json(&base.join("senders.json")).unwrap(), json!([{ "id": "s1" }, { "id": "s2" }]));
@@ -1376,9 +1461,9 @@ mod tests {
         write_json(&from.join("settings.json"), &settings).unwrap();
 
         // Only with the settings category; the background settings are no longer local.
-        assert!(!collect(&from, &["themes".to_string()]).contains_key(BACKGROUND_FILE));
+        assert!(!collect(&from, &["themes".to_string()]).unwrap().contains_key(BACKGROUND_FILE));
         let cats = vec!["settings".to_string()];
-        let data = collect(&from, &cats);
+        let data = collect(&from, &cats).unwrap();
         assert_eq!(data["settings"]["background"]["fit"], json!("tile"));
         assert_eq!(data[BACKGROUND_FILE]["name"], json!(name));
 
@@ -1400,13 +1485,13 @@ mod tests {
 
         // Image file gone: the settings still sync, without an image entry.
         fs::remove_dir_all(crate::background::dir(&from)).unwrap();
-        assert!(!collect(&from, &cats).contains_key(BACKGROUND_FILE));
+        assert!(!collect(&from, &cats).unwrap().contains_key(BACKGROUND_FILE));
         let _ = fs::remove_dir_all(from);
         let _ = fs::remove_dir_all(to);
     }
 
     fn sessions_of(base: &Path) -> Vec<String> {
-        read_json(&base.join("sessions.json"))
+        Kind::Sessions.read(&base.join("sessions.json"), false).unwrap()
             .and_then(|v| v.as_array().cloned())
             .unwrap_or_default()
             .iter()

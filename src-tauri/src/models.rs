@@ -244,6 +244,10 @@ pub struct QuickCommand {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    /// Decode backslash escapes (\r \n \t \xHH ...) when sending, as WindTerm does.
+    /// Set on commands imported from WindTerm; off for commands written here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escapes: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,6 +341,19 @@ pub struct AppStateSnapshot {
     pub quick_commands: Vec<QuickCommand>,
     pub custom_themes: Vec<ImportedTheme>,
     pub settings: AppSettings,
+    /// Local files that could not be used and were set aside, to tell the user once.
+    #[serde(default)]
+    pub notices: Vec<StorageNotice>,
+}
+
+/// A local data file this Windows account could not open (or a damaged one), kept as `kept`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageNotice {
+    /// "sessions" (the list started empty) or "settings" (the parts that could not be
+    /// opened, such as the sync configuration, were reset).
+    pub file: String,
+    pub kept: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

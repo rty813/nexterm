@@ -1041,7 +1041,7 @@ fn request_control(
 fn saved_sessions(ctx: &crate::AppContext) -> Result<Vec<crate::models::SessionConfig>, String> {
     let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
     // No sessions file yet: nothing saved.
-    Ok(storage.load_sessions().unwrap_or_default())
+    storage.load_sessions().map_err(|e| e.to_string())
 }
 
 /// A saved session by id, exact name, name in any case, or a name part that only one has.

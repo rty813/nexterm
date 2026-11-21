@@ -639,11 +639,11 @@ export const backend = {
     return invoke<DiscoveryCandidate[]>("scan_import_candidates");
   },
 
-  async executeImport(sourceType: string, path: string): Promise<ImportResult> {
+  async executeImport(sourceType: string, path: string, windtermMaster?: string): Promise<ImportResult> {
     if (!isTauriRuntime()) {
       return { sessions: [], themes: [], quickCommands: [], summary: "Browser preview mode" };
     }
-    return invoke<ImportResult>("execute_import", { sourceType, path });
+    return invoke<ImportResult>("execute_import", { sourceType, path, windtermMaster });
   },
 
   /** The local WindTerm quick commands (quickbar.config), without saving them; null when none. */
