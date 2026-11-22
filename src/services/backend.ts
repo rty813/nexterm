@@ -75,6 +75,8 @@ export interface HistoryMarks {
   buckets: number[][];
   /** Per query: why it does not compile, or null. */
   errors: (string | null)[];
+  /** False: the time limit came first; counts and buckets cover the history scanned so far. */
+  complete: boolean;
 }
 
 export interface HostKeyPromptPayload {
@@ -590,15 +592,29 @@ export const backend = {
   },
 
   /** Matches from history line `from` on (or back), across the whole history. */
-  async historySearch(instanceId: string, spec: HistoryQuery, from: number, backward: boolean, limit: number): Promise<HistorySearchResult> {
+  /** `budget`: search at most this many lines; `next` then says where to go on. */
+  async historySearch(
+    instanceId: string,
+    spec: HistoryQuery,
+    from: number,
+    backward: boolean,
+    limit: number,
+    budget?: number
+  ): Promise<HistorySearchResult> {
     if (!isTauriRuntime()) return { matches: [], next: null };
-    return invoke<HistorySearchResult>("history_search", { instanceId, spec, from, backward, limit });
+    return invoke<HistorySearchResult>("history_search", { instanceId, spec, from, backward, limit, budget: budget ?? null });
   },
 
   /** Where each query matches in the whole history (`buckets` slots) and how often; null: no history. */
-  async historyMarks(instanceId: string, specs: HistoryQuery[], buckets: number): Promise<HistoryMarks | null> {
+  /** `budgetMs`: return what is known after about this long (`complete` false); ask again to go on. */
+  async historyMarks(instanceId: string, specs: HistoryQuery[], buckets: number, budgetMs?: number): Promise<HistoryMarks | null> {
     if (!isTauriRuntime()) return null;
-    return invoke<HistoryMarks | null>("history_marks", { instanceId, specs, buckets: Math.max(1, Math.round(buckets)) });
+    return invoke<HistoryMarks | null>("history_marks", {
+      instanceId,
+      specs,
+      buckets: Math.max(1, Math.round(buckets)),
+      budgetMs: budgetMs ?? null,
+    });
   },
 
   /** Matches before (line, UTF-16 offset start): the position shown as "3/120". */

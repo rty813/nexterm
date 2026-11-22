@@ -282,11 +282,14 @@ async fn history_search(
     from: u64,
     backward: bool,
     limit: Option<u32>,
+    budget: Option<u64>,
 ) -> Result<crate::history::SearchResult, String> {
     let r = crate::history::get(&instance_id).ok_or("no history")?;
     let m = crate::history::Matcher::new(&spec)?;
     let limit = limit.unwrap_or(500).clamp(1, 5000) as usize;
-    tauri::async_runtime::spawn_blocking(move || r.search(&m, from, backward, limit, u64::MAX))
+    // `budget`: search at most this many lines (the results list loads in steps).
+    let budget = budget.unwrap_or(u64::MAX).max(1);
+    tauri::async_runtime::spawn_blocking(move || r.search(&m, from, backward, limit, budget))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -297,9 +300,13 @@ async fn history_marks(
     instance_id: String,
     specs: Vec<crate::history::QuerySpec>,
     buckets: u32,
+    budget_ms: Option<u64>,
 ) -> Result<Option<crate::history::Marks>, String> {
     let Some(r) = crate::history::get(&instance_id) else { return Ok(None) };
-    tauri::async_runtime::spawn_blocking(move || r.marks_of(&specs, buckets).map(Some))
+    // `budget_ms`: return what is known after about this long (`complete` false), so the
+    // count fills in while a long history is scanned.
+    let budget = budget_ms.map(std::time::Duration::from_millis);
+    tauri::async_runtime::spawn_blocking(move || r.marks_of(&specs, buckets, budget).map(Some))
         .await
         .map_err(|e| e.to_string())?
 }

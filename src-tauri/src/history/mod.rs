@@ -11,9 +11,10 @@ pub mod search;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -56,6 +57,10 @@ pub struct Recorder {
     cache: Arc<BlockCache>,
     /// Per-block match summaries of recent queries (search counts, scrollbar marks).
     summaries: SummaryCache,
+    /// Bumped by each `marks` call; an older call still running sees it and stops.
+    marks_gen: AtomicU64,
+    /// The same for `rank`.
+    rank_gen: AtomicU64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +126,8 @@ pub struct Marks {
     pub buckets: Vec<Vec<u32>>,
     /// Queries that did not compile (their counts and buckets are empty).
     pub errors: Vec<Option<String>>,
+    /// False: stopped at the time limit; counts and buckets cover what was scanned so far.
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,7 +176,7 @@ impl Recorder {
                 }
             }
         });
-        Arc::new(Recorder { tx: Mutex::new(tx), state, cache, summaries: SummaryCache::default() })
+        Arc::new(Recorder { tx: Mutex::new(tx), state, cache, summaries: SummaryCache::default(), marks_gen: AtomicU64::new(0), rank_gen: AtomicU64::new(0) })
     }
 
     pub fn feed(&self, data: &[u8]) {
@@ -330,12 +337,28 @@ impl Recorder {
     /// `[first, total)` split into `buckets` (scrollbar marks), and how many there are.
     /// Sealed blocks are summarized once per query and cached.
     pub fn marks(&self, ms: &[Matcher], buckets: u32) -> Result<Marks, String> {
+        self.marks_within(ms, buckets, None)
+    }
+
+    /// `marks`, returning after about `budget` with what is known by then (`complete`
+    /// false): the front end shows that and asks again, and the next call goes on from where
+    /// this one stopped, so a long history fills in step by step instead of all at the end.
+    pub fn marks_within(&self, ms: &[Matcher], buckets: u32, budget: Option<Duration>) -> Result<Marks, String> {
+        let started = Instant::now();
         let buckets = buckets.clamp(1, 10_000);
         let (info, plan, tail) = self.snapshot();
         let total = info.end + info.tail;
         let span = total.saturating_sub(info.first);
         let refs: Vec<&Matcher> = ms.iter().collect();
-        let sums = self.summaries.summaries(&plan.blocks, &refs)?;
+        // A newer call (the query was edited) takes over: this one stops, and the blocks it
+        // summarized stay cached for whoever asks next.
+        let generation = self.marks_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let superseded = || self.marks_gen.load(Ordering::Relaxed) != generation;
+        let stop = || superseded() || budget.is_some_and(|b| started.elapsed() >= b);
+        let (sums, complete) = self.summaries.summaries_within(&plan.blocks, &refs, &stop)?;
+        if !complete && superseded() {
+            return Err(search::CANCELLED.to_string());
+        }
         let mut counts = Vec::with_capacity(ms.len());
         let mut out = Vec::with_capacity(ms.len());
         for (j, m) in ms.iter().enumerate() {
@@ -356,18 +379,19 @@ impl Recorder {
             counts.push(count);
             out.push(bs);
         }
-        Ok(Marks { first: info.first, total, counts, buckets: out, errors: vec![None; ms.len()] })
+        Ok(Marks { first: info.first, total, counts, buckets: out, errors: vec![None; ms.len()], complete })
     }
 
     /// `marks` for queries as the front end gives them: one that does not compile gets an
     /// error instead of failing the others.
-    pub fn marks_of(&self, specs: &[QuerySpec], buckets: u32) -> Result<Marks, String> {
+    pub fn marks_of(&self, specs: &[QuerySpec], buckets: u32, budget: Option<Duration>) -> Result<Marks, String> {
         let compiled: Vec<Result<Matcher, String>> = specs.iter().map(Matcher::new).collect();
         let ok: Vec<Matcher> = compiled.iter().filter_map(|c| c.as_ref().ok()).cloned().collect();
-        let got = self.marks(&ok, buckets)?;
+        let got = self.marks_within(&ok, buckets, budget)?;
         let mut counts = got.counts.into_iter();
         let mut bs = got.buckets.into_iter();
-        let mut out = Marks { first: got.first, total: got.total, counts: vec![], buckets: vec![], errors: vec![] };
+        let mut out =
+            Marks { first: got.first, total: got.total, counts: vec![], buckets: vec![], errors: vec![], complete: got.complete };
         for c in compiled {
             let err = c.err();
             let ok = err.is_none();
@@ -387,7 +411,10 @@ impl Recorder {
                 .sum()
         };
         let whole: Vec<archive::BlockRef> = plan.blocks.iter().filter(|b| b.end() <= line).cloned().collect();
-        let sums = self.summaries.summaries(&whole, &[m])?;
+        // Only the latest rank matters (the match jumped to last): an older one stops.
+        let generation = self.rank_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let superseded = || self.rank_gen.load(Ordering::Relaxed) != generation;
+        let sums = self.summaries.summaries(&whole, &[m], &superseded)?;
         let mut n: u64 = sums[0].iter().map(|s| u64::from(s.count)).sum();
         if let Some(b) = plan.blocks.iter().find(|b| b.first <= line && b.end() > line) {
             n += before(search::scan_raw(&b.raw()?, b.first, b.first, line + 1, m)?);
@@ -731,6 +758,20 @@ mod tests {
         assert_eq!(r.rank(&m, 1000, 0).unwrap(), 111);
         assert_eq!(r.rank(&m, 1000, 1).unwrap(), 112);
         assert_eq!(r.rank(&m, 4999, 0).unwrap(), 1111);
+    }
+
+    #[test]
+    fn marks_in_steps() {
+        let r = filled(5000);
+        let ms = [q("row 1", false, true)];
+        // No time at all: nothing sealed is scanned, only the lines not sealed yet count.
+        let part = r.marks_within(&ms, 100, Some(Duration::ZERO)).unwrap();
+        assert!(!part.complete);
+        assert!(part.counts[0] < 1111);
+        // Asked again with time to spare, it finishes from the cache.
+        let done = r.marks_within(&ms, 100, Some(Duration::from_secs(30))).unwrap();
+        assert!(done.complete);
+        assert_eq!(done.counts, [1111]);
     }
 
     #[test]

@@ -51,27 +51,49 @@ export interface BufferMatch {
 
 /**
  * All matches in the normal buffer, scanning logical lines (wrapped rows joined)
- * so a match can span a wrap.
+ * so a match can span a wrap. `range`: only the logical lines that start in rows
+ * [from, to) (from widened to the start of its logical line).
  */
-export function findAll(term: Terminal, re: RegExp, limit = 2000): { matches: BufferMatch[]; truncated: boolean } {
+export function findAll(
+  term: Terminal,
+  re: RegExp,
+  limit = 2000,
+  range?: { from: number; to: number }
+): { matches: BufferMatch[]; truncated: boolean } {
   const buf = term.buffer.active;
   const matches: BufferMatch[] = [];
-  let y = 0;
-  while (y < buf.length) {
+  let y = range ? lineStart(term, Math.max(0, Math.min(range.from, buf.length - 1))) : 0;
+  const end = range ? Math.min(buf.length, Math.max(0, range.to)) : buf.length;
+  while (y < end) {
     const startRow = y;
-    let text = "";
-    const pos: { row: number; col: number }[] = [];
+    // First the logical line's text alone (xterm.js builds it natively, fast): most lines
+    // have no match and need not be read cell by cell. Same text as the cell-by-cell read:
+    // wrapped rows keep their trailing cells, the last row loses trailing whitespace.
+    let quick = "";
     do {
       const line = buf.getLine(y);
       if (!line) break;
-      const r = readRow(line);
-      // Keep trailing cells of wrapped rows: they are part of the logical line.
-      const next = buf.getLine(y + 1);
-      const full = next?.isWrapped ? readFullRow(line) : r;
-      for (let i = 0; i < full.text.length; i++) pos.push({ row: y, col: full.cols[i] });
-      text += full.text;
+      const raw = line.translateToString(false);
+      quick += buf.getLine(y + 1)?.isWrapped ? raw : raw.replace(/\s+$/, "");
       y++;
     } while (y < buf.length && buf.getLine(y)?.isWrapped);
+    if (y === startRow) {
+      y++;
+      continue;
+    }
+    re.lastIndex = 0;
+    if (!re.test(quick)) continue;
+
+    let text = "";
+    const pos: { row: number; col: number }[] = [];
+    for (let r = startRow; r < y; r++) {
+      const line = buf.getLine(r);
+      if (!line) break;
+      // Keep trailing cells of wrapped rows: they are part of the logical line.
+      const full = buf.getLine(r + 1)?.isWrapped ? readFullRow(line) : readRow(line);
+      for (let i = 0; i < full.text.length; i++) pos.push({ row: r, col: full.cols[i] });
+      text += full.text;
+    }
 
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -90,7 +112,6 @@ export function findAll(term: Terminal, re: RegExp, limit = 2000): { matches: Bu
       matches.push({ row: first.row, col: first.col, cells, lineText: text, start: s, end: e });
       if (matches.length >= limit) return { matches, truncated: true };
     }
-    if (y === startRow) y++;
   }
   return { matches, truncated: false };
 }

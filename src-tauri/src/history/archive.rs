@@ -1,12 +1,13 @@
 //! Storage of a pane's history: an uncompressed hot block, sealed zstd blocks in memory,
 //! and the oldest blocks spilled to encrypted segment files once memory is over its limit.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -62,10 +63,58 @@ fn nonce(n: u64) -> Nonce {
 /// One spill file. Deleted when the last block stored in it is dropped.
 pub struct Segment {
     path: PathBuf,
+    /// Opened on the first read and kept: a search reads thousands of blocks, and opening
+    /// the file for each one (virus scanners look at every open on Windows) cost more than
+    /// reading them.
+    reader: OnceLock<File>,
+}
+
+impl Segment {
+    fn new(path: PathBuf) -> Segment {
+        Segment { path, reader: OnceLock::new() }
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        let f = match self.reader.get() {
+            Some(f) => f,
+            None => {
+                let f = File::open(&self.path)?;
+                // Another reader may have opened it meanwhile: either handle will do.
+                let _ = self.reader.set(f);
+                self.reader.get().expect("segment reader")
+            }
+        };
+        read_exact_at(f, buf, offset)
+    }
+}
+
+#[cfg(unix)]
+fn read_exact_at(f: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, offset)
+}
+
+/// Positional reads on a shared handle: no seek, so readers on several threads do not race.
+#[cfg(windows)]
+fn read_exact_at(f: &File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match f.seek_read(buf, offset) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => {
+                buf = &mut buf[n..];
+                offset += n as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 impl Drop for Segment {
     fn drop(&mut self) {
+        // Close the handle first, or Windows cannot delete the file.
+        drop(self.reader.take());
         let _ = std::fs::remove_file(&self.path);
     }
 }
@@ -104,24 +153,36 @@ impl BlockRef {
 
     /// The block's encoded lines (see line.rs), decompressed and decrypted, not decoded.
     pub fn raw(&self) -> Result<Vec<u8>, String> {
-        let compressed = match &self.loc {
-            Loc::Mem(d) => return unpack(d, self.raw_len),
+        match &self.loc {
+            Loc::Mem(d) => unpack(d, self.raw_len),
             Loc::Disk { seg, offset, len, nonce: n } => {
-                let mut f = File::open(&seg.path).map_err(|e| e.to_string())?;
-                f.seek(SeekFrom::Start(*offset)).map_err(|e| e.to_string())?;
                 let mut buf = vec![0u8; *len as usize];
-                f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+                seg.read_at(*offset, &mut buf).map_err(|e| e.to_string())?;
                 let c = cipher().ok_or("no cipher")?;
                 let plain = c.key.open_in_place(nonce(*n), Aad::empty(), &mut buf).map_err(|_| "history block corrupt")?;
-                plain.to_vec()
+                unpack(plain, self.raw_len)
             }
-        };
-        unpack(&compressed, self.raw_len)
+        }
     }
 }
 
+thread_local! {
+    /// One zstd context per thread instead of a new one (and its buffers) per block.
+    static DCTX: RefCell<Option<zstd::bulk::Decompressor<'static>>> = const { RefCell::new(None) };
+}
+
 fn unpack(compressed: &[u8], raw_len: u32) -> Result<Vec<u8>, String> {
-    zstd::bulk::decompress(compressed, raw_len as usize).map_err(|e| e.to_string())
+    DCTX.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.is_none() {
+            *d = zstd::bulk::Decompressor::new().ok();
+        }
+        match d.as_mut() {
+            Some(d) => d.decompress(compressed, raw_len as usize),
+            None => zstd::bulk::decompress(compressed, raw_len as usize),
+        }
+        .map_err(|e| e.to_string())
+    })
 }
 
 struct SpillWriter {
@@ -140,7 +201,7 @@ impl SpillWriter {
             self.seq += 1;
             let path = self.dir.join(format!("{}-{}.bin", self.prefix, self.seq));
             let file = OpenOptions::new().create(true).write(true).truncate(true).open(&path)?;
-            self.current = Some((file, Arc::new(Segment { path }), 0));
+            self.current = Some((file, Arc::new(Segment::new(path)), 0));
         }
         let (file, seg, len) = self.current.as_mut().expect("segment");
         let n = c.counter.fetch_add(1, Ordering::Relaxed);

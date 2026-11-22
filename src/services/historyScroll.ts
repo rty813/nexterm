@@ -35,6 +35,8 @@ const SIG_LINES = 6;
 const MAX_SEG_ROWS = 30_000;
 const INFO_MS = 1000;
 const MIN_THUMB = 24;
+/** A marks request returns after about this long with what it has; the next goes on. */
+const MARKS_STEP_MS = 150;
 
 interface CoreLine {
   isWrapped: boolean;
@@ -95,8 +97,11 @@ export interface MarkLayer {
   lines?: number[];
   lineColor?: string;
   position: "left" | "right" | "full";
-  /** Match counts and compile errors of `specs`, after each refresh. */
-  onResult?: (r: { counts: number[]; errors: (string | null)[] }) => void;
+  /**
+   * Match counts and compile errors of `specs`, after each refresh. `complete` false: the
+   * history is still being scanned, the counts cover what was scanned so far and more follow.
+   */
+  onResult?: (r: { counts: number[]; errors: (string | null)[]; complete: boolean }) => void;
 }
 
 interface LayerState {
@@ -148,6 +153,10 @@ export class HistoryScroll implements IDisposable {
   private marksTimer = 0;
   private marksBusy = false;
   private marksDirty = false;
+  /** Number of the latest marks request; answers to older ones are dropped. */
+  private marksSeq = 0;
+  /** The last answer stopped at its time limit: ask again at once. */
+  private marksMore = false;
   private marksTotal = -1;
   /** Track height the marks were drawn for. */
   private drawnHeight = -1;
@@ -904,12 +913,18 @@ export class HistoryScroll implements IDisposable {
     window.clearTimeout(this.marksTimer);
     this.marksTimer = window.setTimeout(() => {
       this.marksTimer = 0;
-      void this.loadMarks();
+      void this.loadMarks(reset);
     }, delay);
   }
 
-  private async loadMarks(): Promise<void> {
-    if (this.marksBusy) {
+  /**
+   * `reset`: a layer changed. Its request goes out at once even while one is running: the
+   * backend stops the older one (a first pass over a long history takes seconds, and every
+   * edit of the query would otherwise wait for the previous query's pass). New output only
+   * asks again once the running request is done.
+   */
+  private async loadMarks(reset = false): Promise<void> {
+    if (this.marksBusy && !reset) {
       this.marksDirty = true;
       return;
     }
@@ -917,9 +932,12 @@ export class HistoryScroll implements IDisposable {
     if (!entries.length) return;
     const slots = this.slotCount();
     const specs = entries.flatMap(([, s]) => s.layer.specs!);
+    const seq = ++this.marksSeq;
     this.marksBusy = true;
     try {
-      const res = await backend.historyMarks(this.paneId, specs, slots);
+      const res = await backend.historyMarks(this.paneId, specs, slots, MARKS_STEP_MS);
+      // A newer request took over (and the backend stopped this one).
+      if (seq !== this.marksSeq) return;
       if (!res) return;
       this.marksTotal = res.total;
       let k = 0;
@@ -932,18 +950,35 @@ export class HistoryScroll implements IDisposable {
         }
         s.marks = res.buckets.slice(k, k + n);
         s.slots = slots;
-        s.layer.onResult?.({ counts: res.counts.slice(k, k + n), errors: res.errors.slice(k, k + n) });
+        s.layer.onResult?.({ counts: res.counts.slice(k, k + n), errors: res.errors.slice(k, k + n), complete: res.complete });
         k += n;
       }
+      // Stopped at the time limit: show this much, then go on from where it stopped.
+      if (!res.complete) this.marksMore = true;
     } catch (e) {
-      for (const [, s] of entries) s.layer.onResult?.({ counts: [], errors: s.layer.specs!.map(() => String(e)) });
-    } finally {
-      this.marksBusy = false;
-      this.drawMarks(true);
-      if (this.marksDirty) {
-        this.marksDirty = false;
-        this.scheduleMarks(30, true);
+      if (seq !== this.marksSeq) return;
+      if (String(e) === "cancelled") {
+        // Stopped by a request from elsewhere: what it summarized is kept, so asking again
+        // goes on from there.
+        this.marksDirty = true;
+      } else {
+        for (const [, s] of entries) s.layer.onResult?.({ counts: [], errors: s.layer.specs!.map(() => String(e)), complete: true });
       }
+    } finally {
+      if (seq === this.marksSeq) this.finishMarks();
+    }
+  }
+
+  private finishMarks(): void {
+    this.marksBusy = false;
+    this.drawMarks(true);
+    if (this.marksMore) {
+      this.marksMore = false;
+      this.marksDirty = false;
+      this.scheduleMarks(0, true);
+    } else if (this.marksDirty) {
+      this.marksDirty = false;
+      this.scheduleMarks(30, true);
     }
   }
 

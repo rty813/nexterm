@@ -24,6 +24,10 @@ const MATCH_RULER = "#d4a017";
 const DEBOUNCE_MS = 250;
 /** Full history: results shown in the list. */
 const LIST_LIMIT = 1000;
+/** Full history: the list is searched this many history lines per request. */
+const LIST_STEP_LINES = 2_000_000;
+/** Full history: matches are painted this many screens above and below the view. */
+const PAINT_SCREENS = 2;
 
 interface Painted {
   marker: IMarker;
@@ -68,7 +72,9 @@ export const TerminalSearch: React.FC<{
   const [backendError, setBackendError] = useState<string | null>(null);
   const [fullActive, setFullActive] = useState<HistoryMatch | null>(null);
   const [fullRank, setFullRank] = useState<number | null>(null);
-  const [fullList, setFullList] = useState<{ matches: HistoryMatch[]; more: boolean } | null>(null);
+  const [fullList, setFullList] = useState<{ matches: HistoryMatch[]; more: boolean; loading: boolean } | null>(null);
+  /** False while the count still grows (the history is being scanned in steps). */
+  const [fullComplete, setFullComplete] = useState(false);
   const stepSeq = useRef(0);
   // The history's size arrives shortly after the pane opens: look again until it is known.
   const [, setTick] = useState(0);
@@ -143,7 +149,12 @@ export const TerminalSearch: React.FC<{
       setActive(-1);
       return;
     }
-    const r = findAll(term, matcher.re, MAX_MATCHES);
+    // Full history: the counter, next / previous and the list come from the backend, so only
+    // the matches around the view need painting (all of a 30000-row segment for a common
+    // word is thousands of decorations, redone after every jump).
+    const view = term.buffer.active.viewportY;
+    const range = full ? { from: view - term.rows * PAINT_SCREENS, to: view + term.rows * (PAINT_SCREENS + 1) } : undefined;
+    const r = findAll(term, matcher.re, MAX_MATCHES, range);
     setResult(r);
     painted.current = r.matches.flatMap((m) => paint(m, MATCH_BG, undefined, MATCH_RULER));
     // Start from the first match at or below the top of the viewport.
@@ -153,12 +164,26 @@ export const TerminalSearch: React.FC<{
       const i = r.matches.findIndex((m) => m.row >= top);
       return r.matches.length ? (i >= 0 ? i : r.matches.length - 1) : -1;
     });
-  }, [term, matcher, paint]);
+  }, [term, matcher, paint, full]);
 
   useEffect(() => {
     setActive(-1);
     recompute();
   }, [recompute]);
+
+  // Full history: the painted window follows the view.
+  useEffect(() => {
+    if (!full) return;
+    let timer = 0;
+    const sub = term.onScroll(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(recompute, 100);
+    });
+    return () => {
+      sub.dispose();
+      window.clearTimeout(timer);
+    };
+  }, [term, recompute, full]);
 
   // New output, or history lines loaded / dropped: refresh the painted matches (debounced).
   useEffect(() => {
@@ -183,8 +208,9 @@ export const TerminalSearch: React.FC<{
     setFullRank(null);
     setFullList(null);
     setBackendError(null);
+    setFullCount(null);
+    setFullComplete(false);
     if (!spec) {
-      setFullCount(null);
       history.setMarkLayer("search", null);
       return;
     }
@@ -193,8 +219,9 @@ export const TerminalSearch: React.FC<{
         specs: [spec],
         colors: [MATCH_RULER],
         position: "left",
-        onResult: ({ counts, errors }) => {
+        onResult: ({ counts, errors, complete }) => {
           setFullCount(counts[0] ?? 0);
+          setFullComplete(complete);
           setBackendError(errors[0] ?? null);
         },
       });
@@ -208,12 +235,27 @@ export const TerminalSearch: React.FC<{
   useEffect(() => {
     if (!full || !showList || !spec) return;
     let alive = true;
-    const timer = window.setTimeout(() => {
-      void backend
-        .historySearch(paneId, spec, 0, false, LIST_LIMIT)
-        .then((r) => alive && setFullList({ matches: r.matches, more: r.next !== null }))
-        .catch((e) => alive && setBackendError(String(e)));
-    }, DEBOUNCE_MS);
+    // In steps of LIST_STEP_LINES lines: the first matches can be clicked while a search
+    // with few hits goes on through the rest of a long history.
+    const load = async () => {
+      const got: HistoryMatch[] = [];
+      let from = 0;
+      try {
+        for (;;) {
+          const r = await backend.historySearch(paneId, spec, from, false, LIST_LIMIT - got.length, LIST_STEP_LINES);
+          if (!alive) return;
+          got.push(...r.matches);
+          const filled = got.length >= LIST_LIMIT;
+          const done = filled || r.next === null;
+          setFullList({ matches: [...got], more: filled && r.next !== null, loading: !done });
+          if (done || r.next === null) return;
+          from = r.next;
+        }
+      } catch (e) {
+        if (alive) setBackendError(String(e));
+      }
+    };
+    const timer = window.setTimeout(() => void load(), DEBOUNCE_MS);
     return () => {
       alive = false;
       window.clearTimeout(timer);
@@ -242,11 +284,17 @@ export const TerminalSearch: React.FC<{
     if (!full) reveal(active, false);
   }, [active, reveal, full]);
 
-  /** Full history: load the match's line if needed, then select and mark it. */
+  /**
+   * Full history: load the match's line if needed, then select and mark it. `rank`: its
+   * place among all matches when the caller knows it (a step from a known place, an entry
+   * of the list); else the backend counts the matches before it, a pass over the history.
+   */
   const revealFull = useCallback(
-    async (m: HistoryMatch, seq: number) => {
+    async (m: HistoryMatch, seq: number, rank: number | null = null) => {
       if (!history || !spec) return;
+      // The active match and its rank change together (a step counts on from the rank).
       setFullActive(m);
+      setFullRank(rank);
       const row = await history.reveal(m.line);
       if (seq !== stepSeq.current) return;
       clear(activePaint);
@@ -261,8 +309,9 @@ export const TerminalSearch: React.FC<{
       } else {
         term.clearSelection();
       }
-      const rank = await backend.historyRank(paneId, spec, m.line, m.start).catch(() => null);
-      if (seq === stepSeq.current) setFullRank(rank);
+      if (rank !== null) return;
+      const counted = await backend.historyRank(paneId, spec, m.line, m.start).catch(() => null);
+      if (seq === stepSeq.current) setFullRank(counted);
     },
     [history, spec, term, paint, accent, paneId]
   );
@@ -278,19 +327,27 @@ export const TerminalSearch: React.FC<{
       !cur || (next ? m.line > cur.line || (m.line === cur.line && m.start > cur.start) : m.line < cur.line || (m.line === cur.line && m.start < cur.start));
     try {
       let found: HistoryMatch | null = null;
-      for (let round = 0; round < 4 && !found; round++) {
-        const r = await backend.historySearch(paneId, spec, from, !next, 50);
+      // One match per request: the backend stops at the first line with a match and returns
+      // all of that line's matches. The first request (from the active match's own line)
+      // may hold only matches before it; the next one starts on the following line.
+      for (;;) {
+        const r = await backend.historySearch(paneId, spec, from, !next, 1);
         if (seq !== stepSeq.current) return;
         found = r.matches.find(after) ?? null;
-        if (found || r.next === null) break;
+        if (found || r.next === null || r.next === from) break;
         from = r.next;
       }
+      // Its place among all matches, counted on from the active one when that is known.
+      let rank: number | null = cur && fullRank !== null ? fullRank + (next ? 1 : -1) : null;
       if (!found) {
         // Wrap around to the other end.
         const r = await backend.historySearch(paneId, spec, next ? 0 : Number.MAX_SAFE_INTEGER, !next, 1);
+        if (seq !== stepSeq.current) return;
+        // Backward results come last match first.
         found = r.matches[0] ?? null;
+        rank = next ? 0 : fullComplete && fullCount !== null && fullCount > 0 ? fullCount - 1 : null;
       }
-      if (found && seq === stepSeq.current) await revealFull(found, seq);
+      if (found && seq === stepSeq.current) await revealFull(found, seq, rank);
     } catch (e) {
       setBackendError(String(e));
     }
@@ -347,11 +404,12 @@ export const TerminalSearch: React.FC<{
     : !query
     ? ""
     : full
-    ? fullCount === null
+    ? fullCount === null || (fullCount === 0 && !fullComplete)
       ? t("search.searching")
       : fullCount === 0
       ? t("search.noResults")
-      : `${fullRank !== null ? fullRank + 1 : "?"}/${fullCount}`
+      : // "+": the history is still being scanned and the count goes up.
+        `${fullRank !== null ? fullRank + 1 : "?"}/${fullCount}${fullComplete ? "" : "+"}`
     : count === 0
     ? t("search.noResults")
     : `${active >= 0 ? active + 1 : "?"}/${count}${result.truncated ? "+" : ""}`;
@@ -387,7 +445,7 @@ export const TerminalSearch: React.FC<{
         <button type="button" className={`search-opt ${opts.regex ? "on" : ""}`} title={t("search.regex")} onClick={() => toggle("regex")}>
           .*
         </button>
-        <span className={`search-count ${query && !invalid && count === 0 && (!full || fullCount !== null) ? "none" : ""}`}>{counter}</span>
+        <span className={`search-count ${query && !invalid && count === 0 && (!full || (fullCount !== null && fullComplete)) ? "none" : ""}`}>{counter}</span>
         <button type="button" className="icon-btn-xs" onClick={() => step(false)} title={t("pane.prev")}>
           <ChevronUp size={14} />
         </button>
@@ -428,14 +486,17 @@ export const TerminalSearch: React.FC<{
                 key={`${m.line}-${m.start}-${i}`}
                 type="button"
                 className={`search-result ${fullActive?.line === m.line && fullActive.start === m.start ? "selected" : ""}`}
-                onClick={() => void revealFull(m, ++stepSeq.current)}
+                // The list runs from the first match on, so entry i is match i.
+                onClick={() => void revealFull(m, ++stepSeq.current, i)}
               >
                 <span className="search-line-no">{m.no}</span>
                 <span className="search-line-text">{snippetOf(m.ctx, m.start - m.ctxOffset, m.end - m.ctxOffset, m.ctxOffset > 0)}</span>
               </button>
             ))}
-            {fullList === null && query && !invalid && <div className="search-results-empty">{t("search.searching")}</div>}
-            {fullList !== null && fullList.matches.length === 0 && <div className="search-results-empty">{t("search.noResults")}</div>}
+            {(fullList === null || fullList.loading) && query && !invalid && <div className="search-results-empty">{t("search.searching")}</div>}
+            {fullList !== null && !fullList.loading && fullList.matches.length === 0 && (
+              <div className="search-results-empty">{t("search.noResults")}</div>
+            )}
           </div>
         </div>
       )}
