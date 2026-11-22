@@ -56,6 +56,20 @@ describe("findAll", () => {
     expect(findAll(term, re, 1)).toMatchObject({ truncated: true });
   });
 
+  it("finds a match the quick line text hides behind a zero-width cell", () => {
+    // What xterm.js 5.5 holds after `a\x1b[@́b`: the mark sits in a zero-width cell of
+    // its own, which translateToString keeps ("áb") and the cell-by-cell read skips ("ab").
+    const cells: [string, number][] = [["a", 1], ["́", 0], ["b", 1]];
+    const line = {
+      isWrapped: false,
+      length: 10,
+      getCell: (x: number) => ({ getWidth: () => cells[x]?.[1] ?? 1, getChars: () => cells[x]?.[0] ?? "" }),
+      translateToString: () => cells.map((c) => c[0]).join("") + " ".repeat(7),
+    };
+    const term = { cols: 10, buffer: { active: { length: 1, getLine: (y: number) => (y === 0 ? line : undefined) } } } as unknown as Terminal;
+    expect(findAll(term, buildMatcher("ab", {}).re!).matches.map((m) => [m.row, m.col, m.cells])).toEqual([[0, 0, 3]]);
+  });
+
   it("limits the scan to a range of rows, widened to whole logical lines", () => {
     const term = fakeTerm(["error 0", "error 1", "error at e", ">rror x", "error 4", "error 5"]);
     const re = buildMatcher("error", {}).re!;

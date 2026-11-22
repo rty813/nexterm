@@ -49,6 +49,9 @@ export interface BufferMatch {
   end: number;
 }
 
+/** Characters xterm.js can leave in a zero-width cell: combining marks, joiners, format characters. */
+const ZERO_WIDTH = /[\p{M}\p{Cf}]/u;
+
 /**
  * All matches in the normal buffer, scanning logical lines (wrapped rows joined)
  * so a match can span a wrap. `range`: only the logical lines that start in rows
@@ -67,8 +70,10 @@ export function findAll(
   while (y < end) {
     const startRow = y;
     // First the logical line's text alone (xterm.js builds it natively, fast): most lines
-    // have no match and need not be read cell by cell. Same text as the cell-by-cell read:
-    // wrapped rows keep their trailing cells, the last row loses trailing whitespace.
+    // have no match and need not be read cell by cell. Same text as the cell-by-cell read
+    // (wrapped rows keep their trailing cells, the last row loses trailing whitespace),
+    // except for a zero-width cell holding a mark: the cell read skips it, xterm.js keeps
+    // it. Lines with a mark are always read cell by cell, so no match is missed.
     let quick = "";
     do {
       const line = buf.getLine(y);
@@ -82,7 +87,7 @@ export function findAll(
       continue;
     }
     re.lastIndex = 0;
-    if (!re.test(quick)) continue;
+    if (!re.test(quick) && !ZERO_WIDTH.test(quick)) continue;
 
     let text = "";
     const pos: { row: number; col: number }[] = [];
