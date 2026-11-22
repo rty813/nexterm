@@ -182,8 +182,58 @@ const MAX_SCAN_LINES = 1000;
  */
 const SYNC_BUDGET_MS = 4;
 const SYNC_WINDOW_MS = 100;
-/** Delay of the deferred scan (after renders, and when over the budget). */
+/** Delay of the deferred scan (after renders, when over the budget, and after a flood). */
 const DEFERRED_SCAN_MS = 40;
+/**
+ * Output scrolling this fast (100 screens a second on 50 rows) cannot be read, and even
+ * the few markers of the lines around the viewport cost over a third of the throughput
+ * (xterm visits each of them for every row it trims). While it lasts only lines with a
+ * keyword highlight get a record; the screen is colored once the output pauses.
+ */
+export const FLOOD_ROWS_PER_SEC = 5000;
+/** The rate is taken over windows of this length, so a single burst (`ls -l`, `cat`) is colored at once. */
+const FLOOD_WINDOW_MS = 100;
+
+/** Tells a sustained flood of output from a burst, from how far each write moved the cursor. */
+export class FloodGauge {
+  private flooding = false;
+  private windowStart = 0;
+  private last = -Infinity;
+  private rows = 0;
+
+  /**
+   * A write moved the output `advanced` rows down, on a screen of `screenRows`, at `now` (ms).
+   * True while the output is a flood: every write replaces the whole screen, without
+   * pauses, at `FLOOD_ROWS_PER_SEC` or more.
+   */
+  write(advanced: number, screenRows: number, now: number): boolean {
+    if (advanced < screenRows) {
+      this.reset();
+      return false;
+    }
+    if (now - this.last > FLOOD_WINDOW_MS) {
+      // First screenful after a pause: a run starts here.
+      this.reset();
+      this.windowStart = this.last = now;
+      return false;
+    }
+    this.last = now;
+    this.rows += advanced;
+    const elapsed = now - this.windowStart;
+    if (elapsed >= FLOOD_WINDOW_MS) {
+      this.flooding = this.rows * 1000 >= FLOOD_ROWS_PER_SEC * elapsed;
+      this.windowStart = now;
+      this.rows = 0;
+    }
+    return this.flooding;
+  }
+
+  reset(): void {
+    this.flooding = false;
+    this.last = -Infinity;
+    this.rows = 0;
+  }
+}
 
 export class OutputHighlighter implements IDisposable {
   private records: LineRecord[] = [];
@@ -196,6 +246,9 @@ export class OutputHighlighter implements IDisposable {
    */
   private scanMarker: IMarker | null = null;
   private scanRow = 0;
+  private readonly flood = new FloodGauge();
+  /** The cursor's row at the previous write: how far the next one moves it is the output's rate. */
+  private lastWrite: IMarker | null = null;
   private enabled: boolean;
   private palette: Palette;
   private rules: Rule[];
@@ -249,6 +302,7 @@ export class OutputHighlighter implements IDisposable {
     window.clearTimeout(this.timer);
     this.subs.forEach((s) => s.dispose());
     this.scanMarker?.dispose();
+    this.lastWrite?.dispose();
     this.clearAll();
   }
 
@@ -294,6 +348,18 @@ export class OutputHighlighter implements IDisposable {
   /** Scan synchronously while within the time budget, else defer. */
   private scanNow(): void {
     const start = performance.now();
+    const flood = this.flooded(start);
+    if (flood) {
+      // The deferred scan colors the screen once the output pauses: each write of the
+      // flood puts it off again.
+      window.clearTimeout(this.timer);
+      this.timer = undefined;
+      this.schedule();
+      if (this.userRules.length === 0) {
+        this.clearAll();
+        return;
+      }
+    }
     if (start - this.syncWindowStart >= SYNC_WINDOW_MS) {
       this.syncWindowStart = start;
       this.syncSpent = 0;
@@ -302,14 +368,42 @@ export class OutputHighlighter implements IDisposable {
       this.schedule();
       return;
     }
-    // This pass covers whatever a pending deferred one would have.
-    window.clearTimeout(this.timer);
-    this.timer = undefined;
-    this.scan();
+    if (!flood) {
+      // This pass covers whatever a pending deferred one would have.
+      window.clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    this.scan(flood);
     this.syncSpent += performance.now() - start;
   }
 
-  private scan(): void {
+  /** Whether this write is part of a flood (see FLOOD_ROWS_PER_SEC). */
+  private flooded(now: number): boolean {
+    const buf = this.term.buffer.active;
+    if ((!this.enabled && this.userRules.length === 0) || buf.type !== "normal") {
+      this.flood.reset();
+      return false;
+    }
+    const cursorAbs = buf.baseY + buf.cursorY;
+    const prev = this.lastWrite;
+    // Trimmed away: more than the whole buffer went by.
+    const advanced = !prev ? 0 : prev.isDisposed ? Math.max(buf.length, this.term.rows) : cursorAbs - prev.line;
+    if (!prev || prev.isDisposed || prev.line !== cursorAbs) {
+      prev?.dispose();
+      this.lastWrite = this.term.registerMarker(0) ?? null;
+    }
+    return this.flood.write(advanced, this.term.rows, now);
+  }
+
+  private matchesUser(text: string): boolean {
+    return this.userRules.some((rule) => {
+      rule.re.lastIndex = 0;
+      return rule.re.test(text);
+    });
+  }
+
+  /** `flood`: only look for keyword highlights in the new output (see FLOOD_ROWS_PER_SEC). */
+  private scan(flood = false): void {
     const buf = this.term.buffer.active;
     if ((!this.enabled && this.userRules.length === 0) || buf.type !== "normal") return;
 
@@ -320,16 +414,17 @@ export class OutputHighlighter implements IDisposable {
     const fresh = Math.max(0, end - MAX_SCAN_LINES, this.scanFrom());
     const view = buf.viewportY;
     const lines: number[] = [];
-    for (let y = view; y < Math.min(view + rows, fresh); y++) lines.push(y);
+    if (!flood) for (let y = view; y < Math.min(view + rows, fresh); y++) lines.push(y);
     for (let y = fresh; y < end; y++) lines.push(y);
 
-    // Drop released lines, and syntax-only lines far from the viewport.
+    // Lines around the viewport are colored; none are while a flood scrolls them away.
     const keepFrom = view - rows;
     const keepTo = view + 2 * rows;
+    const near = (l: number) => !flood && l >= keepFrom && l < keepTo;
+    // Drop released lines, and syntax-only lines elsewhere.
     this.records = this.records.filter((r) => {
-      const l = r.marker.line;
       if (r.marker.isDisposed) return false;
-      if (r.user || (l >= keepFrom && l < keepTo)) return true;
+      if (r.user || near(r.marker.line)) return true;
       r.decorations.forEach((d) => d.dispose());
       r.marker.dispose();
       return false;
@@ -338,12 +433,15 @@ export class OutputHighlighter implements IDisposable {
     for (const r of this.records) byLine.set(r.marker.line, r);
 
     for (const y of lines) {
-      // Off-screen output only matters for keyword highlights (ruler marks).
-      if ((y < keepFrom || y >= keepTo) && this.userRules.length === 0) continue;
+      // Elsewhere output only matters for keyword highlights (ruler marks) ...
+      const isNear = near(y);
+      if (!isNear && this.userRules.length === 0) continue;
       const line = buf.getLine(y);
       if (!line) continue;
-      const { text, cols } = readLine(line);
       const existing = byLine.get(y);
+      // ... and a line without one gets no record: each record holds a marker.
+      if (!isNear && !existing && !this.matchesUser(line.translateToString(true))) continue;
+      const { text, cols } = readLine(line);
       if (existing) {
         if (existing.text === text) continue;
         existing.decorations.forEach((d) => d.dispose());
