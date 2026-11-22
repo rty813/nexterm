@@ -37,6 +37,8 @@ const INFO_MS = 1000;
 const MIN_THUMB = 24;
 /** A marks request returns after about this long with what it has; the next goes on. */
 const MARKS_STEP_MS = 150;
+/** Quiet output before `requestSync` lines up the numbers. */
+const SYNC_QUIET_MS = 500;
 
 interface CoreLine {
   isWrapped: boolean;
@@ -141,6 +143,7 @@ export class HistoryScroll implements IDisposable {
   private scratch: Terminal | null = null;
   private readonly subs: IDisposable[];
   private releaseTimer = 0;
+  private syncTimer = 0;
   private trimSub: IDisposable | null = null;
   private trimList: CoreList | null = null;
   private frame = 0;
@@ -191,6 +194,7 @@ export class HistoryScroll implements IDisposable {
     this.subs.forEach((s) => s.dispose());
     this.trimSub?.dispose();
     window.clearTimeout(this.releaseTimer);
+    window.clearTimeout(this.syncTimer);
     window.clearTimeout(this.marksTimer);
     cancelAnimationFrame(this.frame);
     this.scratch?.dispose();
@@ -218,6 +222,15 @@ export class HistoryScroll implements IDisposable {
   /** Rows at the top of the normal buffer that are loaded history, not output. */
   loadedRows(): number {
     return this.segRowCount;
+  }
+
+  /**
+   * `syncNumbers` once output has paused for a moment: the history has parsed it by then,
+   * and a flood does not ask on every write.
+   */
+  requestSync(): void {
+    window.clearTimeout(this.syncTimer);
+    this.syncTimer = window.setTimeout(() => !this.disposed && void this.syncNumbers(), SYNC_QUIET_MS);
   }
 
   /** Line up the gutter's line numbers with the history (after a tab moved windows). */

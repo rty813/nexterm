@@ -527,6 +527,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         Boolean(settings.timestampMs),
         settings.gutterLineNumbers !== false
       );
+      // Rows a flood trimmed were counted by estimate: the full history has the exact count.
+      timestampsRef.current.onEstimated = () => historyRef.current?.requestSync();
     }
     if (leaf.restoreContent) {
       // A tab moved from another window: its line count starts over here, so take the

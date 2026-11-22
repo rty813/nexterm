@@ -3,9 +3,11 @@ import { clearSurvivors, formatStamp, gutterChars } from "../utils/timestampGutt
 
 describe("timestampGutter", () => {
   it("sizes the margin for the numbers and the time", () => {
-    // At least 4 digits plus a space, then HH:MM:SS.
-    expect(gutterChars(12, true, false)).toBe(5 + 8);
+    // Room for 7 digits plus a space whatever the numbers (a width change resizes the
+    // terminal), then HH:MM:SS.
+    expect(gutterChars(12, true, false)).toBe(8 + 8);
     expect(gutterChars(1234567, true, false)).toBe(8 + 8);
+    expect(gutterChars(12345678, true, false)).toBe(9 + 8);
     expect(gutterChars(1234567, true, true)).toBe(8 + 12);
     expect(gutterChars(1234567, false, false)).toBe(8);
   });

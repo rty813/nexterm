@@ -74,10 +74,56 @@ export function formatStamp(time: number, withMs: boolean): string {
   return withMs ? `${base}.${String(d.getMilliseconds()).padStart(3, "0")}` : base;
 }
 
-/** Margin width in characters: number column (at least 4 digits) and time column. */
+/**
+ * Rows of output lost to a trim: `amount` rows leave the top of the buffer, and the last
+ * stamped row is `last` (rows above it and it were counted already; -1: none).
+ */
+export function trimmedNewRows(last: number, amount: number): number {
+  return Math.max(0, amount - Math.max(0, last + 1));
+}
+
+/**
+ * Lines among `rows` trimmed rows, which can no longer tell whether they continued a
+ * wrapped line: estimated from the new rows still in the buffer (`logical` of `total`
+ * start a line), which came from the same output.
+ */
+export function estimateLines(rows: number, logical: number, total: number): number {
+  return total > 0 ? Math.round((rows * logical) / total) : rows;
+}
+
+/**
+ * Rows ED (`CSI Ps J`) resets whole, as absolute rows [from, to] (from > to: none):
+ * 0 below the cursor's row, 1 above it, 2 the whole screen (`top` is its first row).
+ * xterm.js also disposes every marker on those rows.
+ */
+export function erasedRows(ps: number, top: number, cursorLine: number, rows: number): [number, number] {
+  if (ps === 0) return [cursorLine + 1, top + rows - 1];
+  if (ps === 1) return [top, cursorLine - 1];
+  if (ps === 2) return [top, top + rows - 1];
+  return [0, -1];
+}
+
+/**
+ * Digits the number column always has room for. Every change of the margin's width
+ * resizes the terminal, and the remote shell redraws its prompt on that (fish leaves an
+ * empty line), so it is not sized to the numbers shown: 7 digits cover 10 million lines.
+ */
+export const RESERVED_DIGITS = 7;
+
+/** Margin width in characters: number column (at least `RESERVED_DIGITS`) and time column. */
 export function gutterChars(maxNo: number, showNumbers: boolean, withMs: boolean): number {
-  const digits = showNumbers ? Math.max(4, String(Math.max(0, maxNo)).length) + 1 : 0;
+  const digits = showNumbers ? Math.max(RESERVED_DIGITS, String(Math.max(0, maxNo)).length) + 1 : 0;
   return digits + (withMs ? 12 : 8);
+}
+
+/** xterm.js's line list of the normal buffer (internal, 5.5). */
+interface TrimList {
+  onTrim(listener: (amount: number) => void): IDisposable;
+}
+
+function normalLines(term: Terminal): TrimList | null {
+  const core = (term as unknown as { _core?: { buffers?: { normal?: { lines?: TrimList } } } })._core;
+  return core?.buffers?.normal?.lines ?? null;
 }
 
 interface PaneRow {
@@ -91,8 +137,25 @@ export class TimestampGutter implements IDisposable {
   private stampCount = 0;
   /** Absolute line of the last stamped row, so a write only stamps rows it reached. */
   private lastLine = -1;
-  /** Follows `lastLine` through trims of a full scrollback (absolute lines shift then). */
+  /**
+   * Follows `lastLine` through trims of a full scrollback (absolute lines shift then): the
+   * line is `lastDelta` rows from the marker's (not 0 when its own row was being erased).
+   * Without a marker, `trimmed` keeps `lastLine` up to date itself.
+   */
   private lastMarker: IMarker | null = null;
+  private lastDelta = 0;
+  /**
+   * Output rows trimmed off the top before they were stamped: a write that scrolls more
+   * than the whole scrollback (`cat` of a large file, `seq 1 1000000`) still counts them.
+   */
+  private lost = 0;
+  private trimSub: IDisposable | null = null;
+  private trimList: TrimList | null = null;
+  /**
+   * Numbers were estimated for trimmed rows (wrapped lines make that inexact): the full
+   * history can line them up with its own count (`alignNumbers`) once output pauses.
+   */
+  onEstimated?: () => void;
   /** Number of the next live line (before `numberOffset`). */
   private nextNo = 1;
   /** Added to live numbers so they match the full history's numbering. */
@@ -120,14 +183,33 @@ export class TimestampGutter implements IDisposable {
         for (const b of this.blocks) b.cacheRow = b.cacheIdx = undefined;
         this.schedule();
       }),
-      term.buffer.onBufferChange(() => this.schedule()),
-      // ESC[3J: runs before xterm.js's own handler (return false lets it run next).
+      term.buffer.onBufferChange(() => {
+        // A reset replaces the normal buffer: follow the new one's trims from its first write.
+        this.watchTrim();
+        this.schedule();
+      }),
+      // ED (ESC[J, ESC[2J, ESC[3J): runs before xterm.js's own handler (return false lets it run next).
       term.parser.registerCsiHandler({ final: "J" }, (params) => {
-        if (params[0] === 3) this.clearScrollback();
+        const ps = typeof params[0] === "number" ? params[0] : 0;
+        if (ps === 3) this.clearScrollback();
+        else this.erase(ps);
         return false;
       }),
     ];
+    // Before any marker of ours exists: `trimmed` must see their lines before they move.
+    this.watchTrim();
     this.setWidth(0);
+  }
+
+  /** Number (as the margin shows it) of the stamp at absolute buffer line `line`, if any. */
+  numberOfLine(line: number): number | undefined {
+    let no: number | undefined;
+    for (const b of this.live()) {
+      if (line < b.marker.line) continue;
+      const i = b.offsets.indexOf(this.indexOf(b, line));
+      if (i >= 0 && this.rowsOf(b, line)[i] === line) no = b.nos[i] + (b.abs ? 0 : this.numberOffset);
+    }
+    return no;
   }
 
   /** Stamps are recorded all the time; this only shows / hides the margin. */
@@ -173,6 +255,8 @@ export class TimestampGutter implements IDisposable {
     }
     // The cursor row is stamped when output lands there, as usual.
     this.setLastStamped(list.some((s) => s.line === cursorLine) ? cursorLine : cursorLine - 1, cursorLine);
+    // Rows the rewrite pushed out were not new output.
+    this.lost = 0;
     this.suspended = false;
     this.schedule();
   }
@@ -220,12 +304,136 @@ export class TimestampGutter implements IDisposable {
   /** The user cleared the terminal (menu, shortcut; after `term.clear()`): numbers start over. */
   restart(): void {
     this.clear();
-    this.lastMarker?.dispose();
-    this.lastMarker = null;
-    this.lastLine = -1;
+    this.setLastStamped(-1, 0);
+    this.lost = 0;
     this.nextNo = 1;
     this.numberOffset = 0;
     this.schedule();
+  }
+
+  /**
+   * ED 0 / 1 / 2 is about to reset rows (xterm.js disposes their markers too): their stamps
+   * go, so blank rows show no number, and the last stamped line moves off them.
+   * Numbered like the backend's history (alacritty): a cleared screen's lines stay counted
+   * (it scrolls them into its history), rows erased below the cursor do not.
+   */
+  private erase(ps: number): void {
+    const buf = this.term.buffer.active;
+    if (buf.type !== "normal" || this.suspended) return;
+    // Output before this sequence in the same write is not stamped yet.
+    this.stampNewLines();
+    const cursorLine = buf.baseY + buf.cursorY;
+    const [a, b] = erasedRows(ps, buf.baseY, cursorLine, this.term.rows);
+    const last = this.lastStamped();
+    // Nothing stamped there (a shell redrawing its prompt with ESC[J, usually).
+    if (a > b || last < a) return;
+    const dropped = this.dropRows(a, b, cursorLine);
+    if (last > b) return;
+    if (ps === 0) {
+      // Never scrolled out, so not lines of the history: their numbers are given back.
+      if (dropped.live > 0 && dropped.maxNo === this.nextNo - 1) this.nextNo -= dropped.live;
+      this.setLastStamped(this.numberOfLine(cursorLine) !== undefined ? cursorLine : cursorLine - 1, cursorLine);
+    } else if (ps === 2) {
+      // Output after a clear starts new lines.
+      this.setLastStamped(a - 1, cursorLine);
+    } else {
+      // Blank now, but still lines: the count stays, held by the cursor's row.
+      this.setLastStamped(last, cursorLine, b + 1);
+    }
+  }
+
+  /** Remove the stamps on rows [a, b]; returns how many live ones went and the highest number among them. */
+  private dropRows(a: number, b: number, cursorLine: number): { live: number; maxNo: number } {
+    const blocks = this.live();
+    // Blocks are in buffer order: the last one starting above `a` is the first that can reach it.
+    let from = 0;
+    blocks.forEach((blk, i) => {
+      if (blk.marker.line < a) from = i;
+    });
+    let live = 0;
+    let maxNo = 0;
+    const kept = blocks.slice(0, from);
+    const survivors: (LineStamp & { no: number; abs: boolean })[] = [];
+    for (const blk of blocks.slice(from)) {
+      const rows = this.rowsOf(blk, Infinity);
+      const touched = blk.marker.line >= a && blk.marker.line <= b ? true : rows.some((r) => r !== undefined && r >= a);
+      if (!touched) {
+        kept.push(blk);
+        continue;
+      }
+      blk.offsets.forEach((_, k) => {
+        const r = rows[k];
+        if (r === undefined) return;
+        if (r >= a && r <= b) {
+          if (!blk.abs) {
+            live++;
+            maxNo = Math.max(maxNo, blk.nos[k]);
+          }
+        } else survivors.push({ line: r, time: blk.times[k], no: blk.nos[k], abs: blk.abs });
+      });
+      blk.marker.dispose();
+    }
+    // New blocks for the rest, never spanning the erased rows: resetting them clears their
+    // wrap flags, which would shift the logical offsets of a block across them.
+    const made = [
+      ...this.buildBlocks(survivors.filter((s) => s.line < a), cursorLine),
+      ...this.buildBlocks(survivors.filter((s) => s.line > b), cursorLine),
+    ];
+    this.blocks = [...kept, ...made].sort((x, y) => x.marker.line - y.marker.line);
+    this.stampCount = this.blocks.reduce((n, x) => n + (x.abs ? 0 : x.offsets.length), 0);
+    this.schedule();
+    return { live, maxNo };
+  }
+
+  /** Blocks for stamps in ascending rows (cursor at absolute row `cursorLine`). */
+  private buildBlocks(list: (LineStamp & { no: number; abs: boolean })[], cursorLine: number): Block[] {
+    const made: Block[] = [];
+    let b: Block | null = null;
+    for (const s of list) {
+      if (!b || b.abs !== s.abs || b.offsets.length >= BLOCK_LINES) {
+        const marker = this.term.registerMarker(s.line - cursorLine);
+        if (!marker) {
+          b = null;
+          continue;
+        }
+        b = { marker, offsets: [], times: [], nos: [], abs: s.abs };
+        made.push(b);
+      }
+      b.offsets.push(this.indexOf(b, s.line));
+      b.times.push(s.time);
+      b.nos.push(s.no);
+    }
+    return made;
+  }
+
+  /** Follow the normal buffer's trims (a reset replaces the buffer: what was stamped is gone). */
+  private watchTrim(): void {
+    const lines = normalLines(this.term);
+    if (!lines || lines === this.trimList) return;
+    this.trimSub?.dispose();
+    if (this.trimList) {
+      this.clear();
+      this.setLastStamped(-1, 0);
+    }
+    this.trimList = lines;
+    this.trimSub = lines.onTrim((amount) => this.trimmed(amount));
+  }
+
+  /**
+   * Rows left the top of the buffer. Runs before the markers' own trim handling (it was
+   * subscribed before any of them), so `lastMarker` still has its line from before.
+   */
+  private trimmed(amount: number): void {
+    const m = this.lastMarker;
+    const alive = m !== null && !m.isDisposed;
+    const last = alive ? m.line + this.lastDelta : this.lastLine;
+    this.lost += trimmedNewRows(last, amount);
+    if (alive && m.line - amount >= 0) return;
+    // The marker's row goes (or there is none): keep the line as a plain number.
+    m?.dispose();
+    this.lastMarker = null;
+    this.lastDelta = 0;
+    this.lastLine = Math.max(-1, last - amount);
   }
 
   /**
@@ -349,31 +557,44 @@ export class TimestampGutter implements IDisposable {
   private lastStamped(): number {
     if (this.lastMarker) {
       if (this.lastMarker.isDisposed) {
-        // Trimmed away: every row still in the buffer is newer.
+        // Gone some way `trimmed` and `erase` did not see (DECSED): every row left is newer.
         this.lastMarker = null;
+        this.lastDelta = 0;
         this.lastLine = -1;
       } else {
-        this.lastLine = this.lastMarker.line;
+        this.lastLine = this.lastMarker.line + this.lastDelta;
       }
     }
     return this.lastLine;
   }
 
-  private setLastStamped(line: number, cursorLine: number): void {
-    if (line === this.lastLine && this.lastMarker && !this.lastMarker.isDisposed) return;
+  /** `anchor`: the row holding the marker, when `line`'s own row is being erased. */
+  private setLastStamped(line: number, cursorLine: number, anchor = line): void {
+    if (line === this.lastLine && anchor === line && this.lastDelta === 0 && this.lastMarker && !this.lastMarker.isDisposed) return;
     this.lastMarker?.dispose();
-    this.lastMarker = line >= 0 ? this.term.registerMarker(line - cursorLine) ?? null : null;
+    this.lastMarker = line >= 0 && anchor >= 0 ? this.term.registerMarker(anchor - cursorLine) ?? null : null;
+    this.lastDelta = this.lastMarker ? line - anchor : 0;
     this.lastLine = line;
   }
 
   private stampNewLines(): void {
     if (this.suspended) return;
+    this.watchTrim();
     const buf = this.term.buffer.active;
     if (buf.type !== "normal") return;
     const cursorLine = buf.baseY + buf.cursorY;
+    // A cursor moved back up (a redraw) writes over lines already stamped: nothing is new
+    // above `last`. Clears are handled in `erase`.
     let last = this.lastStamped();
-    // After a clear / reset the cursor moves back up; start over from there.
-    if (cursorLine < last) last = cursorLine - 1;
+    if (this.lost > 0) {
+      // Lines this write scrolled out of the scrollback before they could be stamped.
+      let logical = 0;
+      let total = 0;
+      for (let r = Math.max(0, last + 1); r <= cursorLine; r++, total++) if (!buf.getLine(r)?.isWrapped) logical++;
+      this.nextNo += estimateLines(this.lost, logical, total);
+      this.lost = 0;
+      this.onEstimated?.();
+    }
     const now = Date.now();
     // Every new line, also those a burst of output already scrolled past: the line
     // numbers count them all.
@@ -414,7 +635,9 @@ export class TimestampGutter implements IDisposable {
 
   private setWidth(maxNo: number): void {
     const chars = gutterChars(maxNo, this.showNumbers, this.withMs);
-    if (chars === this.chars) return;
+    // Past the reserve it only grows (a clear starting over at 1 does not shrink it back);
+    // changing what it shows resets `chars`.
+    if (chars <= this.chars) return;
     this.chars = chars;
     this.host.style.minWidth = `calc(${chars}ch + 16px)`;
   }
