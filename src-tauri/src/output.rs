@@ -68,7 +68,7 @@ fn flush(st: &mut State) {
 
 /// Run a blocking wait without starving the async runtime (SSH / Telnet / TCP readers
 /// call in from Tokio tasks; local shells and serial ports from plain threads).
-fn blocking<R>(f: impl FnOnce() -> R) -> R {
+pub(crate) fn blocking<R>(f: impl FnOnce() -> R) -> R {
     match tokio::runtime::Handle::try_current() {
         Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
             tokio::task::block_in_place(f)

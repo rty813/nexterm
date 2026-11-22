@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -61,6 +61,52 @@ pub struct Recorder {
     marks_gen: AtomicU64,
     /// The same for `rank`.
     rank_gen: AtomicU64,
+    backlog: Arc<Backlog>,
+}
+
+/// Output queued for the worker and not parsed yet. The channel itself is unbounded, and
+/// the batch size and the archive's memory limit only bound what is already parsed.
+const QUEUE_LIMIT: usize = 8 << 20;
+
+/// Queued bytes, and whether the worker is gone.
+#[derive(Default)]
+struct Backlog {
+    state: Mutex<(usize, bool)>,
+    room: Condvar,
+}
+
+impl Backlog {
+    fn reserve(&self, n: usize) {
+        let mut st = lock(&self.state);
+        if st.0 >= QUEUE_LIMIT && !st.1 {
+            drop(st);
+            st = crate::output::blocking(|| {
+                let mut st = lock(&self.state);
+                while st.0 >= QUEUE_LIMIT && !st.1 {
+                    st = self.room.wait(st).unwrap_or_else(|e| e.into_inner());
+                }
+                st
+            });
+        }
+        if !st.1 {
+            st.0 += n;
+        }
+    }
+
+    fn release(&self, n: usize) {
+        let mut st = lock(&self.state);
+        st.0 = st.0.saturating_sub(n);
+        self.room.notify_all();
+    }
+}
+
+struct CloseOnDrop(Arc<Backlog>);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        *lock(&self.0.state) = (0, true);
+        self.0.room.notify_all();
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -145,7 +191,11 @@ impl Recorder {
         let state = Arc::new(Mutex::new(Capture::new(cols, rows, archive)));
         let (tx, rx) = mpsc::channel::<Msg>();
         let worker = Arc::clone(&state);
+        let backlog = Arc::new(Backlog::default());
+        let parsed = Arc::clone(&backlog);
         let _ = std::thread::Builder::new().name(format!("history-{name}")).spawn(move || {
+            // Also when the worker panics: `feed` must not wait for it then.
+            let _closed = CloseOnDrop(Arc::clone(&parsed));
             let mut batch: Vec<u8> = Vec::new();
             loop {
                 let first = match rx.recv_timeout(TICK) {
@@ -167,6 +217,7 @@ impl Recorder {
                             }
                             if next.as_ref().is_none_or(|m| !matches!(m, Msg::Data(_))) || batch.len() >= BATCH {
                                 lock(&worker).feed(&batch, now_ms());
+                                parsed.release(batch.len());
                                 batch.clear();
                             }
                         }
@@ -176,13 +227,24 @@ impl Recorder {
                 }
             }
         });
-        Arc::new(Recorder { tx: Mutex::new(tx), state, cache, summaries: SummaryCache::default(), marks_gen: AtomicU64::new(0), rank_gen: AtomicU64::new(0) })
+        Arc::new(Recorder { tx: Mutex::new(tx), state, cache, summaries: SummaryCache::default(), marks_gen: AtomicU64::new(0), rank_gen: AtomicU64::new(0), backlog })
     }
 
+    /// Waits while the worker is `QUEUE_LIMIT` behind, so a flood the history cannot keep
+    /// up with slows the connection's reader instead of piling up here.
     pub fn feed(&self, data: &[u8]) {
-        if !data.is_empty() {
-            let _ = lock(&self.tx).send(Msg::Data(data.to_vec()));
+        if data.is_empty() {
+            return;
         }
+        self.backlog.reserve(data.len());
+        if lock(&self.tx).send(Msg::Data(data.to_vec())).is_err() {
+            self.backlog.release(data.len());
+        }
+    }
+
+    /// Bytes fed and not parsed yet.
+    pub fn backlog(&self) -> usize {
+        lock(&self.backlog.state).0
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {
@@ -692,6 +754,64 @@ mod tests {
         r.feed(data.as_bytes());
         wait_for(&r, n as u64 - 4);
         r
+    }
+
+    /// Base64-like lines, as the throughput benchmark prints them (`chunk` bytes per call).
+    fn flood(r: &Recorder, mb: usize, chunk: usize) -> usize {
+        let line: Vec<u8> = (0..76u8).map(|i| b'A' + i % 26).chain(*b"\r\n").collect();
+        let block: Vec<u8> = line.iter().copied().cycle().take(chunk).collect();
+        let mut peak = 0;
+        for _ in 0..(mb << 20) / chunk {
+            r.feed(&block);
+            peak = peak.max(r.backlog());
+        }
+        peak
+    }
+
+    #[test]
+    fn backlog_stays_bounded_when_output_outruns_the_parser() {
+        let r = Recorder::new(145, 50, Limits::default(), None, "t-flood");
+        // Fed far faster than any parser: the queue must stop growing at its limit.
+        let peak = flood(&r, 64, 32 << 10);
+        assert!(peak <= QUEUE_LIMIT + (32 << 10), "backlog reached {peak}");
+        for _ in 0..1000 {
+            if r.backlog() == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the worker did not catch up: {}", r.backlog());
+    }
+
+    #[test]
+    fn feed_does_not_wait_for_a_dead_worker() {
+        let r = Recorder::new(40, 5, Limits::default(), None, "t-dead");
+        // Kill the worker by closing its channel (what dropping the recorder does).
+        let (dead, _) = mpsc::channel();
+        *lock(&r.tx) = dead;
+        for _ in 0..100 {
+            if lock(&r.backlog.state).1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let started = std::time::Instant::now();
+        flood(&r, 32, 1 << 20);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// How fast the history parses plain text (cargo test --release -- --ignored --nocapture).
+    #[test]
+    #[ignore]
+    fn parse_throughput() {
+        let r = Recorder::new(145, 50, Limits::default(), None, "t-speed");
+        let started = std::time::Instant::now();
+        flood(&r, 256, 32 << 10);
+        while r.backlog() > 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let secs = started.elapsed().as_secs_f64();
+        println!("history parses {:.1} MB/s", 256.0 / secs);
     }
 
     #[test]
