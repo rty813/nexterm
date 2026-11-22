@@ -188,7 +188,8 @@ const DEFERRED_SCAN_MS = 40;
  * Output scrolling this fast (100 screens a second on 50 rows) cannot be read, and even
  * the few markers of the lines around the viewport cost over a third of the throughput
  * (xterm visits each of them for every row it trims). While it lasts only lines with a
- * keyword highlight get a record; the screen is colored once the output pauses.
+ * keyword highlight get a record (and the rows of a viewport kept up in the history, see
+ * `scanRows`); the screen is colored once the output pauses.
  */
 export const FLOOD_ROWS_PER_SEC = 5000;
 /** The rate is taken over windows of this length, so a single burst (`ls -l`, `cat`) is colored at once. */
@@ -233,6 +234,33 @@ export class FloodGauge {
     this.last = -Infinity;
     this.rows = 0;
   }
+}
+
+/**
+ * The buffer rows one scan reads (`lines`, in order) and the rows whose syntax colors it
+ * keeps (`[keepFrom, keepTo)`). `view`: the viewport's top row; `baseY`: its top row when
+ * following the output; `fresh..end`: the output since the last scan.
+ *
+ * Normally the viewport and a screen above and below it are colored. During a flood that
+ * the viewport follows nothing is: it all scrolls away unread. A viewport the user keeps
+ * up in the history does not move, so its screen stays colored (only that one screen: each
+ * colored row holds a marker, which costs throughput while rows are trimmed).
+ */
+export function scanRows(
+  view: number,
+  rows: number,
+  baseY: number,
+  fresh: number,
+  end: number,
+  flood: boolean
+): { lines: number[]; keepFrom: number; keepTo: number } {
+  const pinned = view < baseY;
+  const lines: number[] = [];
+  if (!flood || pinned) for (let y = view; y < Math.min(view + rows, fresh); y++) lines.push(y);
+  for (let y = fresh; y < end; y++) lines.push(y);
+  if (!flood) return { lines, keepFrom: view - rows, keepTo: view + 2 * rows };
+  if (pinned) return { lines, keepFrom: view, keepTo: view + rows };
+  return { lines, keepFrom: 0, keepTo: 0 };
 }
 
 export class OutputHighlighter implements IDisposable {
@@ -355,7 +383,9 @@ export class OutputHighlighter implements IDisposable {
       window.clearTimeout(this.timer);
       this.timer = undefined;
       this.schedule();
-      if (this.userRules.length === 0) {
+      // Nothing to look for in the new output, nor a viewport kept in the history to color.
+      const buf = this.term.buffer.active;
+      if (this.userRules.length === 0 && buf.viewportY >= buf.baseY) {
         this.clearAll();
         return;
       }
@@ -412,15 +442,8 @@ export class OutputHighlighter implements IDisposable {
     const cursorAbs = buf.baseY + buf.cursorY;
     // New output since the last pass, and whatever the viewport shows now.
     const fresh = Math.max(0, end - MAX_SCAN_LINES, this.scanFrom());
-    const view = buf.viewportY;
-    const lines: number[] = [];
-    if (!flood) for (let y = view; y < Math.min(view + rows, fresh); y++) lines.push(y);
-    for (let y = fresh; y < end; y++) lines.push(y);
-
-    // Lines around the viewport are colored; none are while a flood scrolls them away.
-    const keepFrom = view - rows;
-    const keepTo = view + 2 * rows;
-    const near = (l: number) => !flood && l >= keepFrom && l < keepTo;
+    const { lines, keepFrom, keepTo } = scanRows(buf.viewportY, rows, buf.baseY, fresh, end, flood);
+    const near = (l: number) => l >= keepFrom && l < keepTo;
     // Drop released lines, and syntax-only lines elsewhere.
     this.records = this.records.filter((r) => {
       if (r.marker.isDisposed) return false;
@@ -439,6 +462,9 @@ export class OutputHighlighter implements IDisposable {
       const line = buf.getLine(y);
       if (!line) continue;
       const existing = byLine.get(y);
+      // Rows above the screen no longer change: during a flood (one pass per write) a
+      // colored one is not read again.
+      if (flood && existing && y < buf.baseY) continue;
       // ... and a line without one gets no record: each record holds a marker.
       if (!isNear && !existing && !this.matchesUser(line.translateToString(true))) continue;
       const { text, cols } = readLine(line);
