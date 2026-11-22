@@ -2979,6 +2979,8 @@ html.ctxmenu-host #root {
   width: 14px;
   z-index: 6;
   display: none;
+  /* It sits inside .xterm, whose `cursor: text` it would inherit; a scrollbar takes the arrow. */
+  cursor: default;
 }
 .hist-bar-marks {
   position: absolute;
