@@ -11,7 +11,7 @@ pub mod search;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -75,22 +75,32 @@ struct Backlog {
     room: Condvar,
 }
 
+/// How often a wait for room looks at its cancel flag (nothing signals the condvar then).
+const CANCEL_POLL: Duration = Duration::from_millis(50);
+
 impl Backlog {
-    fn reserve(&self, n: usize) {
+    /// Makes room for `n` bytes, waiting while the queue is full. False (nothing reserved):
+    /// `cancelled` was set before there was room.
+    fn reserve(&self, n: usize, cancelled: Option<&AtomicBool>) -> bool {
+        let is_cancelled = || cancelled.is_some_and(|c| c.load(Ordering::Acquire));
         let mut st = lock(&self.state);
         if st.0 >= QUEUE_LIMIT && !st.1 {
             drop(st);
             st = crate::output::blocking(|| {
                 let mut st = lock(&self.state);
-                while st.0 >= QUEUE_LIMIT && !st.1 {
-                    st = self.room.wait(st).unwrap_or_else(|e| e.into_inner());
+                while st.0 >= QUEUE_LIMIT && !st.1 && !is_cancelled() {
+                    st = self.room.wait_timeout(st, CANCEL_POLL).unwrap_or_else(|e| e.into_inner()).0;
                 }
                 st
             });
         }
+        if is_cancelled() {
+            return false;
+        }
         if !st.1 {
             st.0 += n;
         }
+        true
     }
 
     fn release(&self, n: usize) {
@@ -233,13 +243,23 @@ impl Recorder {
     /// Waits while the worker is `QUEUE_LIMIT` behind, so a flood the history cannot keep
     /// up with slows the connection's reader instead of piling up here.
     pub fn feed(&self, data: &[u8]) {
+        self.feed_unless(data, None);
+    }
+
+    /// `feed` for a connection's output: gives up when `cancelled` is set while it waits
+    /// (the pane reconnected: the old connection's output must not follow the new one's).
+    /// False: cancelled, nothing fed.
+    pub fn feed_unless(&self, data: &[u8], cancelled: Option<&AtomicBool>) -> bool {
         if data.is_empty() {
-            return;
+            return true;
         }
-        self.backlog.reserve(data.len());
+        if !self.backlog.reserve(data.len(), cancelled) {
+            return false;
+        }
         if lock(&self.tx).send(Msg::Data(data.to_vec())).is_err() {
             self.backlog.release(data.len());
         }
+        true
     }
 
     /// Bytes fed and not parsed yet.
@@ -798,6 +818,25 @@ mod tests {
         let started = std::time::Instant::now();
         flood(&r, 32, 1 << 20);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_cancelled_feed_stops_waiting_for_room() {
+        let r = Recorder::new(40, 5, Limits::default(), None, "t-cancel");
+        // A full queue the worker is not draining (nothing it was sent is left to parse).
+        lock(&r.backlog.state).0 = QUEUE_LIMIT;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (done_tx, done_rx) = mpsc::channel();
+        let (rec, flag) = (Arc::clone(&r), Arc::clone(&cancelled));
+        std::thread::spawn(move || {
+            let _ = done_tx.send(rec.feed_unless(b"stale output", Some(&*flag)));
+        });
+        assert!(done_rx.recv_timeout(Duration::from_millis(200)).is_err(), "fed into a full queue");
+        cancelled.store(true, Ordering::Release);
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)), Ok(false));
+        assert_eq!(r.backlog(), QUEUE_LIMIT);
+        // Already cancelled: no wait, nothing fed.
+        assert!(!r.feed_unless(b"x", Some(&*cancelled)));
     }
 
     /// How fast the history parses plain text (cargo test --release -- --ignored --nocapture).

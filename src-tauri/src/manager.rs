@@ -338,8 +338,15 @@ impl ScopedSink {
         if screen.is_empty() {
             return;
         }
+        // The history can make this wait (its parser behind a flood); a reconnect meanwhile
+        // cancels the wait, and this connection's output then goes nowhere.
         if let Some(history) = &self.history {
-            history.feed(screen);
+            if !history.feed_unless(screen, Some(&*self.cancelled)) {
+                return;
+            }
+        }
+        if self.cancelled.load(Ordering::Acquire) {
+            return;
         }
         lock(&self.tracker).feed(screen, Instant::now());
         self.inner.emit_output(instance_id, screen);
