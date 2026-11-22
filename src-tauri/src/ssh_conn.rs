@@ -17,6 +17,7 @@ use crate::manager::{
 };
 use crate::models::{AuthType, JumpHostConfig, SessionConfig, TunnelConfig};
 use crate::net::connect_stream;
+use crate::pump::OutputPump;
 use crate::shell_integration::{Injector, Step};
 
 /// Where X11 channels opened by the server are delivered.
@@ -662,6 +663,8 @@ pub fn spawn_ssh_session(
 
         // Sent once the integration loader is through, so it never types into the startup program.
         let mut startup = session.startup_command.clone().filter(|s| !s.trim().is_empty());
+        // Output goes out on its own thread: keys still go through while the screen is behind.
+        let mut pump = OutputPump::new(Arc::clone(&sink), instance_id.clone());
 
         loop {
             if injector.is_done() {
@@ -680,37 +683,33 @@ pub fn spawn_ssh_session(
             }
             let si_deadline = injector.deadline().map(tokio::time::Instant::from_std);
             tokio::select! {
-                msg = channel.wait() => {
+                // Not read while output waits for room: the SSH window then holds the remote back.
+                msg = channel.wait(), if !pump.is_behind() => {
                     match msg {
                         Some(ChannelMsg::Data { ref data }) | Some(ChannelMsg::ExtendedData { ref data, .. }) => {
                             if injector.is_done() {
-                                sink.emit_output(&instance_id, data);
+                                pump.output(data);
                             } else {
                                 let shown = injector.output(data, Instant::now());
-                                if !shown.is_empty() {
-                                    sink.emit_output(&instance_id, &shown);
-                                }
+                                pump.output(&shown);
                             }
                         }
                         Some(ChannelMsg::ExitStatus { exit_status }) => {
-                            sink.emit_state(
-                                &instance_id,
-                                "disconnected",
-                                Some(format!("远程进程已退出 (状态码 {})", exit_status)),
-                            );
+                            pump.state("disconnected", Some(format!("远程进程已退出 (状态码 {})", exit_status)));
                             break;
                         }
                         Some(ChannelMsg::Eof) | None => {
-                            sink.emit_state(&instance_id, "disconnected", Some("SSH 会话已关闭".into()));
+                            pump.state("disconnected", Some("SSH 会话已关闭".into()));
                             break;
                         }
                         _ => {}
                     }
                 }
+                _ = pump.flush(), if pump.is_behind() => {}
                 Some(bytes) = write_rx.recv() => {
                     injector.user_input(&bytes);
                     if let Err(e) = channel.data(&bytes[..]).await {
-                        sink.emit_state(&instance_id, "disconnected", Some(format!("SSH 发送失败: {}", e)));
+                        pump.state("disconnected", Some(format!("SSH 发送失败: {}", e)));
                         break;
                     }
                 }
@@ -752,7 +751,7 @@ pub fn spawn_ssh_session(
                             let line = crate::shell_integration::loader_line(&si_token);
                             let _ = channel.data(line.as_bytes()).await;
                         }
-                        Step::Emit(bytes) => sink.emit_output(&instance_id, &bytes),
+                        Step::Emit(bytes) => pump.output(&bytes),
                         Step::Nothing => {}
                     }
                 }
@@ -766,11 +765,12 @@ pub fn spawn_ssh_session(
                 Some(()) = close_rx.recv() => {
                     let _ = channel.eof().await;
                     let _ = channel.close().await;
-                    sink.emit_state(&instance_id, "disconnected", Some("已断开连接".into()));
+                    pump.state("disconnected", Some("已断开连接".into()));
                     break;
                 }
             }
         }
+        pump.finish().await;
         for t in tunnels.drain(..) {
             stop_tunnel(&handle, &forwards, t).await;
         }

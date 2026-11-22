@@ -21,6 +21,7 @@ pub mod models;
 pub mod net;
 pub mod notify;
 pub mod output;
+pub mod pump;
 pub mod relay_link;
 pub mod remote;
 pub mod remote_crypto;

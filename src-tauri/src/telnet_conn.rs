@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use crate::manager::{AsyncChannels, RuntimeControl, TerminalSink};
 use crate::models::SessionConfig;
 use crate::net::connect_tcp;
+use crate::pump::OutputPump;
 
 const IAC: u8 = 255;
 const DONT: u8 = 254;
@@ -263,12 +264,14 @@ pub fn spawn_telnet_session(
         }
 
         let mut buf = vec![0u8; 64 * 1024];
+        // Keys still go out while the screen is behind (see pump.rs).
+        let mut pump = OutputPump::new(Arc::clone(&sink), instance_id.clone());
         loop {
             tokio::select! {
-                read_res = rd.read(&mut buf) => {
+                read_res = rd.read(&mut buf), if !pump.is_behind() => {
                     match read_res {
                         Ok(0) => {
-                            sink.emit_state(&instance_id, "disconnected", Some("远端已关闭连接".into()));
+                            pump.state("disconnected", Some("远端已关闭连接".into()));
                             break;
                         }
                         Ok(n) => {
@@ -276,19 +279,18 @@ pub fn spawn_telnet_session(
                             if !reply.is_empty() && wr.write_all(&reply).await.is_err() {
                                 break;
                             }
-                            if !data.is_empty() {
-                                sink.emit_output(&instance_id, &data);
-                            }
+                            pump.output(&data);
                         }
                         Err(e) => {
-                            sink.emit_state(&instance_id, "disconnected", Some(format!("Telnet 读取错误: {}", e)));
+                            pump.state("disconnected", Some(format!("Telnet 读取错误: {}", e)));
                             break;
                         }
                     }
                 }
+                _ = pump.flush(), if pump.is_behind() => {}
                 Some(data) = write_rx.recv() => {
                     if let Err(e) = wr.write_all(&codec.encode(&data)).await {
-                        sink.emit_state(&instance_id, "disconnected", Some(format!("Telnet 写入错误: {}", e)));
+                        pump.state("disconnected", Some(format!("Telnet 写入错误: {}", e)));
                         break;
                     }
                 }
@@ -300,11 +302,12 @@ pub fn spawn_telnet_session(
                 }
                 Some(()) = close_rx.recv() => {
                     let _ = wr.shutdown().await;
-                    sink.emit_state(&instance_id, "disconnected", Some("已断开连接".into()));
+                    pump.state("disconnected", Some("已断开连接".into()));
                     break;
                 }
             }
         }
+        pump.finish().await;
     });
 
     RuntimeControl::Async(AsyncChannels { write_tx, resize_tx, close_tx, exec_tx: None,
