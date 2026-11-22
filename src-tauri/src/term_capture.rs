@@ -76,13 +76,32 @@ impl Capture {
         self.reported.saturating_sub(self.dropped).min(self.raw.len())
     }
 
-    fn push(&mut self, b: u8) {
-        if self.raw.len() >= CAPTURE_LIMIT {
-            let cut = CAPTURE_LIMIT / 4;
-            self.raw.drain(..cut);
-            self.dropped += cut;
+    /// Output after the command started goes to `raw`; before it (command mode) to `pre`.
+    fn record(&mut self, mut bytes: &[u8]) {
+        if self.finished.is_some() {
+            return;
         }
-        self.raw.push(b);
+        if self.started {
+            while !bytes.is_empty() {
+                if self.raw.len() >= CAPTURE_LIMIT {
+                    let cut = CAPTURE_LIMIT / 4;
+                    self.raw.drain(..cut);
+                    self.dropped += cut;
+                }
+                let n = (CAPTURE_LIMIT - self.raw.len()).min(bytes.len());
+                self.raw.extend_from_slice(&bytes[..n]);
+                bytes = &bytes[n..];
+            }
+        } else if self.mode == CaptureMode::Command {
+            while !bytes.is_empty() {
+                if self.pre.len() >= PRE_LIMIT {
+                    self.pre.drain(..PRE_LIMIT / 4);
+                }
+                let n = (PRE_LIMIT - self.pre.len()).min(bytes.len());
+                self.pre.extend_from_slice(&bytes[..n]);
+                bytes = &bytes[n..];
+            }
+        }
     }
 
     /// What the shell printed for a command it did not start, without the echo of the
@@ -153,18 +172,24 @@ impl ShellTracker {
                 c.last_output = Some(now);
             }
         }
-        for &b in data {
-            if let Some(c) = cap.as_mut() {
-                if c.finished.is_none() {
-                    if c.started {
-                        c.push(b);
-                    } else if c.mode == CaptureMode::Command {
-                        if c.pre.len() >= PRE_LIMIT {
-                            c.pre.drain(..PRE_LIMIT / 4);
-                        }
-                        c.pre.push(b);
+        let mut i = 0;
+        while i < data.len() {
+            // Plain text (most of the output): jump to the next ESC, recording the run at once.
+            if self.scan == Scan::Normal {
+                let end = memchr::memchr(0x1b, &data[i..]).map_or(data.len(), |o| i + o);
+                if end > i {
+                    if let Some(c) = cap.as_mut() {
+                        c.record(&data[i..end]);
                     }
+                    i = end;
+                    continue;
                 }
+            }
+            let b = data[i];
+            i += 1;
+            // Recorded before the byte is handled: an OSC 133 C it ends starts the capture after it.
+            if let Some(c) = cap.as_mut() {
+                c.record(std::slice::from_ref(&b));
             }
             match self.scan {
                 Scan::Normal => {
@@ -417,6 +442,32 @@ mod tests {
         let cap = Arc::new(Mutex::new(Capture::new(mode, Instant::now())));
         t.capture = Some(Arc::clone(&cap));
         (t, cap)
+    }
+
+    /// Plain text is skipped in runs; the result must not depend on where chunks split.
+    #[test]
+    fn chunking_does_not_change_the_capture() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"$ make\r\n\x1b]133;C\x07");
+        for i in 0..3000 {
+            stream.extend_from_slice(format!("line {i} \x1b[1;31mred\x1b[0m plain\r\n").as_bytes());
+        }
+        stream.extend_from_slice(b"\x1b[?1049h full screen \x1b[?1049l\x1b]133;D;2\x1b\\$ ");
+        let run = |size: usize| {
+            let (mut t, cap) = tracker_with(CaptureMode::Command);
+            for c in stream.chunks(size) {
+                t.feed(c, Instant::now());
+            }
+            let c = cap.lock().unwrap();
+            (c.raw.clone(), c.pre.clone(), c.dropped, c.finished, t.integrated, t.running, t.alt_screen)
+        };
+        let whole = run(stream.len());
+        assert_eq!(whole.3, Some(Some(2)));
+        assert!(whole.0.starts_with(b"line 0 ") && whole.0.ends_with(b"\x1b]133;D;2\x1b\\"));
+        assert_eq!(whole.1, b"$ make\r\n\x1b]133;C\x07");
+        for size in [1, 2, 3, 7, 64, 4096] {
+            assert_eq!(run(size), whole, "chunks of {size}");
+        }
     }
 
     #[test]

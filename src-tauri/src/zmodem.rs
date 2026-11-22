@@ -67,20 +67,43 @@ pub struct Detector {
 
 impl Detector {
     /// Returns the offset in `data` where the transfer starts and its direction.
+    ///
+    /// Runs on every chunk of terminal output, so the chunk is searched in place (memchr)
+    /// instead of being copied: only a header split across chunks needs the carried tail.
     pub fn feed(&mut self, data: &[u8]) -> Option<(usize, Direction)> {
         const PAT: &[u8] = b"**\x18B0";
-        let mut joined = std::mem::take(&mut self.tail);
-        let carried = joined.len();
-        joined.extend_from_slice(data);
-        let found = joined.windows(PAT.len() + 1).position(|w| {
-            w.starts_with(PAT) && (w[PAT.len()] == b'0' || w[PAT.len()] == b'1')
-        });
-        if let Some(pos) = found {
-            let dir = if joined[pos + PAT.len()] == b'0' { Direction::Receive } else { Direction::Send };
-            return Some((pos.saturating_sub(carried), dir));
+        fn header(w: &[u8]) -> Option<Direction> {
+            match (w.starts_with(PAT), w.get(PAT.len())) {
+                (true, Some(b'0')) => Some(Direction::Receive),
+                (true, Some(b'1')) => Some(Direction::Send),
+                _ => None,
+            }
         }
-        let keep = joined.len().min(PAT.len());
-        self.tail = joined[joined.len() - keep..].to_vec();
+        // A header starting in the tail carried from the last chunk (at most PAT.len() bytes).
+        let carried = self.tail.len();
+        if carried > 0 {
+            let mut joined = std::mem::take(&mut self.tail);
+            joined.extend_from_slice(&data[..data.len().min(PAT.len())]);
+            if let Some(dir) = (0..carried).find_map(|i| header(&joined[i..])) {
+                return Some((0, dir));
+            }
+            joined.truncate(carried);
+            self.tail = joined;
+        }
+        for pos in memchr::memmem::find_iter(data, PAT) {
+            if let Some(dir) = header(&data[pos..]) {
+                return Some((pos, dir));
+            }
+        }
+        // Keep the last PAT.len() bytes of the stream: a header may start there.
+        if data.len() >= PAT.len() {
+            self.tail.clear();
+            self.tail.extend_from_slice(&data[data.len() - PAT.len()..]);
+        } else {
+            self.tail.extend_from_slice(data);
+            let excess = self.tail.len().saturating_sub(PAT.len());
+            self.tail.drain(..excess);
+        }
         None
     }
 }
@@ -994,6 +1017,39 @@ mod tests {
         let mut d = Detector::default();
         let (off, dir) = d.feed(b"hello**\x18B0100000023be50").unwrap();
         assert_eq!((off, dir), (5, Direction::Send));
+    }
+
+    /// The same answers as a plain search over the whole stream, however it is chunked.
+    #[test]
+    fn test_detector_matches_whole_stream_search() {
+        let reference = |s: &[u8]| {
+            s.windows(6).position(|w| w.starts_with(b"**\x18B0") && matches!(w[5], b'0' | b'1')).map(|p| (p, s[p + 5]))
+        };
+        let streams: [&[u8]; 5] = [
+            b"plain text only, no header at all\r\n",
+            b"**\x18B0x then **\x18B01 the real one",
+            b"****\x18B00000000",
+            b"abc**\x18B",
+            b"\x18B00 **\x18B0",
+        ];
+        for s in streams {
+            for size in 1..=s.len() {
+                let mut d = Detector::default();
+                let mut found = None;
+                for (i, c) in s.chunks(size).enumerate() {
+                    if let Some((off, dir)) = d.feed(c) {
+                        let at = i * size + off;
+                        found = Some((at, if dir == Direction::Receive { b'0' } else { b'1' }));
+                        break;
+                    }
+                }
+                match (found, reference(s)) {
+                    // Split across chunks: reported at the start of the chunk it ends in.
+                    (Some((at, d1)), Some((p, d2))) => assert!(d1 == d2 && (at == p || (at > p && at <= p + 5)), "{s:?} {size}"),
+                    (a, b) => assert_eq!(a.is_some(), b.is_some(), "{s:?} chunk {size}"),
+                }
+            }
+        }
     }
 
     fn receive_fixture(
