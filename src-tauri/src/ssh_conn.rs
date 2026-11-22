@@ -192,11 +192,16 @@ impl client::Handler for SshHandler {
     }
 }
 
-/// Write a dim (or red) one-line notice into the terminal.
-fn notice(sink: &Arc<dyn TerminalSink>, instance_id: &str, text: &str, error: bool) {
+/// A dim (or red) one-line notice for the terminal.
+fn notice_line(text: &str, error: bool) -> String {
     let color = if error { "31" } else { "90" };
-    let line = format!("\r\n\x1b[{}m{}\x1b[0m\r\n", color, text);
-    sink.emit_output(instance_id, line.as_bytes());
+    format!("\r\n\x1b[{}m{}\x1b[0m\r\n", color, text)
+}
+
+/// Write a notice into the terminal. Not from the session loop once its `OutputPump` runs:
+/// there notices go through the pump, after the output queued before them.
+fn notice(sink: &Arc<dyn TerminalSink>, instance_id: &str, text: &str, error: bool) {
+    sink.emit_output(instance_id, notice_line(text, error).as_bytes());
 }
 
 /// Parse an X display like "localhost:0.0", ":1" or "127.0.0.1:10" into host, TCP port, screen.
@@ -346,14 +351,14 @@ fn track(active: &Arc<AtomicUsize>, total: &Arc<AtomicUsize>) -> ConnGuard {
     ConnGuard(Arc::clone(active))
 }
 
-/// Start one -L / -R / -D forward. Reports the result in the terminal as well.
+/// Start one -L / -R / -D forward. The notices for the terminal (text, error) are added to
+/// `notes`: the caller writes them where they keep their place among the output.
 async fn start_tunnel(
     handle: &SharedHandle,
     forwards: &RemoteForwards,
     id: String,
     t: &TunnelConfig,
-    sink: &Arc<dyn TerminalSink>,
-    instance_id: &str,
+    notes: &mut Vec<(String, bool)>,
 ) -> std::result::Result<RunningTunnel, String> {
     let listen_host = if t.listen_host.trim().is_empty() { "127.0.0.1" } else { t.listen_host.trim() };
     let target_host = if t.target_host.trim().is_empty() { "localhost" } else { t.target_host.trim() };
@@ -367,21 +372,19 @@ async fn start_tunnel(
             let dynamic = t.kind == "dynamic";
             let listener = TcpListener::bind((listen_host, t.listen_port)).await.map_err(|e| {
                 let msg = format!("无法监听 {}:{}: {}", listen_host, t.listen_port, e);
-                notice(sink, instance_id, &format!("[端口转发{}] {}", label, msg), true);
+                notes.push((format!("[端口转发{}] {}", label, msg), true));
                 msg
             })?;
             let bound = listener.local_addr().map(|a| a.port()).unwrap_or(t.listen_port);
             info.bound_port = bound;
-            notice(
-                sink,
-                instance_id,
-                &if dynamic {
+            notes.push((
+                if dynamic {
                     format!("[动态转发{}] SOCKS4/5 代理已在 {}:{} 启动", label, listen_host, bound)
                 } else {
                     format!("[本地转发{}] {}:{} → {}:{}", label, listen_host, bound, target_host, t.target_port)
                 },
                 false,
-            );
+            ));
             let handle = Arc::clone(handle);
             let target = (target_host.to_string(), t.target_port);
             let (a, tot) = (Arc::clone(&active), Arc::clone(&total));
@@ -437,7 +440,7 @@ async fn start_tunnel(
             };
             let port = handle.tcpip_forward(bind.clone(), t.listen_port as u32).await.map_err(|e| {
                 let msg = format!("服务器拒绝监听 {}:{}: {}", bind, t.listen_port, e);
-                notice(sink, instance_id, &format!("[远程转发{}] {}", label, msg), true);
+                notes.push((format!("[远程转发{}] {}", label, msg), true));
                 msg
             })?;
             let port = if port == 0 { t.listen_port as u32 } else { port };
@@ -453,12 +456,7 @@ async fn start_tunnel(
                 );
             }
             info.bound_port = port as u16;
-            notice(
-                sink,
-                instance_id,
-                &format!("[远程转发{}] 服务器 {}:{} → 本机 {}:{}", label, bind, port, target_host, t.target_port),
-                false,
-            );
+            notes.push((format!("[远程转发{}] 服务器 {}:{} → 本机 {}:{}", label, bind, port, target_host, t.target_port), false));
             Ok(RunningTunnel { info, task: None, remote: Some((bind, port)), active, total })
         }
         other => Err(format!("未知的转发类型 {}", other)),
@@ -656,7 +654,12 @@ pub fn spawn_ssh_session(
         let mut next_tunnel = 0usize;
         for t in session.tunnels.iter().filter(|t| t.enabled) {
             next_tunnel += 1;
-            if let Ok(rt) = start_tunnel(&handle, &forwards, format!("t{}", next_tunnel), t, &sink, &instance_id).await {
+            let mut notes = Vec::new();
+            let started = start_tunnel(&handle, &forwards, format!("t{}", next_tunnel), t, &mut notes).await;
+            for (text, error) in notes {
+                notice(&sink, &instance_id, &text, error);
+            }
+            if let Ok(rt) = started {
                 tunnels.push(rt);
             }
         }
@@ -724,7 +727,12 @@ pub fn spawn_ssh_session(
                     }
                     TunnelRequest::Start(cfg, reply) => {
                         next_tunnel += 1;
-                        let res = start_tunnel(&handle, &forwards, format!("t{}", next_tunnel), &cfg, &sink, &instance_id).await;
+                        let mut notes = Vec::new();
+                        let res = start_tunnel(&handle, &forwards, format!("t{}", next_tunnel), &cfg, &mut notes).await;
+                        // Through the pump like the output: after what is queued, never inside it.
+                        for (text, error) in notes {
+                            pump.output(notice_line(&text, error).as_bytes());
+                        }
                         let res = res.map(|rt| {
                             tunnels.push(rt);
                             snapshot(&tunnels)
@@ -736,7 +744,7 @@ pub fn spawn_ssh_session(
                             let rt = tunnels.remove(pos);
                             let label = describe(&rt.info);
                             stop_tunnel(&handle, &forwards, rt).await;
-                            notice(&sink, &instance_id, &format!("[端口转发] 已停止 {}", label), false);
+                            pump.output(notice_line(&format!("[端口转发] 已停止 {}", label), false).as_bytes());
                         }
                         let _ = reply.send(snapshot(&tunnels));
                     }
