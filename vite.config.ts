@@ -3,38 +3,48 @@ import type { Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFile } from "node:fs/promises";
 import { patchWebglAddon, WEBGL_ADDON_FILE } from "./scripts/xterm-webgl-patch.mjs";
+import { patchXtermCore, XTERM_CORE_FILE } from "./scripts/xterm-core-patch.mjs";
 
 const host = process.env.TAURI_DEV_HOST;
 
-// Backports the WebGL atlas-merge corruption fix into @xterm/addon-webgl
-// (see scripts/xterm-webgl-patch.mjs). `transform` covers `vite build`; the esbuild plugin
-// covers the dev-server dependency pre-bundle (its name is part of Vite's optimizer hash,
-// so a stale cache is rebuilt automatically).
-function xtermWebglPatch(): Plugin {
+// Fixes applied to the published xterm.js bundles: the WebGL atlas-merge corruption
+// (scripts/xterm-webgl-patch.mjs) and the decoration leak (scripts/xterm-core-patch.mjs).
+// `transform` covers `vite build`; the esbuild plugin covers the dev-server dependency
+// pre-bundle (its name is part of Vite's optimizer hash, so a stale cache is rebuilt
+// automatically: bump it when a patch changes).
+const XTERM_PATCHES: { file: RegExp; patch: (source: string) => string }[] = [
+  { file: WEBGL_ADDON_FILE, patch: patchWebglAddon },
+  { file: XTERM_CORE_FILE, patch: patchXtermCore },
+];
+
+function xtermPatches(): Plugin {
   return {
-    name: "nexterm-xterm-webgl-patch",
+    name: "nexterm-xterm-patches",
     enforce: "pre",
     transform(code, id) {
       // Query-suffixed ids (e.g. Rollup's `?commonjs-es-import` proxy) are wrappers, not the bundle.
-      if (id.includes("?") || !WEBGL_ADDON_FILE.test(id)) return null;
-      return { code: patchWebglAddon(code), map: null };
+      if (id.includes("?")) return null;
+      const p = XTERM_PATCHES.find((p) => p.file.test(id));
+      return p ? { code: p.patch(code), map: null } : null;
     },
   };
 }
 
-const xtermWebglEsbuildPatch = {
-  name: "nexterm-xterm-webgl-patch-v3",
+const xtermEsbuildPatches = {
+  name: "nexterm-xterm-patches-v4",
   setup(build: { onLoad: (o: { filter: RegExp }, cb: (a: { path: string }) => Promise<{ contents: string; loader: "js" }>) => void }) {
-    build.onLoad({ filter: WEBGL_ADDON_FILE }, async ({ path }) => ({
-      contents: patchWebglAddon(await readFile(path, "utf8")),
-      loader: "js",
-    }));
+    for (const { file, patch } of XTERM_PATCHES) {
+      build.onLoad({ filter: file }, async ({ path }) => ({
+        contents: patch(await readFile(path, "utf8")),
+        loader: "js",
+      }));
+    }
   },
 };
 
 export default defineConfig(async () => ({
-  plugins: [react(), xtermWebglPatch()],
-  optimizeDeps: { esbuildOptions: { plugins: [xtermWebglEsbuildPatch] } },
+  plugins: [react(), xtermPatches()],
+  optimizeDeps: { esbuildOptions: { plugins: [xtermEsbuildPatches] } },
   clearScreen: false,
   // relay/ is a separate Node project with its own node:test suite.
   test: { exclude: ["**/node_modules/**", "relay/**"] },
