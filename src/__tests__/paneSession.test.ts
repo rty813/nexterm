@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_TERMINAL_OPTIONS, type SessionConfig, type TerminalLeafNode } from "../types/domain";
-import { applyPaneSessionEdits, hasSavedPassword, savePaneProfile, type PaneSessionEdits } from "../utils/paneSession";
+import { applyPaneSessionEdits, findSavedLogin, hasSavedPassword, rememberPaneLogin, savePaneProfile, type PaneSessionEdits } from "../utils/paneSession";
 import { parseQuickConnectInput } from "../utils/quickConnect";
 import { snapshotWorkspace } from "../utils/workspaceSnapshot";
 
@@ -62,5 +62,43 @@ describe("hasSavedPassword", () => {
     expect(hasSavedPassword({ password: "x" })).toBe(true);
     expect(hasSavedPassword({})).toBe(false);
     expect(hasSavedPassword({ password: undefined })).toBe(false);
+  });
+});
+
+describe("remembering a quick-connect login", () => {
+  it("creates a profile that the same address finds again after a restart", () => {
+    const live = parseQuickConnectInput("root@10.0.0.5:2222")!;
+    const saved = rememberPaneLogin([], live, { password: "pw" });
+    expect(saved).toEqual([{ ...live, password: "pw" }]);
+    const again = parseQuickConnectInput("root@10.0.0.5:2222")!;
+    expect(again.id).not.toBe(live.id);
+    expect(findSavedLogin(saved, again)).toBe(saved[0]);
+  });
+
+  it("updates an existing profile instead of adding one", () => {
+    const live = parseQuickConnectInput("root@host")!;
+    const updated = rememberPaneLogin([{ ...live, password: "old", keepAliveSecs: 180 }], live, { password: "new" });
+    expect(updated).toHaveLength(1);
+    expect(updated[0]).toMatchObject({ password: "new", keepAliveSecs: 180 });
+  });
+
+  it("never makes a profile from a plugin handoff session", () => {
+    const live = { ...parseQuickConnectInput("root@host")!, credentialHandoff: true };
+    const sessions: SessionConfig[] = [];
+    expect(rememberPaneLogin(sessions, live, { password: "pw" })).toBe(sessions);
+  });
+
+  it("does not match another user, port, or a profile without a password", () => {
+    const saved = { ...parseQuickConnectInput("root@host")!, password: "pw" };
+    expect(findSavedLogin([saved], parseQuickConnectInput("admin@host")!)).toBeUndefined();
+    expect(findSavedLogin([saved], parseQuickConnectInput("root@host:2222")!)).toBeUndefined();
+    expect(findSavedLogin([{ ...saved, password: undefined }], parseQuickConnectInput("root@host")!)).toBeUndefined();
+  });
+
+  it("only fills in a missing user when one profile fits", () => {
+    const root = { ...parseQuickConnectInput("root@host")!, password: "pw" };
+    const admin = { ...parseQuickConnectInput("admin@host")!, password: "pw" };
+    expect(findSavedLogin([root], parseQuickConnectInput("host")!)).toBe(root);
+    expect(findSavedLogin([root, admin], parseQuickConnectInput("host")!)).toBeUndefined();
   });
 });

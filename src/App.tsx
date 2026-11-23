@@ -56,7 +56,7 @@ import { quickPayload } from "./utils/quickCommands";
 import { syncTargets } from "./utils/syncInput";
 import { SessionModal } from "./components/SessionModal";
 import { PaneSessionModal } from "./components/PaneSessionModal";
-import { applyPaneSessionEdits, hasSavedPassword, savePaneProfile } from "./utils/paneSession";
+import { applyPaneSessionEdits, findSavedLogin, hasSavedPassword, rememberPaneLogin, savePaneProfile } from "./utils/paneSession";
 import { SessionManager } from "./components/SessionManager";
 import { ImportModal } from "./components/ImportModal";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
@@ -806,8 +806,9 @@ export const App: React.FC = () => {
       }),
     }));
 
-    if (creds?.remember && sessionsRef.current.some((session) => session.id === current.id)) {
-      persistSessions(sessionsRef.current.map((session) => session.id === current.id ? { ...session, ...credentials } : session));
+    if (creds?.remember) {
+      const next = rememberPaneLogin(sessionsRef.current, current, credentials);
+      if (next !== sessionsRef.current) persistSessions(next);
     }
   }, []);
 
@@ -2295,6 +2296,7 @@ export const App: React.FC = () => {
 
   const paneExtras: PaneExtras = {
     onPaneSettings: setSettingsPaneId,
+    isSavedSession: (id) => sessionsRef.current.some((session) => session.id === id),
     quickCommands,
     onQuickConnect: (target) => {
       const parsed = parseQuickConnectInput(target);
@@ -2600,10 +2602,11 @@ export const App: React.FC = () => {
     const parsed = parseQuickConnectInput(raw);
     if (!parsed) return;
     rememberQuickConnect(raw);
+    const session = findSavedLogin(sessionsRef.current, parsed) ?? parsed;
     if (inSplit) {
-      openSessionInSplit(parsed, "horizontal");
+      openSessionInSplit(session, "horizontal");
     } else {
-      openSessionInNewTab(parsed);
+      openSessionInNewTab(session);
     }
   };
 

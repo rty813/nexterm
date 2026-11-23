@@ -110,6 +110,7 @@ import { hasSavedPassword } from "../utils/paneSession";
 
 /** Workspace-level state and actions every pane needs (menus, logging, sync input). */
 export interface PaneExtras {
+  isSavedSession: (sessionId: string) => boolean;
   onPaneSettings: (paneId: string) => void;
   syncChannels: Record<string, SyncChannel>;
   syncPaused: boolean;
@@ -343,7 +344,10 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   /** Older lines from the backend's full history, loaded as the view nears the top. */
   const historyRef = useRef<HistoryScroll | null>(null);
   const [showTimestamps, setShowTimestamps] = useState<boolean>(Boolean(settings.showTimestamps));
-  const [rememberPwd, setRememberPwd] = useState<boolean>(!leaf.session.credentialHandoff);
+  const [rememberPwd, setRememberPwd] = useState<boolean>(
+    // Ticking this for a quick-connect tab creates a profile, so that one is opt-in.
+    () => !leaf.session.credentialHandoff && extrasProp.isSavedSession(leaf.session.id)
+  );
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
   const [searchSeed, setSearchSeed] = useState<string>("");
   /** Binary data type: output is a hex dump and the selection feeds the data interpreter. */
@@ -1195,10 +1199,11 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       onReconnectPane(leaf.paneId, {
         username: username || undefined,
         password: usesPassword ? p.password ?? "" : undefined,
-        remember: p.remember,
+        // The phone's box is ticked by default: it may update a profile, not create one.
+        remember: p.remember && extrasRef.current.isSavedSession(leaf.session.id),
       });
     } else if (leaf.status === "disconnected" || leaf.status === "error") {
-      const creds = usesPassword && p.password !== null ? { password: p.password, remember: p.remember } : undefined;
+      const creds = usesPassword && p.password !== null ? { password: p.password, remember: p.remember && extrasRef.current.isSavedSession(leaf.session.id) } : undefined;
       onReconnectPane(leaf.paneId, creds);
     }
   };
