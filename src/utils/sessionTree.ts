@@ -150,3 +150,28 @@ export function buildSessionTree(
 
   return sortSessionTree([...rootFolders.values(), ...rootLeaves], sort, usage);
 }
+
+/**
+ * Groups to pick from in the session form: every group in use and each of its parent
+ * folders ("A>B" also offers "A"), normalized to "A>B" and sorted.
+ */
+export function groupOptions(groups: Iterable<string>): string[] {
+  const out = new Set<string>();
+  for (const group of groups) {
+    const segments = (group || "").split(">").map((part) => part.trim()).filter(Boolean);
+    for (let i = 1; i <= segments.length; i++) out.add(segments.slice(0, i).join(">"));
+  }
+  return [...out].sort((a, b) => a.localeCompare(b, "zh"));
+}
+
+/**
+ * The options matching what is typed into the group field. Empty input, or input equal to
+ * an option (the field's current value), shows everything so the list works as a dropdown.
+ */
+export function filterGroupOptions(options: string[], typed: string): string[] {
+  const q = typed.trim().toLowerCase();
+  if (!q || options.some((option) => option.toLowerCase() === q)) return options;
+  const starts = options.filter((option) => option.toLowerCase().startsWith(q));
+  const contains = options.filter((option) => !option.toLowerCase().startsWith(q) && option.toLowerCase().includes(q));
+  return [...starts, ...contains];
+}

@@ -5673,3 +5673,87 @@ html.ctxmenu-host #root {
 .proto-badge.proto-vnc {
   color: #3ccf91;
 }
+.proto-tile:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.proto-tile:disabled:hover {
+  color: var(--fg-muted);
+  border-color: var(--border-subtle);
+}
+
+/* Group field of the session form: a text input whose options drop down on focus. */
+.combo {
+  position: relative;
+  display: flex;
+}
+.combo > .text-input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 28px;
+}
+.combo-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.combo-toggle:hover {
+  color: var(--fg-strong);
+  background: var(--bg-hover);
+}
+.combo-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px 0;
+  margin: 0;
+  list-style: none;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  font-size: 12.5px;
+}
+.combo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-primary);
+}
+.combo-item.active {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--fg-strong);
+}
+.combo-item.current {
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+.combo-item .combo-sep {
+  color: var(--fg-muted);
+  padding: 0 2px;
+}
+.combo-empty {
+  padding: 4px 10px;
+  color: var(--fg-muted);
+}

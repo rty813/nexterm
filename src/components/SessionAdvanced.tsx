@@ -78,8 +78,7 @@ export const SessionAdvanced: React.FC<{
   protocol: ProtocolType;
   value: AdvancedState;
   onChange: (next: AdvancedState) => void;
-  terminalOnly?: boolean;
-}> = ({ protocol, value: v, onChange, terminalOnly = false }) => {
+}> = ({ protocol, value: v, onChange }) => {
   const { t } = useTranslation();
   const [section, setSection] = useState<Section>("connection");
   const [charsets, setCharsets] = useState<string[]>([]);
@@ -102,7 +101,7 @@ export const SessionAdvanced: React.FC<{
 
   return (
     <div className="adv-box">
-      {!terminalOnly && <div className="adv-tabs">
+      <div className="adv-tabs">
         {sections
           .filter((s) => s.show)
           .map((s) => (
@@ -115,9 +114,9 @@ export const SessionAdvanced: React.FC<{
               {s.label}
             </button>
           ))}
-      </div>}
+      </div>
 
-      {(terminalOnly || section === "connection") && (
+      {section === "connection" && (
         <div className="adv-body">
           <div className="form-grid-2">
             <label className="field">
@@ -145,7 +144,7 @@ export const SessionAdvanced: React.FC<{
             </label>
           </div>
 
-          {!terminalOnly && network && (
+          {network && (
             <>
               <div className="form-grid-3">
                 <label className="field">
@@ -241,7 +240,7 @@ export const SessionAdvanced: React.FC<{
             </>
           )}
 
-          {!terminalOnly && isSsh && (
+          {isSsh && (
             <>
               <div className="form-grid-2">
                 <label className="checkbox-row">
@@ -365,7 +364,7 @@ export const SessionAdvanced: React.FC<{
         </div>
       )}
 
-      {(terminalOnly || section === "terminal") && (
+      {section === "terminal" && (
         <div className="adv-body">
           <div className="form-grid-3">
             <label className="field">

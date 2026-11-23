@@ -55,8 +55,7 @@ import { QuickCommandManager, type QuickManagerTarget } from "./components/Quick
 import { quickPayload } from "./utils/quickCommands";
 import { syncTargets } from "./utils/syncInput";
 import { SessionModal } from "./components/SessionModal";
-import { PaneSessionModal } from "./components/PaneSessionModal";
-import { applyPaneSessionEdits, findSavedLogin, hasSavedPassword, rememberPaneLogin, savePaneProfile } from "./utils/paneSession";
+import { applyPaneSessionEdits, findSavedLogin, paneFormSession, hasSavedPassword, rememberPaneLogin, savePaneProfile } from "./utils/paneSession";
 import { SessionManager } from "./components/SessionManager";
 import { ImportModal } from "./components/ImportModal";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
@@ -2986,20 +2985,29 @@ export const App: React.FC = () => {
       </div>
 
       {settingsPane && (
-        <PaneSessionModal
+        <SessionModal
           key={settingsPane.paneId}
-          leaf={settingsPane}
-          isSaved={sessions.some((session) => session.id === settingsPane.session.id)}
+          initial={paneFormSession(settingsPane, sessions.find((session) => session.id === settingsPane.session.id))}
           groups={Array.from(new Set(sessions.map((session) => session.group).filter(Boolean))).sort()}
           onClose={() => setSettingsPaneId(null)}
-          onApply={async (edits, saveProfile, rememberPassword) => {
-            if (saveProfile) {
-              const next = savePaneProfile(sessionsRef.current, settingsPane.session, edits, rememberPassword);
-              await backend.saveSessions(next);
-              setSessions(next);
-              void backend.emitSessionsChanged().catch((error) => setToast(String(error)));
-            }
-            setWs((prev) => ({ ...prev, root: updateLeaf(prev.root, settingsPane.paneId, (leaf) => applyPaneSessionEdits(leaf, edits)) }));
+          onSave={() => {}}
+          pane={{
+            title: tabTitle(settingsPane),
+            isSaved: sessions.some((session) => session.id === settingsPane.session.id),
+            canRememberPassword:
+              !sessions.some((session) => session.id === settingsPane.session.id)
+              && settingsPane.session.authType === "password"
+              && hasSavedPassword(settingsPane.session)
+              && !settingsPane.session.credentialHandoff,
+            onApply: async (form, saveProfile, rememberPassword) => {
+              if (saveProfile) {
+                const next = savePaneProfile(sessionsRef.current, settingsPane.session, form, rememberPassword);
+                await backend.saveSessions(next);
+                setSessions(next);
+                void backend.emitSessionsChanged().catch((error) => setToast(String(error)));
+              }
+              setWs((prev) => ({ ...prev, root: updateLeaf(prev.root, settingsPane.paneId, (leaf) => applyPaneSessionEdits(leaf, form)) }));
+            },
           }}
         />
       )}

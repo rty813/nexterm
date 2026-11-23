@@ -1,7 +1,5 @@
 import type { SessionConfig, TerminalLeafNode } from "../types/domain";
 
-export type PaneSessionEdits = Pick<SessionConfig, "label" | "group" | "term" | "charset" | "system" | "termOptions" | "tabColor">;
-
 /** A saved password, including an empty one (servers that accept a blank password). `undefined`/`null` = not saved. */
 export function hasSavedPassword(session: Pick<SessionConfig, "password">): boolean {
   return typeof session.password === "string";
@@ -14,15 +12,45 @@ export function withoutSessionSecrets(session: SessionConfig): SessionConfig {
   return config;
 }
 
-export function applyPaneSessionEdits(leaf: TerminalLeafNode, edits: PaneSessionEdits): TerminalLeafNode {
-  return { ...leaf, session: { ...leaf.session, ...edits }, title: undefined, color: edits.tabColor };
+/**
+ * What the session form shows for an open tab: the tab's live settings, with the secrets of
+ * its saved profile (none for a quick tab). A password typed only at the login prompt is
+ * never shown, so saving the form can't store it without the "remember" opt-in.
+ */
+export function paneFormSession(leaf: TerminalLeafNode, saved?: SessionConfig): SessionConfig {
+  const base = { ...withoutSessionSecrets(leaf.session), tabColor: leaf.color ?? null };
+  if (!saved) return base;
+  return {
+    ...base,
+    password: saved.password,
+    passphrase: saved.passphrase,
+    jumpHost: base.jumpHost ? { ...base.jumpHost, password: saved.jumpHost?.password, passphrase: saved.jumpHost?.passphrase } : base.jumpHost,
+    proxy: base.proxy ? { ...base.proxy, password: saved.proxy?.password } : base.proxy,
+  };
 }
 
-export function savePaneProfile(sessions: SessionConfig[], live: SessionConfig, edits: PaneSessionEdits, rememberPassword: boolean): SessionConfig[] {
+/** The form over the live session; a secret the form leaves blank keeps the one the tab logged in with. */
+export function withLiveSecrets(live: SessionConfig, form: SessionConfig): SessionConfig {
+  const next: SessionConfig = { ...live, ...form, password: form.password || live.password, passphrase: form.passphrase || live.passphrase };
+  if (next.jumpHost && live.jumpHost && next.jumpHost.host === live.jumpHost.host && next.jumpHost.username === live.jumpHost.username) {
+    next.jumpHost = { ...next.jumpHost, password: next.jumpHost.password || live.jumpHost.password, passphrase: next.jumpHost.passphrase || live.jumpHost.passphrase };
+  }
+  if (next.proxy && live.proxy && next.proxy.host === live.proxy.host && next.proxy.username === live.proxy.username) {
+    next.proxy = { ...next.proxy, password: next.proxy.password || live.proxy.password };
+  }
+  return next;
+}
+
+/** "Apply to this tab": connection changes take effect on the next (re)connect. */
+export function applyPaneSessionEdits(leaf: TerminalLeafNode, form: SessionConfig): TerminalLeafNode {
+  return { ...leaf, session: withLiveSecrets(leaf.session, form), title: undefined, color: form.tabColor ?? null };
+}
+
+export function savePaneProfile(sessions: SessionConfig[], live: SessionConfig, form: SessionConfig, rememberPassword: boolean): SessionConfig[] {
   const existing = sessions.find((session) => session.id === live.id);
-  if (existing) return sessions.map((session) => session === existing ? { ...session, ...edits } : session);
-  const profile = { ...withoutSessionSecrets(live), ...edits };
-  if (rememberPassword && live.authType === "password" && !live.credentialHandoff) profile.password = live.password;
+  if (existing) return sessions.map((session) => session === existing ? { ...session, ...form } : session);
+  const profile = { ...withoutSessionSecrets(live), ...form };
+  if (rememberPassword && !form.password && live.authType === "password" && !live.credentialHandoff) profile.password = live.password;
   return [...sessions, profile];
 }
 

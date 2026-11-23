@@ -4,6 +4,7 @@ import { ChevronRight, FolderOpen, X } from "lucide-react";
 import { backend } from "../services/backend";
 import { SessionAdvanced, advancedToSession, initialAdvanced } from "./SessionAdvanced";
 import { ProtocolBadge } from "./ProtocolBadge";
+import { GroupInput } from "./GroupInput";
 import { useCloseGuard } from "./useCloseGuard";
 import {
   DEFAULT_DESKTOP,
@@ -39,6 +40,21 @@ interface SessionModalProps {
   onSave: (session: SessionConfig, connectNow: boolean) => void;
   /** Connect without saving; offered only for a new session. */
   onConnect?: (session: SessionConfig) => void;
+  /**
+   * Settings of an open tab (tab / pane menu): same form, but the protocol is fixed and the
+   * footer offers "apply to this tab" and "save to profile" instead of save / connect.
+   */
+  pane?: PaneMode;
+}
+
+export interface PaneMode {
+  /** The tab's title, shown in the header. */
+  title: string;
+  /** The tab has a saved profile (same id). */
+  isSaved: boolean;
+  /** Offer to store the password the tab logged in with (quick tab, password login). */
+  canRememberPassword: boolean;
+  onApply: (session: SessionConfig, saveProfile: boolean, rememberPassword: boolean) => Promise<void>;
 }
 
 function makeUuid(): string {
@@ -54,6 +70,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   onClose,
   onSave,
   onConnect,
+  pane,
 }) => {
   const { t } = useTranslation();
   const [newId] = useState(makeUuid);
@@ -160,6 +177,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             authType: jumpAuth,
             password: jumpPassword || undefined,
             privateKeyPath: jumpKeyPath.trim() || undefined,
+            passphrase: initial?.jumpHost?.passphrase ?? undefined,
           }
         : null;
 
@@ -194,7 +212,25 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   // Unsaved edits: the form as it would be saved, against how it opened.
   const currentJson = JSON.stringify(buildResult());
   const initialJson = useRef(currentJson);
-  const { requestClose, prompt } = useCloseGuard(currentJson !== initialJson.current, onClose);
+  const [rememberPassword, setRememberPassword] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const { requestClose, prompt } = useCloseGuard(currentJson !== initialJson.current || rememberPassword, () => {
+    if (!saving) onClose();
+  });
+
+  const applyToPane = async (saveProfile: boolean) => {
+    if (!pane || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await pane.onApply(buildResult(), saveProfile, rememberPassword);
+      onClose();
+    } catch (reason) {
+      setError(String(reason));
+      setSaving(false);
+    }
+  };
 
   // Options most sessions never touch stay folded, unless this session uses them.
   const [moreOpen, setMoreOpen] = useState(
@@ -213,11 +249,17 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={requestClose}>
-      <div className="modal-panel modal-lg session-form" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" onMouseDown={saving ? undefined : requestClose}>
+      <div className="modal-panel modal-lg session-form" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3>{initial && !isNew ? t("sessionModal.editTitle") : t("sessionModal.newTitle")}</h3>
-          <button type="button" className="icon-btn" onClick={requestClose} title={t("sessionModal.cancel")}>
+          <h3>
+            {pane
+              ? `${t("sessionForm.paneSettings")} · ${pane.title}`
+              : initial && !isNew
+              ? t("sessionModal.editTitle")
+              : t("sessionModal.newTitle")}
+          </h3>
+          <button type="button" className="icon-btn" onClick={requestClose} title={t("sessionModal.cancel")} disabled={saving}>
             <X size={16} />
           </button>
         </div>
@@ -229,7 +271,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             e.preventDefault();
             const submitter = (e.nativeEvent as SubmitEvent).submitter as HTMLElement | null;
             const mode = submitter?.dataset.connect;
-            if (mode === "only" && onConnect) onConnect(buildResult());
+            if (pane) void applyToPane(mode === "save");
+            else if (mode === "only" && onConnect) onConnect(buildResult());
             else onSave(buildResult(), mode === "1");
           }}
         >
@@ -240,6 +283,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                 type="button"
                 role="radio"
                 aria-checked={protocol === p}
+                // An open tab keeps its protocol: a terminal can't turn into a desktop pane.
+                disabled={Boolean(pane) && protocol !== p}
+                title={pane && protocol !== p ? t("sessionForm.protocolFixed") : undefined}
                 className={`proto-tile ${protocol === p ? "active" : ""}`}
                 onClick={() => pickProtocol(p)}
               >
@@ -554,19 +600,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               </label>
               <label className="field">
                 <span>{t("sessionForm.group")}</span>
-                <input
-                  type="text"
-                  className="text-input"
-                  list="session-group-list"
-                  placeholder={t("sessionModal.groupPlaceholder")}
+                <GroupInput
                   value={group}
-                  onChange={(e) => setGroup(e.target.value)}
+                  onChange={setGroup}
+                  groups={groups}
+                  placeholder={t("sessionModal.groupPlaceholder")}
                 />
-                <datalist id="session-group-list">
-                  {groups.map((g) => (
-                    <option key={g} value={g} />
-                  ))}
-                </datalist>
               </label>
             </div>
           </section>
@@ -769,6 +808,29 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             )}
           </section>
 
+          {pane ? (
+            <>
+              <p className="adv-hint">{t("sessionForm.reconnectHint")}</p>
+              {pane.canRememberPassword && protocol === "ssh" && authType === "password" && !password && (
+                <label className="checkbox-row">
+                  <input type="checkbox" checked={rememberPassword} onChange={(e) => setRememberPassword(e.target.checked)} />
+                  {t("pane.rememberPwd")}
+                </label>
+              )}
+              {error && <p role="alert">{t("storageLoc.failed", { error })}</p>}
+              <div className="modal-footer">
+                <button type="button" className="btn-ghost" onClick={requestClose} disabled={saving}>
+                  {t("sessionModal.cancel")}
+                </button>
+                <button type="submit" className="btn-secondary" data-connect="apply" disabled={saving}>
+                  {t("sessionForm.applyToTab")}
+                </button>
+                <button type="submit" className="btn-primary" data-connect="save" disabled={saving}>
+                  {t(pane.isSaved ? "sessionForm.updateProfile" : "sessionForm.saveProfile")}
+                </button>
+              </div>
+            </>
+          ) : (
           <div className="modal-footer">
             <button type="button" className="btn-ghost" onClick={requestClose}>
               {t("sessionModal.cancel")}
@@ -785,6 +847,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               {t("sessionModal.saveAndConnect")}
             </button>
           </div>
+          )}
         </form>
       </div>
     </div>
