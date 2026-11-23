@@ -6,7 +6,50 @@ export type ProtocolType =
   | "custom"
   | "tcp"
   | "serial"
-  | "telnet";
+  | "telnet"
+  | "rdp"
+  | "vnc";
+
+/** RDP / VNC: graphical panes (`DesktopPane`), not terminals. */
+export function isDesktopProtocol(protocol: ProtocolType | undefined): boolean {
+  return protocol === "rdp" || protocol === "vnc";
+}
+
+/** RDP / VNC session options (Rust `DesktopConfig`). */
+export interface DesktopConfig {
+  /** RDP logon domain. */
+  domain: string;
+  /** Fixed desktop size (resize "fixed"). */
+  width: number;
+  height: number;
+  /** fit-window: the remote desktop follows the pane size; fixed: width x height. */
+  resize: "fit-window" | "fixed";
+  /** How the picture is drawn in the pane. */
+  scale: "fit" | "actual" | "stretch";
+  /** RDP color depth. */
+  colorDepth: 16 | 24 | 32;
+  /** RDP Network Level Authentication. */
+  nla: boolean;
+  /** Text clipboard sync. */
+  clipboard: boolean;
+  /** VNC: never send input. */
+  viewOnly: boolean;
+  /** RDP audio: play here, leave on the remote computer, or off. */
+  audio: "local" | "remote" | "off";
+}
+
+export const DEFAULT_DESKTOP: DesktopConfig = {
+  domain: "",
+  width: 1920,
+  height: 1080,
+  resize: "fit-window",
+  scale: "fit",
+  colorDepth: 32,
+  nla: true,
+  clipboard: true,
+  viewOnly: false,
+  audio: "local",
+};
 
 export type AuthType = "password" | "privatekey" | "none";
 
@@ -66,6 +109,8 @@ export interface SessionConfig {
   system?: HighlightSystem | "";
   /** Accept any SSH host key without asking. */
   skipHostKeyCheck?: boolean;
+  /** RDP / VNC display options. */
+  desktop?: DesktopConfig | null;
   /** Per-session terminal key / bell behaviour. */
   termOptions?: TerminalOptions;
   /** Default tab color for this session. */

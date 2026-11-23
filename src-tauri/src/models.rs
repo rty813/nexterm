@@ -12,6 +12,16 @@ pub enum ProtocolType {
     Tcp,
     Serial,
     Telnet,
+    /// Remote desktop panes (`desktop/`), not terminals.
+    Rdp,
+    Vnc,
+}
+
+impl ProtocolType {
+    /// RDP / VNC: a graphical pane driven by `desktop::`, not the terminal pipeline.
+    pub fn is_desktop(&self) -> bool {
+        matches!(self, ProtocolType::Rdp | ProtocolType::Vnc)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -99,9 +109,89 @@ pub struct SessionConfig {
     /// Accept any SSH host key without checking known_hosts (WindTerm: verifyServerFingerprint off).
     #[serde(default)]
     pub skip_host_key_check: bool,
+    /// RDP / VNC display options.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<DesktopConfig>,
     /// Frontend-only options (terminal keys, bell, tab color, ...) kept verbatim.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// RDP / VNC session options (`SessionConfig::desktop`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopConfig {
+    /// RDP logon domain.
+    #[serde(default)]
+    pub domain: String,
+    /// Fixed desktop size (used when `resize` is "fixed").
+    #[serde(default = "default_desktop_width")]
+    pub width: u16,
+    #[serde(default = "default_desktop_height")]
+    pub height: u16,
+    /// "fit-window": the remote desktop follows the pane size (RDP display control);
+    /// "fixed": `width` x `height`.
+    #[serde(default = "default_desktop_resize")]
+    pub resize: String,
+    /// "fit" | "actual" | "stretch": how the picture is drawn in the pane (frontend only).
+    #[serde(default = "default_desktop_scale")]
+    pub scale: String,
+    /// RDP color depth: 16 / 24 / 32.
+    #[serde(default = "default_color_depth")]
+    pub color_depth: u32,
+    /// RDP Network Level Authentication (CredSSP).
+    #[serde(default = "default_true")]
+    pub nla: bool,
+    /// Text clipboard sync with the remote side.
+    #[serde(default = "default_true")]
+    pub clipboard: bool,
+    /// VNC: show only, never send input.
+    #[serde(default)]
+    pub view_only: bool,
+    /// RDP audio: "local" (play here) | "remote" (leave on the remote computer) | "off".
+    #[serde(default = "default_audio")]
+    pub audio: String,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            domain: String::new(),
+            width: default_desktop_width(),
+            height: default_desktop_height(),
+            resize: default_desktop_resize(),
+            scale: default_desktop_scale(),
+            color_depth: default_color_depth(),
+            nla: true,
+            clipboard: true,
+            view_only: false,
+            audio: default_audio(),
+        }
+    }
+}
+
+fn default_desktop_width() -> u16 {
+    1920
+}
+
+fn default_desktop_height() -> u16 {
+    1080
+}
+
+fn default_desktop_resize() -> String {
+    "fit-window".to_string()
+}
+
+fn default_desktop_scale() -> String {
+    "fit".to_string()
+}
+
+fn default_color_depth() -> u32 {
+    32
+}
+
+fn default_audio() -> String {
+    "local".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

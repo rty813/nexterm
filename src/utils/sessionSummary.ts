@@ -8,6 +8,9 @@ export function sessionTargetSummary(s: SessionConfig): string {
     case "tcp":
     case "telnet":
       return `${s.host}:${s.port}`;
+    case "rdp":
+    case "vnc":
+      return `${s.protocol.toUpperCase()} ${s.username ? `${s.username}@` : ""}${s.host}:${s.port}`;
     case "serial":
       return `${s.host} @ ${s.serial?.baudRate ?? 115200}`;
     default:

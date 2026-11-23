@@ -610,6 +610,8 @@ export const App: React.FC = () => {
         tcp: "TCP",
         serial: "Serial",
         telnet: "Telnet",
+        rdp: "RDP",
+        vnc: "VNC",
       };
       openSessionInNewTab(
         {

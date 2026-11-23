@@ -11,6 +11,8 @@ import type {
   ThemeDefinition,
 } from "../types/domain";
 import { TerminalPane } from "./TerminalPane";
+import { DesktopPane } from "./DesktopPane";
+import { isDesktopProtocol } from "../types/domain";
 import type { PaneExtras, ReconnectCredentials } from "./TerminalPane";
 import { GroupTabBar, SESSION_MIME, TAB_MIME, type GroupTabBarProps } from "./TabBar";
 import type { DropHint } from "../utils/dropZones";
@@ -376,6 +378,16 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
             className="split-slot"
             style={{ ...boxStyle(slot.rect, tabbarH), display: visible ? "flex" : "none" }}
           >
+            {isDesktopProtocol(leaf.session.protocol) ? (
+              <DesktopPane
+                leaf={leaf}
+                visible={visible}
+                isActive={visible && slot.group.id === activeGroupId}
+                extras={extras}
+                onActivate={onActivatePane}
+                onReconnectPane={onReconnectPane}
+              />
+            ) : (
             <TerminalPane
               leaf={leaf}
               visible={visible}
@@ -392,6 +404,7 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
               onClosePane={onClosePane}
               onReconnectPane={onReconnectPane}
             />
+            )}
           </div>
         );
       })}

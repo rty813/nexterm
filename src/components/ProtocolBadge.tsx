@@ -1,6 +1,8 @@
 import React from "react";
 import {
   Cpu,
+  Monitor,
+  MonitorPlay,
   Network,
   Server,
   SquareTerminal,
@@ -20,6 +22,18 @@ export const ProtocolBadge: React.FC<ProtocolBadgeProps> = ({
   size = 14,
 }) => {
   switch (protocol) {
+    case "rdp":
+      return (
+        <span className="proto-badge proto-rdp" title="RDP">
+          <Monitor size={size} />
+        </span>
+      );
+    case "vnc":
+      return (
+        <span className="proto-badge proto-vnc" title="VNC">
+          <MonitorPlay size={size} />
+        </span>
+      );
     case "ssh":
       return (
         <span className="proto-badge proto-ssh" title="SSH2">

@@ -16,7 +16,7 @@ use crate::manager::{
     TunnelStatus,
 };
 use crate::models::{AuthType, JumpHostConfig, SessionConfig, TunnelConfig};
-use crate::net::connect_stream;
+use crate::net::{connect_stream, BoxedStream};
 use crate::pump::OutputPump;
 use crate::shell_integration::{Injector, Step};
 
@@ -105,6 +105,7 @@ impl client::Handler for SshHandler {
             fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
             changed: known,
             known_hosts: path.to_string_lossy().to_string(),
+            kind: "ssh",
         };
         let rx = self.sink.confirm_host_key(&self.instance_id, prompt);
         let decision = tokio::time::timeout(Duration::from_secs(300), rx)
@@ -923,6 +924,37 @@ async fn establish_ssh_session(
         .context("无法打开 SSH 会话通道")?;
 
     Ok((target_handle, forwards, channel, jump_guard))
+}
+
+/// Keeps the jump host's SSH connection alive for a tunnel opened by [`jump_tunnel`].
+pub(crate) struct JumpTunnel {
+    _handle: client::Handle<SshHandler>,
+}
+
+/// Log in to the session's jump host and open a direct-tcpip channel to `session.host:port`
+/// (RDP / VNC panes through an SSH jump host). The stream lives while the guard does.
+pub(crate) async fn jump_tunnel(
+    instance_id: &str,
+    session: &SessionConfig,
+    jump: &JumpHostConfig,
+    sink: &Arc<dyn TerminalSink>,
+) -> Result<(BoxedStream, JumpTunnel)> {
+    let mut cfg = client::Config { preferred: compat_preferred(), ..Default::default() };
+    cfg.keepalive_interval = Some(Duration::from_secs(session.keep_alive_secs.max(15)));
+    cfg.keepalive_max = 3;
+    cfg.inactivity_timeout = None;
+    let cfg = Arc::new(cfg);
+    let handle = connect_and_authenticate_jump(&cfg, instance_id, session, jump, sink).await?;
+    let channel = handle
+        .channel_open_direct_tcpip(session.host.trim(), session.port as u32, "127.0.0.1", 0)
+        .await
+        .with_context(|| {
+            format!(
+                "无法通过跳板机 {}:{} 建立到 {}:{} 的隧道",
+                jump.host, jump.port, session.host, session.port
+            )
+        })?;
+    Ok((Box::new(channel.into_stream()), JumpTunnel { _handle: handle }))
 }
 
 async fn connect_and_authenticate_jump(

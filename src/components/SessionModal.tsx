@@ -6,8 +6,11 @@ import { SessionAdvanced, advancedToSession, initialAdvanced } from "./SessionAd
 import { ProtocolBadge } from "./ProtocolBadge";
 import { useCloseGuard } from "./useCloseGuard";
 import {
+  DEFAULT_DESKTOP,
   hasDataType,
+  isDesktopProtocol,
   type AuthType,
+  type DesktopConfig,
   type DataType,
   type JumpHostConfig,
   type ProtocolType,
@@ -20,8 +23,10 @@ const BAUD_RATES = [
   921600, 1000000, 1500000, 2000000, 3000000,
 ];
 
-const PROTOCOLS: ProtocolType[] = ["ssh", "powershell", "cmd", "wsl", "serial", "telnet", "tcp", "custom"];
-const REMOTE: ProtocolType[] = ["ssh", "tcp", "telnet"];
+const PROTOCOLS: ProtocolType[] = ["ssh", "rdp", "vnc", "powershell", "cmd", "wsl", "serial", "telnet", "tcp", "custom"];
+const REMOTE: ProtocolType[] = ["ssh", "tcp", "telnet", "rdp", "vnc"];
+/** Default port per network protocol: switching protocol replaces a port left at another's default. */
+const DEFAULT_PORTS: Partial<Record<ProtocolType, number>> = { ssh: 22, telnet: 23, rdp: 3389, vnc: 5900 };
 const LOCAL: ProtocolType[] = ["powershell", "cmd", "wsl", "custom"];
 
 interface SessionModalProps {
@@ -92,6 +97,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [antiIdleSecs, setAntiIdleSecs] = useState<number>(initial?.antiIdleSecs ?? 0);
   const [antiIdleString, setAntiIdleString] = useState(initial?.antiIdleString ?? "");
   const [advanced, setAdvanced] = useState(() => initialAdvanced(initial));
+  const [desktop, setDesktopCfg] = useState<DesktopConfig>({ ...DEFAULT_DESKTOP, ...(initial?.desktop ?? {}) });
+  const setDesktop = (patch: Partial<DesktopConfig>) => setDesktopCfg((d) => ({ ...d, ...patch }));
+  const isDesktop = isDesktopProtocol(protocol);
   const [serialPorts, setSerialPorts] = useState<string[]>([]);
 
   useEffect(() => {
@@ -137,11 +145,13 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       ? `${host} (${serialCfg.baudRate})`
       : protocol === "tcp" || protocol === "telnet"
       ? `${protocol === "tcp" ? "TCP" : "Telnet"} ${host}:${port}`
+      : isDesktop
+      ? `${protocol.toUpperCase()} ${host}${port && port !== DEFAULT_PORTS[protocol] ? `:${port}` : ""}`
       : protocol.toUpperCase();
 
   const buildResult = (): SessionConfig => {
     const jumpCfg: JumpHostConfig | null =
-      protocol === "ssh" && jumpEnabled && jumpHost.trim()
+      (protocol === "ssh" || isDesktop) && jumpEnabled && jumpHost.trim()
         ? {
             enabled: true,
             host: jumpHost.trim(),
@@ -159,7 +169,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       group: group.trim(),
       protocol,
       host: host.trim(),
-      port: protocol === "serial" ? 0 : Number(port) || (protocol === "ssh" ? 22 : 0),
+      port: protocol === "serial" ? 0 : Number(port) || DEFAULT_PORTS[protocol] || 0,
       username: username.trim(),
       authType: protocol === "ssh" ? authType : "none",
       password: password || (initial?.password === "" ? "" : undefined),
@@ -177,6 +187,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       antiIdleSecs: Number(antiIdleSecs) > 0 ? Number(antiIdleSecs) : undefined,
       antiIdleString: Number(antiIdleSecs) > 0 && antiIdleString ? antiIdleString : undefined,
       ...advancedToSession(advanced, protocol),
+      desktop: isDesktop ? { ...desktop, domain: protocol === "rdp" ? desktop.domain.trim() : "" } : null,
     };
   };
 
@@ -197,8 +208,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const pickProtocol = (p: ProtocolType) => {
     setProtocol(p);
-    if (p === "ssh" && (!port || port === 23)) setPort(22);
-    if (p === "telnet" && (!port || port === 22)) setPort(23);
+    const fallback = DEFAULT_PORTS[p];
+    if (fallback && (!port || Object.values(DEFAULT_PORTS).includes(port))) setPort(fallback);
   };
 
   return (
@@ -378,6 +389,128 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               </>
             )}
 
+            {isDesktop && (
+              <>
+                <div className={protocol === "rdp" ? "form-grid-3" : "form-grid-2"}>
+                  <label className="field" title={protocol === "vnc" ? t("desktop.vncUserTip") : undefined}>
+                    <span>{protocol === "vnc" ? t("desktop.vncUser") : t("sessionModal.username")}</span>
+                    <input type="text" className="text-input" value={username} onChange={(e) => setUsername(e.target.value)} />
+                  </label>
+                  {protocol === "rdp" && (
+                    <label className="field">
+                      <span>{t("desktop.domain")}</span>
+                      <input
+                        type="text"
+                        className="text-input"
+                        placeholder={t("desktop.domainPlaceholder")}
+                        value={desktop.domain}
+                        onChange={(e) => setDesktop({ domain: e.target.value })}
+                      />
+                    </label>
+                  )}
+                  <label className="field">
+                    <span>{t("sessionModal.pwdLabel")}</span>
+                    <input type="password" className="text-input" value={password} onChange={(e) => setPassword(e.target.value)} />
+                  </label>
+                </div>
+                <div className="form-grid-3">
+                  <label className="field">
+                    <span>{t("desktop.resolution")}</span>
+                    <select
+                      className="text-input"
+                      value={desktop.resize}
+                      onChange={(e) => setDesktop({ resize: e.target.value as DesktopConfig["resize"] })}
+                    >
+                      <option value="fit-window">{t("desktop.fitWindow")}</option>
+                      <option value="fixed">{t("desktop.fixedSize")}</option>
+                    </select>
+                  </label>
+                  {desktop.resize === "fixed" ? (
+                    <label className="field">
+                      <span>{t("desktop.size")}</span>
+                      <div className="input-with-btn">
+                        <input
+                          type="number"
+                          className="text-input"
+                          min={200}
+                          max={8192}
+                          value={desktop.width}
+                          onChange={(e) => setDesktop({ width: Number(e.target.value) || DEFAULT_DESKTOP.width })}
+                        />
+                        <input
+                          type="number"
+                          className="text-input"
+                          min={200}
+                          max={8192}
+                          value={desktop.height}
+                          onChange={(e) => setDesktop({ height: Number(e.target.value) || DEFAULT_DESKTOP.height })}
+                        />
+                      </div>
+                    </label>
+                  ) : (
+                    <span />
+                  )}
+                  <label className="field">
+                    <span>{t("desktop.scaleMode")}</span>
+                    <select
+                      className="text-input"
+                      value={desktop.scale}
+                      onChange={(e) => setDesktop({ scale: e.target.value as DesktopConfig["scale"] })}
+                    >
+                      <option value="fit">{t("desktop.scale.fit")}</option>
+                      <option value="actual">{t("desktop.scale.actual")}</option>
+                      <option value="stretch">{t("desktop.scale.stretch")}</option>
+                    </select>
+                  </label>
+                </div>
+                {protocol === "rdp" && (
+                  <div className="form-grid-3">
+                    <label className="field">
+                      <span>{t("desktop.colorDepth")}</span>
+                      <select
+                        className="text-input"
+                        value={desktop.colorDepth}
+                        onChange={(e) => setDesktop({ colorDepth: Number(e.target.value) as DesktopConfig["colorDepth"] })}
+                      >
+                        <option value={32}>{t("desktop.depth32")}</option>
+                        <option value={16}>{t("desktop.depth16")}</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>{t("desktop.audio")}</span>
+                      <select
+                        className="text-input"
+                        value={desktop.audio === "local" ? "local" : "off"}
+                        onChange={(e) => setDesktop({ audio: e.target.value as DesktopConfig["audio"] })}
+                      >
+                        <option value="local">{t("desktop.audioLocal")}</option>
+                        <option value="off">{t("desktop.audioOff")}</option>
+                      </select>
+                    </label>
+                    <span />
+                  </div>
+                )}
+                <div className="desktop-checks">
+                  {protocol === "rdp" && (
+                    <label className="checkbox-row" title={t("desktop.nlaTip")}>
+                      <input type="checkbox" checked={desktop.nla} onChange={(e) => setDesktop({ nla: e.target.checked })} />
+                      <span>{t("desktop.nla")}</span>
+                    </label>
+                  )}
+                  <label className="checkbox-row" title={protocol === "vnc" ? t("desktop.vncClipboardTip") : undefined}>
+                    <input type="checkbox" checked={desktop.clipboard} onChange={(e) => setDesktop({ clipboard: e.target.checked })} />
+                    <span>{t("desktop.clipboard")}</span>
+                  </label>
+                  {protocol === "vnc" && (
+                    <label className="checkbox-row">
+                      <input type="checkbox" checked={desktop.viewOnly} onChange={(e) => setDesktop({ viewOnly: e.target.checked })} />
+                      <span>{t("desktop.viewOnly")}</span>
+                    </label>
+                  )}
+                </div>
+              </>
+            )}
+
             {protocol === "custom" && (
               <label className="field">
                 <span>{t("sessionModal.customCmd")}</span>
@@ -442,7 +575,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             <button type="button" className="form-more-toggle" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
               <ChevronRight size={14} />
               <span>{t("sessionForm.more")}</span>
-              {!moreOpen && <em>{t(protocol === "ssh" ? "sessionForm.moreHintSsh" : "sessionForm.moreHint")}</em>}
+              {!moreOpen && (
+                <em>{t(protocol === "ssh" ? "sessionForm.moreHintSsh" : isDesktop ? "desktop.moreHint" : "sessionForm.moreHint")}</em>
+              )}
             </button>
 
             {moreOpen && (
@@ -503,7 +638,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   </div>
                 )}
 
-                {protocol === "ssh" && (
+                {(protocol === "ssh" || isDesktop) && (
                   <div className="JumpBox">
                     <label className="checkbox-row">
                       <input type="checkbox" checked={jumpEnabled} onChange={(e) => setJumpEnabled(e.target.checked)} />
@@ -566,6 +701,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   </div>
                 )}
 
+                {!isDesktop && (
+                <>
                 <div className={protocol === "ssh" ? "form-grid-3" : "form-grid-2"}>
                   <label className="field">
                     <span>{t("sessionModal.termType")}</span>
@@ -626,6 +763,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   <input type="checkbox" checked={autoLog} onChange={(e) => setAutoLog(e.target.checked)} />
                   <span>{t("sessionModal.autoLog")}</span>
                 </label>
+                </>
+                )}
               </div>
             )}
           </section>

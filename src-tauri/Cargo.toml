@@ -36,7 +36,7 @@ chrono = { version = "0.4", features = ["serde"] }
 serialport = { version = "4", default-features = false }
 tauri-plugin-single-instance = "2"
 tauri-plugin-clipboard-manager = "2"
-windows-sys = { version = "0.52", features = ["Win32_Globalization", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Security_Credentials", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.52", features = ["Win32_Globalization", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_Threading"] }
 windows = { version = "0.62", features = ["UI_Notifications", "Data_Xml_Dom", "Foundation"] }
 tauri-plugin-window-state = "2"
 ring = "0.17"
@@ -50,3 +50,24 @@ zstd = "0.13"
 regex = "1"
 memchr = "2"
 zip = { version = "9.7.0", default-features = false, features = ["deflate"] }
+# RDP / VNC panes (desktop/). The IronRDP crates must stay on one release line (connector
+# 0.12 / pdu 0.11): mixing lines duplicates their types. The older meta crate `ironrdp` 0.17
+# pins a picky release whose curve25519-dalek pre-release conflicts with russh.
+ironrdp-connector = "0.12"
+ironrdp-session = "0.13"
+ironrdp-graphics = "0.11"
+ironrdp-input = "0.9"
+ironrdp-pdu = "0.11"
+ironrdp-core = "0.3"
+ironrdp-svc = "0.10"
+ironrdp-dvc = "0.10"
+ironrdp-displaycontrol = "0.10"
+ironrdp-cliprdr = "0.9"
+ironrdp-cliprdr-native = "0.9"
+ironrdp-rdpsnd = "0.11"
+ironrdp-rdpsnd-native = "0.8"
+ironrdp-tokio = "0.12"
+ironrdp-tls = { version = "0.3", features = ["native-tls"] }
+x509-cert = { version = "0.3", default-features = false, features = ["std"] }
+smallvec = "1"
+vnc-rs = "0.6"

@@ -88,7 +88,20 @@ export interface HostKeyPromptPayload {
   fingerprint: string;
   changed: boolean;
   knownHosts: string;
+  /** "ssh": host key; "rdp": the server's TLS certificate. */
+  kind?: "ssh" | "rdp";
 }
+
+/** Input for an RDP / VNC pane (Rust `desktop::InputEvent`); coordinates in remote pixels. */
+export type DesktopInput =
+  | { type: "key"; code: string; key: string; down: boolean }
+  | { type: "text"; text: string }
+  | { type: "move"; x: number; y: number }
+  | { type: "button"; x: number; y: number; button: number; down: boolean }
+  | { type: "wheel"; x: number; y: number; dx: number; dy: number }
+  | { type: "releaseAll" }
+  | { type: "ctrlAltDel" }
+  | { type: "clipboard"; text: string };
 
 export type { RemoteEntry };
 
@@ -571,6 +584,58 @@ export const backend = {
       cols: Math.max(10, Math.floor(cols)),
       rows: Math.max(2, Math.floor(rows)),
     });
+  },
+
+  /**
+   * Open an RDP / VNC pane. Frame messages (`utils/desktopView.ts`) arrive on `onFrame`;
+   * acknowledge each drawn batch with `desktopAck`. Size in device pixels, scale 100 = 96 DPI.
+   */
+  async desktopConnect(
+    instanceId: string,
+    session: SessionConfig,
+    width: number,
+    height: number,
+    scale: number,
+    onFrame: (buf: ArrayBuffer) => void
+  ): Promise<void> {
+    if (!isTauriRuntime()) return;
+    const channel = new Channel<ArrayBuffer>(onFrame);
+    await invoke("desktop_connect", {
+      instanceId,
+      session,
+      width: Math.round(width),
+      height: Math.round(height),
+      scale: Math.round(scale),
+      channel,
+    });
+  },
+
+  desktopInput(instanceId: string, events: DesktopInput[]): void {
+    if (!isTauriRuntime() || events.length === 0) return;
+    void invoke("desktop_input", { instanceId, events }).catch(() => undefined);
+  },
+
+  desktopResize(instanceId: string, width: number, height: number, scale: number): void {
+    if (!isTauriRuntime()) return;
+    void invoke("desktop_resize", { instanceId, width: Math.round(width), height: Math.round(height), scale: Math.round(scale) }).catch(
+      () => undefined
+    );
+  },
+
+  desktopAck(instanceId: string, seq: number): void {
+    if (!isTauriRuntime()) return;
+    void invoke("desktop_ack", { instanceId, seq }).catch(() => undefined);
+  },
+
+  async desktopDisconnect(instanceId: string): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("desktop_disconnect", { instanceId });
+  },
+
+  /** VNC server clipboard text. */
+  async onDesktopClipboard(handler: (p: { instanceId: string; text: string }) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen<{ instanceId: string; text: string }>("desktop-clipboard", (e) => handler(e.payload));
   },
 
   async disconnectTerminal(instanceId: string): Promise<void> {

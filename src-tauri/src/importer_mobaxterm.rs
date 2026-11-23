@@ -21,7 +21,7 @@ pub const MOBA_GROUP: &str = "MobaXterm";
 #[derive(Debug, Default, Clone)]
 pub struct MobaImport {
     pub sessions: Vec<SessionConfig>,
-    /// Bookmarks of a type Nexterm cannot open (RDP, VNC, FTP, ...) or malformed ones.
+    /// Bookmarks of a type Nexterm cannot open (FTP, SFTP, Xdmcp, ...) or malformed ones.
     pub skipped: usize,
 }
 
@@ -148,6 +148,24 @@ pub fn parse_entry(name: &str, value: &str, group: &str) -> Option<SessionConfig
                 s.auth_type = if s.private_key_path.is_some() { AuthType::PrivateKey } else { AuthType::Password };
             }
         }
+        4 | 5 => {
+            // RDP / VNC: host, port, then (RDP) the login, `[name]` for a saved credential.
+            let host = field(0);
+            if host.is_empty() {
+                return None;
+            }
+            let rdp = kind == 4;
+            s.protocol = if rdp { ProtocolType::Rdp } else { ProtocolType::Vnc };
+            s.host = host.to_string();
+            s.port = field(1).parse::<u16>().ok().filter(|p| *p > 0).unwrap_or(if rdp { 3389 } else { 5900 });
+            if rdp {
+                let user = field(2);
+                s.username = user.strip_prefix('[').and_then(|u| u.strip_suffix(']')).unwrap_or(user).trim().to_string();
+            }
+            s.auth_type = AuthType::None;
+            s.keep_alive_secs = 0;
+            s.desktop = Some(crate::models::DesktopConfig::default());
+        }
         8 => {
             // The last field is the device label ("COM3  (USB Serial Port)"), field 1 the baud rate.
             let label = fields.last().map(|f| f.trim()).unwrap_or("");
@@ -194,13 +212,14 @@ Console=#131#8%0%115200%3%0%0%1%2%COM3  (USB Serial Port)#MobaFont%12%0\r\n\
 Local=#151#10%Windows PowerShell%0#MobaFont\r\n\
 Ubuntu=#151#14%Ubuntu%0\r\n\
 Broken=no hash\r\n\
-Sftp files=#140#7%files.example.com%22%u%\r\n";
+Sftp files=#140#7%files.example.com%22%u%\r\n\
+Mac=#128#5%mac.example.com%5901%%\r\n";
 
     #[test]
     fn test_parse_bookmarks_with_folders() {
         let r = parse_bookmarks(INI).unwrap();
-        assert_eq!(r.skipped, 3, "RDP, SFTP and the malformed line");
-        assert_eq!(r.sessions.len(), 6);
+        assert_eq!(r.skipped, 2, "SFTP and the malformed line");
+        assert_eq!(r.sessions.len(), 8);
         let by = |l: &str| r.sessions.iter().find(|s| s.label == l).unwrap();
 
         let web = by("Root web");
@@ -209,6 +228,11 @@ Sftp files=#140#7%files.example.com%22%u%\r\n";
         assert_eq!(web.auth_type, AuthType::PrivateKey);
         let key = web.private_key_path.as_deref().unwrap();
         assert!(key.ends_with("id_ed25519") && !key.contains("_ProfileDir_"), "{key}");
+
+        let desk = by("Lab desktop");
+        assert_eq!((desk.protocol.clone(), desk.host.as_str(), desk.port, desk.username.as_str()), (ProtocolType::Rdp, "rdp.example.com", 3389, "rdp-login"));
+        let mac = by("Mac");
+        assert_eq!((mac.protocol.clone(), mac.port, mac.group.as_str()), (ProtocolType::Vnc, 5901, "MobaXterm>Lab>Prod"));
 
         let router = by("Router");
         assert_eq!((router.protocol.clone(), router.port, router.username.as_str(), router.group.as_str()), (ProtocolType::Telnet, 23, "admin", "MobaXterm>Lab"));

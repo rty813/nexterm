@@ -69,6 +69,22 @@ describe("parseQuickConnectInput", () => {
     expect(tcp?.host).toBe("127.0.0.1");
     expect(tcp?.port).toBe(47331);
   });
+
+  it("parses rdp and vnc addresses with their default ports", () => {
+    const rdp = parseQuickConnectInput("rdp://CORP%5Calice@10.0.0.8");
+    expect(rdp?.protocol).toBe("rdp");
+    expect(rdp?.username).toBe("CORP\\alice");
+    expect(rdp?.host).toBe("10.0.0.8");
+    expect(rdp?.port).toBe(3389);
+
+    const vnc = parseQuickConnectInput("vnc pi.local:5901");
+    expect(vnc?.protocol).toBe("vnc");
+    expect(vnc?.username).toBe("");
+    expect(vnc?.host).toBe("pi.local");
+    expect(vnc?.port).toBe(5901);
+
+    expect(parseQuickConnectInput("vnc://")).toBeNull();
+  });
 });
 
 function makeGroup(id: string, paneIds: string[]): PaneGroup {

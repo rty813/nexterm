@@ -39,6 +39,8 @@ pub struct HostKeyPrompt {
     /// true: a different key is recorded for this host (possible man-in-the-middle).
     pub changed: bool,
     pub known_hosts: String,
+    /// "ssh" (host key) or "rdp" (server TLS certificate, `desktop::certs`).
+    pub kind: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -531,6 +533,9 @@ impl ConnectionManager {
         sink: Arc<dyn TerminalSink>,
         reuse_from: Option<&str>,
     ) -> Result<()> {
+        if config.protocol.is_desktop() {
+            anyhow::bail!("RDP / VNC 会话是远程桌面窗格，不经过终端连接");
+        }
         // A running log keeps recording across reconnects of the same pane.
         let (log, reuse): (SharedLog, Option<SshLink>) = {
             let map = lock(&self.sessions);
@@ -600,7 +605,9 @@ impl ConnectionManager {
             | ProtocolType::Cmd
             | ProtocolType::Wsl
             | ProtocolType::Custom
-            | ProtocolType::Serial => {
+            | ProtocolType::Serial
+            | ProtocolType::Rdp
+            | ProtocolType::Vnc => {
                 let is_serial = config.protocol == ProtocolType::Serial;
                 let spawned = if is_serial {
                     spawn_serial_session(instance_id.clone(), config, Arc::clone(&scoped_sink))

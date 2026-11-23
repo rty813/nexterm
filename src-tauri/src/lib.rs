@@ -4,6 +4,7 @@ pub mod app_paths;
 pub mod background;
 pub mod charset;
 pub mod commands;
+pub mod desktop;
 pub mod fonts;
 mod plugin_http;
 mod plugin_credentials;
@@ -74,6 +75,8 @@ pub struct AppContext {
     pub connections: ConnectionManager,
     /// What closing the main window does (CLOSE_ASK / CLOSE_TRAY / CLOSE_QUIT).
     pub close_action: AtomicU8,
+    /// RDP / VNC panes.
+    pub desktops: desktop::DesktopManager,
     /// Mirrors AppSettings.askBeforeCloseWindow: confirm quitting while sessions are open.
     pub ask_before_quit: AtomicBool,
     /// Set once the user confirmed quitting.
@@ -1490,6 +1493,50 @@ fn resize_terminal(
         .map_err(|e| e.to_string())
 }
 
+/// Open an RDP / VNC pane. Frames arrive on `channel` (`desktop::frame`); `width` /
+/// `height` are the pane's device pixels, `scale` its DPI scale (100 = 96 DPI).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn desktop_connect(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    ctx: State<'_, AppContext>,
+    instance_id: String,
+    mut session: SessionConfig,
+    width: u32,
+    height: u32,
+    scale: u32,
+    channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> Result<(), String> {
+    if let Some(password) = plugin_http::take_ssh_password(window.label(), &session.id, &session.host, session.port, &session.username) {
+        session.password = Some(password);
+    }
+    let sink: Arc<dyn crate::manager::TerminalSink> = Arc::new(TauriSink { app });
+    ctx.desktops
+        .connect(instance_id, session, width, height, scale, channel, sink)
+        .map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+fn desktop_input(ctx: State<'_, AppContext>, instance_id: String, events: Vec<desktop::InputEvent>) {
+    ctx.desktops.input(&instance_id, events);
+}
+
+#[tauri::command]
+fn desktop_resize(ctx: State<'_, AppContext>, instance_id: String, width: u32, height: u32, scale: u32) {
+    ctx.desktops.resize(&instance_id, width, height, scale);
+}
+
+#[tauri::command]
+fn desktop_ack(ctx: State<'_, AppContext>, instance_id: String, seq: u32) {
+    ctx.desktops.ack(&instance_id, seq);
+}
+
+#[tauri::command]
+fn desktop_disconnect(ctx: State<'_, AppContext>, instance_id: String) {
+    ctx.desktops.disconnect(&instance_id);
+}
+
 #[tauri::command]
 fn disconnect_terminal(
     app: AppHandle,
@@ -1497,6 +1544,8 @@ fn disconnect_terminal(
     instance_id: String,
 ) -> Result<(), String> {
     ctx.connections.disconnect(&instance_id);
+    // Closing a tab goes through here for every pane kind.
+    ctx.desktops.disconnect(&instance_id);
     mcp::forget(&instance_id);
     crate::sftp::forget_instance(&app, &instance_id);
     if let Some(hub) = crate::transfer::hub() {
@@ -1762,6 +1811,7 @@ pub fn run() {
                 storage: Mutex::new(storage),
                 connections: ConnectionManager::new(),
                 close_action: AtomicU8::new(close_action(&settings)),
+                desktops: desktop::DesktopManager::default(),
                 ask_before_quit: AtomicBool::new(extra_bool(&settings, "askBeforeCloseWindow", true)),
                 quit_confirmed: AtomicBool::new(false),
             });
@@ -1935,6 +1985,11 @@ pub fn run() {
             broadcast_terminal,
             resize_terminal,
             disconnect_terminal,
+            desktop_connect,
+            desktop_input,
+            desktop_resize,
+            desktop_ack,
+            desktop_disconnect,
             subscribe_output,
             unsubscribe_output,
             ack_output,

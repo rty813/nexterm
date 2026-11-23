@@ -64,6 +64,28 @@ export function parseQuickConnectInput(raw: string): SessionConfig | null {
     };
   }
 
+  // rdp://[user@]host[:port], vnc://host[:port] (also "rdp host", "vnc host").
+  const desktopKind = /^(rdp|vnc)(?::\/\/|\s+)/.exec(lower)?.[1] as "rdp" | "vnc" | undefined;
+  if (desktopKind) {
+    const rest = trimmed.replace(/^(?:rdp|vnc)(?::\/\/|\s+)/i, "").trim().replace(/\/+$/, "");
+    const at = rest.lastIndexOf("@");
+    const user = at >= 0 ? safeUser(rest.slice(0, at)) : "";
+    const { host, port } = splitHostPort(at >= 0 ? rest.slice(at + 1) : rest, desktopKind === "rdp" ? 3389 : 5900);
+    if (!host) return null;
+    return {
+      id: makeId(),
+      label: `${desktopKind.toUpperCase()} ${host}`,
+      group: "Quick Connect",
+      protocol: desktopKind,
+      host,
+      port,
+      username: user,
+      authType: "none",
+      term: "xterm-256color",
+      keepAliveSecs: 0,
+    };
+  }
+
   const rawKind =
     lower.startsWith("telnet://") || lower.startsWith("telnet ")
       ? "telnet"
@@ -174,8 +196,17 @@ export function looksLikeAddress(raw: string): boolean {
   if (!s || /\s{2,}/.test(s)) return false;
   return (
     /@|:\/\//.test(s) ||
-    /^(ssh|tcp|telnet)\s+\S/i.test(s) ||
+    /^(ssh|tcp|telnet|rdp|vnc)\s+\S/i.test(s) ||
     /^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d{1,5})?$/i.test(s) ||
     /^\[[0-9a-f:]+\](:\d{1,5})?$/i.test(s)
   );
+}
+
+/** A user name from an address, percent-decoded when it is valid. */
+function safeUser(raw: string): string {
+  try {
+    return decodeURIComponent(raw).trim();
+  } catch {
+    return raw.trim();
+  }
 }

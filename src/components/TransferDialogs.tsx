@@ -40,7 +40,16 @@ export const HostKeyDialog: React.FC<{ labelFor: (instanceId: string) => string;
     void backend.respondHostKey(current.requestId, decision);
     setQueue((q) => q.slice(1));
   };
-  const target = current.port === 22 ? current.host : `[${current.host}]:${current.port}`;
+  const rdp = current.kind === "rdp";
+  const target = rdp
+    ? current.port === 3389 ? current.host : `${current.host}:${current.port}`
+    : current.port === 22 ? current.host : `[${current.host}]:${current.port}`;
+  const title = rdp
+    ? t(current.changed ? "desktop.certChangedTitle" : "desktop.certNewTitle")
+    : t(current.changed ? "hostKey.changedTitle" : "hostKey.newTitle");
+  const desc = rdp
+    ? t(current.changed ? "desktop.certChangedDesc" : "desktop.certNewDesc", { host: target })
+    : t(current.changed ? "hostKey.changedDesc" : "hostKey.newDesc", { host: target });
 
   return (
     <div className="modal-backdrop">
@@ -48,19 +57,19 @@ export const HostKeyDialog: React.FC<{ labelFor: (instanceId: string) => string;
         <div className="modal-header">
           <h3>
             {current.changed ? <ShieldAlert size={16} /> : <ShieldQuestion size={16} />}{" "}
-            {current.changed ? t("hostKey.changedTitle") : t("hostKey.newTitle")}
+            {title}
           </h3>
         </div>
         <div className="modal-body">
-          <p>{current.changed ? t("hostKey.changedDesc", { host: target }) : t("hostKey.newDesc", { host: target })}</p>
+          <p>{desc}</p>
           <div className="hostkey-facts">
             <span>{t("hostKey.session")}</span>
             <b>{labelFor(current.instanceId)}</b>
-            <span>{t("hostKey.keyType")}</span>
+            <span>{rdp ? t("desktop.certKind") : t("hostKey.keyType")}</span>
             <b>{current.keyType}</b>
             <span>{t("hostKey.fingerprint")}</span>
             <code>{current.fingerprint}</code>
-            <span>known_hosts</span>
+            <span>{rdp ? t("desktop.certRecord") : "known_hosts"}</span>
             <code>{current.knownHosts}</code>
           </div>
         </div>
