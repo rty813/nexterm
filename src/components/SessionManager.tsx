@@ -17,7 +17,7 @@ import { sessionTargetSummary } from "../utils/sessionSummary";
 import { compactMenu, useContextMenu } from "./ContextMenu";
 import { ProtocolBadge } from "./ProtocolBadge";
 import { SessionModal } from "./SessionModal";
-import { GroupInput } from "./GroupInput";
+import { MoveGroupDialog } from "./MoveGroupDialog";
 import { hasSavedPassword } from "../utils/paneSession";
 
 type SortKey = "label" | "group" | "protocol" | "target";
@@ -53,7 +53,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
     session: null,
   });
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [moveTarget, setMoveTarget] = useState<string | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const lastClicked = useRef<string | null>(null);
 
@@ -166,7 +166,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
       sessions.map((s) => (selected.has(s.id) ? { ...s, group: group.trim() } : s)),
       t("manager.moved", { count, group: group.trim() || t("manager.noGroup") })
     );
-    setMoveTarget(null);
+    setMoveOpen(false);
   };
 
   const saveEdited = (saved: SessionConfig, connectNow: boolean) => {
@@ -186,7 +186,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
         e.preventDefault();
         // An open question first, then the dialog.
         if (confirmDelete) setConfirmDelete(false);
-        else if (moveTarget !== null) setMoveTarget(null);
+        else if (moveOpen) setMoveOpen(false);
         else onClose();
         return;
       }
@@ -221,7 +221,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
           onClick: () => setEditing({ open: true, session: targets[0] }),
         },
         { label: t("sidebar.duplicate"), onClick: () => duplicate(targets) },
-        { label: t("manager.moveTo"), onClick: () => setMoveTarget(targets[0].group || "") },
+        { label: t("manager.moveTo"), onClick: () => setMoveOpen(true) },
         { type: "separator" },
         {
           label: t("manager.deleteN", { count: targets.length }),
@@ -277,7 +277,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
           type="button"
           className="btn-secondary btn-sm"
           disabled={selected.size === 0}
-          onClick={() => setMoveTarget(selectedSessions[0]?.group || "")}
+          onClick={() => setMoveOpen(true)}
         >
           <FolderInput size={13} /> {t("manager.moveTo")}
         </button>
@@ -341,31 +341,6 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
         </div>
       )}
 
-      {moveTarget !== null && (
-        <form
-          className="manager-banner"
-          onSubmit={(e) => {
-            e.preventDefault();
-            moveSelected(moveTarget);
-          }}
-        >
-          <span>{t("manager.movePrompt", { count: selected.size })}</span>
-          <GroupInput
-            autoFocus
-            className="input-sm"
-            groups={groups}
-            placeholder={t("sessionModal.groupPlaceholder")}
-            value={moveTarget}
-            onChange={setMoveTarget}
-          />
-          <button type="submit" className="btn-primary btn-sm">
-            {t("manager.moveBtn")}
-          </button>
-          <button type="button" className="btn-ghost btn-sm" onClick={() => setMoveTarget(null)}>
-            {t("sessionModal.cancel")}
-          </button>
-        </form>
-      )}
 
       <div className="manager-table-wrap">
         <table className="manager-table">
@@ -440,6 +415,15 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
     </div>
 
     {/* A sibling, not a child: its backdrop clicks must not close the manager too. */}
+    {moveOpen && (
+      <MoveGroupDialog
+        count={selected.size}
+        groups={groups}
+        current={new Set(selectedSessions.map((s) => s.group || "")).size === 1 ? selectedSessions[0]?.group || "" : null}
+        onPick={moveSelected}
+        onClose={() => setMoveOpen(false)}
+      />
+    )}
     {editing.open && (
       <SessionModal
         initial={editing.session}

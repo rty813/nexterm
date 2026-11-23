@@ -5791,3 +5791,74 @@ html.ctxmenu-host #root {
   padding: 4px 10px;
   color: var(--fg-muted);
 }
+
+/* ---------- Move to group (session manager) ---------- */
+.group-pick-panel {
+  width: 400px;
+}
+.group-pick-search {
+  position: relative;
+  margin: 2px 16px 8px;
+  color: var(--fg-muted);
+}
+.group-pick-search > svg {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.group-pick-search > .text-input {
+  width: 100%;
+  padding-left: 30px;
+}
+.group-pick-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 8px;
+  min-height: 120px;
+  max-height: 340px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle);
+}
+.group-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  color: var(--fg-primary);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.group-pick-item.active {
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+}
+.group-pick-icon {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+.group-pick-item.active .group-pick-icon,
+.group-pick-item.new .group-pick-icon {
+  color: var(--accent);
+}
+.group-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.group-pick-check {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--accent);
+}
+.group-pick-hint {
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
