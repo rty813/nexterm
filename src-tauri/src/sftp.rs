@@ -1083,4 +1083,69 @@ mod sftp_e2e {
         ctl.send_close();
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    /// Forwards `127.0.0.1:<returned port>` to `127.0.0.1:target`, holding every chunk back
+    /// for `delay` in each direction (a round trip of twice that).
+    async fn delay_proxy(target: u16, delay: Duration) -> u16 {
+        use tokio::net::{TcpListener, TcpStream};
+        async fn pipe(mut from: tokio::net::tcp::OwnedReadHalf, mut to: tokio::net::tcp::OwnedWriteHalf, delay: Duration) {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
+            tokio::spawn(async move {
+                while let Some((at, data)) = rx.recv().await {
+                    tokio::time::sleep_until(at + delay).await;
+                    if to.write_all(&data).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Ok(n) = from.read(&mut buf).await {
+                if n == 0 || tx.send((tokio::time::Instant::now(), buf[..n].to_vec())).is_err() {
+                    break;
+                }
+            }
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let server = TcpStream::connect(("127.0.0.1", target)).await.unwrap();
+                let _ = (client.set_nodelay(true), server.set_nodelay(true));
+                let (cr, cw) = client.into_split();
+                let (sr, sw) = server.into_split();
+                tokio::spawn(pipe(cr, sw, delay));
+                tokio::spawn(pipe(sr, cw, delay));
+            }
+        });
+        port
+    }
+
+    /// Throughput through a link with latency; NX_SFTP_RTT_MS sets the round trip (default 40).
+    #[test]
+    #[ignore]
+    fn sftp_throughput() {
+        let rtt: u64 = std::env::var("NX_SFTP_RTT_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let port = rt.block_on(delay_proxy(2222, Duration::from_millis(rtt / 2)));
+        let (link, ctl) = connect(port);
+        let root = std::env::temp_dir().join(format!("nx-bench-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let size = 64 * 1024 * 1024;
+        std::fs::write(root.join("up.bin"), (0..size as u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect::<Vec<_>>()).unwrap();
+        rt.block_on(async {
+            let s = session(&format!("e2e{port}"), &link).await.unwrap();
+            let remote = join_remote(&home(&s).await.unwrap(), &format!("nx-bench-{}.bin", uuid::Uuid::new_v4().simple()));
+            let mb = size as f64 / 1048576.0;
+            let t = std::time::Instant::now();
+            upload(&s, &root.join("up.bin"), &remote, &mut Meter::detached(Policy::Overwrite, false)).await.unwrap();
+            eprintln!("rtt {rtt} ms upload   {:.1} MB/s", mb / t.elapsed().as_secs_f64());
+            let t = std::time::Instant::now();
+            download(&s, &remote, &root.join("down.bin"), &mut Meter::detached(Policy::Overwrite, false)).await.unwrap();
+            eprintln!("rtt {rtt} ms download {:.1} MB/s", mb / t.elapsed().as_secs_f64());
+            assert_eq!(std::fs::read(root.join("up.bin")).unwrap(), std::fs::read(root.join("down.bin")).unwrap());
+            remove(&s, &remote).await.unwrap();
+        });
+        ctl.send_close();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

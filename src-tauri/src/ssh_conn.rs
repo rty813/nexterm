@@ -296,7 +296,16 @@ impl SshShared {
         let ch = self.handle.channel_open_session().await.context("无法打开 SFTP 通道")?;
         ch.request_subsystem(true, "sftp").await.context("无法请求 SFTP 子系统")?;
         // A server without the subsystem closes the channel: init fails instead of hanging.
-        let sftp = tokio::time::timeout(Duration::from_secs(15), russh_sftp::client::SftpSession::new(ch.into_stream()))
+        // Throughput is what is in flight per round trip: the defaults (16 requests, 32 KiB
+        // writes) cap uploads at 512 KiB per RTT, about 2.5 MB/s at 200 ms.
+        let cfg = russh_sftp::client::Config {
+            max_concurrent_reads: 64,
+            max_concurrent_writes: 64,
+            max_write_packet_len: 256 * 1024,
+            ..Default::default()
+        };
+        let init = russh_sftp::client::SftpSession::new_with_config(ch.into_stream(), cfg);
+        let sftp = tokio::time::timeout(Duration::from_secs(15), init)
             .await
             .context("SFTP 初始化超时")?
             .context("服务器不支持 SFTP")?;
@@ -857,7 +866,9 @@ async fn establish_ssh_session(
     sink: &Arc<dyn TerminalSink>,
     x11: Option<Arc<X11Target>>,
 ) -> Result<Established> {
-    let mut cfg = client::Config { preferred: compat_preferred(), ..Default::default() };
+    // The receive window bounds downloads (SFTP, SCP) to about half of it per round trip:
+    // 2 MiB (the default) is ~4.5 MB/s at 200 ms.
+    let mut cfg = client::Config { preferred: compat_preferred(), window_size: 8 * 1024 * 1024, ..Default::default() };
     if session.keep_alive_secs > 0 {
         cfg.keepalive_interval = Some(Duration::from_secs(session.keep_alive_secs));
         cfg.keepalive_max = 3;
