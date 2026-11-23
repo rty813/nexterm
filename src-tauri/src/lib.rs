@@ -271,6 +271,7 @@ fn apply_settings_effects(ctx: &AppContext, settings: &AppSettings) {
     crate::history::configure(history_on, history_limits);
     crate::xserver::configure(xserver_config(settings));
     crate::remote::configure(remote_config(settings));
+    sync::set_keep_backups(settings.extra.get("sync").and_then(|v| v.get("keepBackups")).and_then(|v| v.as_u64()));
     if let Some(hub) = crate::transfer::hub() {
         hub.set_limit(sftp_concurrency(settings));
     }
@@ -459,6 +460,43 @@ async fn sync_run(
     let outcome = result?;
     config_applied(&app, &ctx, &outcome.applied);
     Ok(outcome)
+}
+
+/// Earlier uploads kept next to the remote file, newest first.
+#[tauri::command]
+async fn sync_versions(config: sync::SyncConfig) -> Result<Vec<sync::RemoteVersion>, String> {
+    sync::remote_versions(&config).await
+}
+
+/// Write one kept remote version to this computer (the next sync uploads it).
+#[tauri::command]
+async fn sync_restore_version(
+    app: AppHandle,
+    ctx: State<'_, AppContext>,
+    config: sync::SyncConfig,
+    name: String,
+    password: String,
+) -> Result<Vec<String>, String> {
+    let applied = sync::restore_version(&ctx.storage, &config, &name, &password).await?;
+    config_applied(&app, &ctx, &applied);
+    Ok(applied)
+}
+
+/// Local backups taken before each import / download / restore, newest first.
+#[tauri::command]
+fn config_backups(ctx: State<'_, AppContext>) -> Result<Vec<sync::LocalBackup>, String> {
+    let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
+    Ok(sync::list_backups(storage.base_dir()))
+}
+
+#[tauri::command]
+fn config_restore_backup(app: AppHandle, ctx: State<'_, AppContext>, name: String) -> Result<Vec<String>, String> {
+    let applied = {
+        let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
+        sync::restore_backup(storage.base_dir(), &name)?
+    };
+    config_applied(&app, &ctx, &applied);
+    Ok(applied)
 }
 
 #[tauri::command]
@@ -1976,6 +2014,10 @@ pub fn run() {
             sync_test,
             sync_run,
             sync_state,
+            sync_versions,
+            sync_restore_version,
+            config_backups,
+            config_restore_backup,
             load_initial_state,
             save_sessions,
             save_quick_commands,

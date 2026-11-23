@@ -512,9 +512,31 @@ export interface SyncSettings {
   /** Encrypts the synced file (AES-256-GCM); empty = plain JSON. */
   password: string;
   categories: SyncCategory[];
-  /** Sync at startup and every intervalMin minutes (0 = startup only). */
+  /** Sync at startup and every intervalMin minutes (0 = startup only; default 1 day). */
   autoSync: boolean;
   intervalMin: number;
+  /** Earlier uploads kept next to the remote file (0 = none). */
+  keepVersions: number;
+  /** Local backups kept in `<data>/backups` (at least 1). */
+  keepBackups: number;
+}
+
+/** Mirrors Rust `sync::RemoteVersion`. */
+export interface RemoteConfigVersion {
+  name: string;
+  exportedAt: string;
+  device: string;
+  hash: string;
+  encrypted: boolean;
+  size: number;
+}
+
+/** Mirrors Rust `sync::LocalBackup`. */
+export interface LocalConfigBackup {
+  name: string;
+  /** Unix ms. */
+  time: number;
+  categories: SyncCategory[];
 }
 
 /** Mirrors Rust `sync::BundleInfo`. */

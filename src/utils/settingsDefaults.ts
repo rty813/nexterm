@@ -119,7 +119,9 @@ export const DEFAULT_SYNC: SyncSettings = {
   password: "",
   categories: [...DEFAULT_SYNC_CATEGORIES],
   autoSync: false,
-  intervalMin: 30,
+  intervalMin: 1440,
+  keepVersions: 10,
+  keepBackups: 10,
 };
 
 export function syncOf(s: AppSettings): SyncSettings {

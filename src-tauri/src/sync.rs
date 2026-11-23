@@ -136,9 +136,20 @@ pub struct SyncConfig {
     /// Encryption password; empty = the file is stored as plain JSON.
     pub password: String,
     pub categories: Vec<String>,
+    /// Earlier uploads kept next to the remote file (None: `DEFAULT_KEEP`, 0: none).
+    pub keep_versions: Option<u32>,
 }
 
+/// Versions / local backups kept unless the user picks another number.
+pub const DEFAULT_KEEP: u32 = 10;
+/// Upper bound for both (a Gist holds at most 300 files).
+pub const MAX_KEEP: u32 = 100;
+
 impl SyncConfig {
+    fn keep_versions(&self) -> usize {
+        self.keep_versions.unwrap_or(DEFAULT_KEEP).min(MAX_KEEP) as usize
+    }
+
     fn file_name(&self) -> String {
         let name = self.file_name.trim().trim_matches('/');
         if name.is_empty() { "nexterm-config.json".to_string() } else { name.to_string() }
@@ -474,7 +485,19 @@ fn validate(file: &str, value: &Value) -> Result<(), String> {
     }
 }
 
-/// Copy the current data files to `backups/<time>/` (the last 10 are kept).
+static KEEP_BACKUPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(DEFAULT_KEEP);
+
+/// How many local backups `backup` keeps (`settings.sync.keepBackups`, at least 1).
+pub fn set_keep_backups(n: Option<u64>) {
+    let n = n.map(|n| n.clamp(1, MAX_KEEP as u64) as u32).unwrap_or(DEFAULT_KEEP);
+    KEEP_BACKUPS.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn keep_backups() -> usize {
+    KEEP_BACKUPS.load(std::sync::atomic::Ordering::Relaxed) as usize
+}
+
+/// Copy the current data files to `backups/<time>/` (the last `keep_backups()` are kept).
 fn backup(base: &Path, files: &[&str]) -> Result<PathBuf, String> {
     let root = base.join("backups");
     let dir = root.join(chrono::Local::now().format("%Y%m%d-%H%M%S%.3f").to_string());
@@ -498,7 +521,7 @@ fn backup(base: &Path, files: &[&str]) -> Result<PathBuf, String> {
     if let Ok(entries) = fs::read_dir(&root) {
         let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
         dirs.sort();
-        while dirs.len() > 10 {
+        while dirs.len() > keep_backups() {
             let _ = fs::remove_dir_all(dirs.remove(0));
         }
     }
@@ -584,6 +607,80 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
         .filter(|(c, fs)| categories.iter().any(|x| x == c) && fs.iter().any(|f| files.contains(f)))
         .map(|(c, _)| c.to_string())
         .collect())
+}
+
+// ------------------------------------------------------------------ local backups
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalBackup {
+    /// Folder name under `backups/` (also its local time, `%Y%m%d-%H%M%S%.3f`).
+    pub name: String,
+    /// Unix ms.
+    pub time: i64,
+    pub categories: Vec<String>,
+}
+
+fn backup_time(name: &str) -> i64 {
+    chrono::NaiveDateTime::parse_from_str(name, "%Y%m%d-%H%M%S%.3f")
+        .ok()
+        .and_then(|t| t.and_local_timezone(chrono::Local).earliest())
+        .map(|t| t.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn categories_of_files(has: impl Fn(&str) -> bool) -> Vec<String> {
+    CATEGORIES
+        .iter()
+        .filter(|(_, files)| files.iter().any(|f| has(f)))
+        .map(|(c, _)| c.to_string())
+        .collect()
+}
+
+/// The local backups, newest first.
+pub fn list_backups(base: &Path) -> Vec<LocalBackup> {
+    let Ok(entries) = fs::read_dir(base.join("backups")) else { return Vec::new() };
+    let mut out: Vec<LocalBackup> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let dir = e.path();
+            let categories = categories_of_files(|f| dir.join(format!("{f}.json")).exists());
+            (!categories.is_empty()).then(|| LocalBackup { time: backup_time(&name), name, categories })
+        })
+        .collect();
+    out.sort_by(|a, b| b.name.cmp(&a.name));
+    out
+}
+
+/// Put a local backup back, replacing what it holds (the current files are backed up first).
+pub fn restore_backup(base: &Path, name: &str) -> Result<Vec<String>, String> {
+    if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
+        return Err(code::BAD_FORMAT.into());
+    }
+    let dir = base.join("backups").join(name);
+    if !dir.is_dir() {
+        return Err(format!("{name}: not found"));
+    }
+    let mut data = Map::new();
+    for (_, files) in CATEGORIES {
+        for file in *files {
+            let path = dir.join(format!("{file}.json"));
+            if !path.exists() {
+                continue;
+            }
+            let value = match Kind::named(file) {
+                Some(kind) => kind.read(&path, false).map_err(|e| e.to_string())?,
+                None => read_json(&path),
+            };
+            if let Some(value) = value {
+                data.insert(file.to_string(), value);
+            }
+        }
+    }
+    let categories = categories_of_files(|f| data.contains_key(f));
+    apply(base, &data, &categories, ImportMode::Replace)
 }
 
 // ------------------------------------------------------------------ background image
@@ -871,9 +968,10 @@ impl GistConfig {
         Ok(None)
     }
 
-    async fn read(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+    /// `anchor`: the main file, which picks the gist; `name`: the file in it.
+    async fn read(&self, anchor: &str, name: &str) -> Result<Option<Vec<u8>>, String> {
         let client = client()?;
-        let Some(gist) = self.find(&client, name).await? else { return Ok(None) };
+        let Some(gist) = self.find(&client, anchor).await? else { return Ok(None) };
         let Some(file) = gist.get("files").and_then(|f| f.get(name)) else { return Ok(None) };
         // Files over 1 MB come truncated: fetch the raw file.
         if file.get("truncated").and_then(Value::as_bool) == Some(true) {
@@ -887,12 +985,31 @@ impl GistConfig {
         Ok(file.get("content").and_then(Value::as_str).map(|c| c.as_bytes().to_vec()))
     }
 
-    async fn write(&self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
+    /// Write (`Some`) or delete (`None`) `name` in the gist holding `anchor`.
+    async fn write(&self, anchor: &str, name: &str, bytes: Option<Vec<u8>>) -> Result<(), String> {
         let client = client()?;
+        let found = self.find(&client, anchor).await?;
+        let api = self.api();
+        let Some(bytes) = bytes else {
+            let Some(gist) = found else { return Ok(()) };
+            if gist.get("files").and_then(|f| f.get(name)).is_none() {
+                return Ok(());
+            }
+            let id = gist.get("id").and_then(Value::as_str).unwrap_or_default();
+            let resp = self
+                .request(&client, reqwest::Method::PATCH, &format!("{api}/gists/{id}"))
+                .json(&serde_json::json!({ "files": { name: Value::Null } }))
+                .send()
+                .await
+                .map_err(|e| format!("{e:#}"))?;
+            if !resp.status().is_success() {
+                return Err(http_error("GitHub", resp).await);
+            }
+            return Ok(());
+        };
         let content = String::from_utf8(bytes).map_err(|e| e.to_string())?;
         let files = serde_json::json!({ name: { "content": content } });
-        let api = self.api();
-        let req = match self.find(&client, name).await? {
+        let req = match found {
             Some(gist) => {
                 let id = gist.get("id").and_then(Value::as_str).unwrap_or_default();
                 self.request(&client, reqwest::Method::PATCH, &format!("{api}/gists/{id}"))
@@ -912,7 +1029,17 @@ impl GistConfig {
 
 /// Read the remote bundle (`None`: not there yet).
 pub async fn remote_get(cfg: &SyncConfig) -> Result<Option<Vec<u8>>, String> {
-    let name = cfg.file_name();
+    remote_read(cfg, &cfg.file_name()).await
+}
+
+/// Write the remote bundle.
+pub async fn remote_put(cfg: &SyncConfig, bytes: Vec<u8>) -> Result<(), String> {
+    remote_write(cfg, &cfg.file_name(), bytes).await
+}
+
+/// Read a file next to the remote bundle (`None`: not there).
+async fn remote_read(cfg: &SyncConfig, name: &str) -> Result<Option<Vec<u8>>, String> {
+    let name = name.to_string();
     match cfg.provider.as_str() {
         "s3" => {
             let client = client()?;
@@ -952,14 +1079,14 @@ pub async fn remote_get(cfg: &SyncConfig) -> Result<Option<Vec<u8>>, String> {
                 Err(e) => Err(e.to_string()),
             }
         }
-        "gist" => cfg.gist.read(&name).await,
+        "gist" => cfg.gist.read(&cfg.file_name(), &name).await,
         _ => Err(code::NO_PROVIDER.into()),
     }
 }
 
-/// Write the remote bundle.
-pub async fn remote_put(cfg: &SyncConfig, bytes: Vec<u8>) -> Result<(), String> {
-    let name = cfg.file_name();
+/// Write a file next to the remote bundle.
+async fn remote_write(cfg: &SyncConfig, name: &str, bytes: Vec<u8>) -> Result<(), String> {
+    let name = name.to_string();
     match cfg.provider.as_str() {
         "s3" => {
             let client = client()?;
@@ -1009,9 +1136,174 @@ pub async fn remote_put(cfg: &SyncConfig, bytes: Vec<u8>) -> Result<(), String> 
             fs::write(&tmp, &bytes).map_err(|e| format!("{}: {}", tmp.display(), e))?;
             fs::rename(&tmp, &path).map_err(|e| format!("{}: {}", path.display(), e))
         }
-        "gist" => cfg.gist.write(&name, bytes).await,
+        "gist" => cfg.gist.write(&cfg.file_name(), &name, Some(bytes)).await,
         _ => Err(code::NO_PROVIDER.into()),
     }
+}
+
+/// Delete a file next to the remote bundle (already gone counts as done).
+async fn remote_delete(cfg: &SyncConfig, name: &str) -> Result<(), String> {
+    let gone = |s: reqwest::StatusCode| s.is_success() || s == reqwest::StatusCode::NOT_FOUND;
+    match cfg.provider.as_str() {
+        "s3" => {
+            let client = client()?;
+            let url = cfg.s3.object_url(name)?;
+            let resp = cfg.s3.signed(&client, reqwest::Method::DELETE, &url, b"").send().await.map_err(|e| format!("{e:#}"))?;
+            if !gone(resp.status()) {
+                return Err(http_error("S3 DELETE", resp).await);
+            }
+            Ok(())
+        }
+        "webdav" => {
+            let client = client()?;
+            let (_, url) = cfg.webdav.file_url(name)?;
+            let resp = cfg.webdav.auth(client.delete(url)).send().await.map_err(|e| format!("{e:#}"))?;
+            if !gone(resp.status()) {
+                return Err(http_error("WebDAV DELETE", resp).await);
+            }
+            Ok(())
+        }
+        "folder" => {
+            let dir = cfg.folder.path.trim();
+            if dir.is_empty() {
+                return Err(code::NO_PROVIDER.into());
+            }
+            match fs::remove_file(Path::new(dir).join(name)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            }
+        }
+        "gist" => cfg.gist.write(&cfg.file_name(), name, None).await,
+        _ => Err(code::NO_PROVIDER.into()),
+    }
+}
+
+// ------------------------------------------------------------------ remote versions
+
+/// One earlier upload kept next to the remote file, as listed in the version index.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RemoteVersion {
+    /// File name next to the remote bundle.
+    pub name: String,
+    pub exported_at: String,
+    pub device: String,
+    pub hash: String,
+    pub encrypted: bool,
+    pub size: u64,
+}
+
+/// `dir/nexterm-config.json` -> (`dir/nexterm-config`, `.json`).
+fn split_ext(main: &str) -> (&str, &str) {
+    let last = main.rfind('/').map(|i| i + 1).unwrap_or(0);
+    match main[last..].rfind('.') {
+        Some(i) if i > 0 => main.split_at(last + i),
+        _ => (main, ""),
+    }
+}
+
+/// The index listing the kept versions, newest first.
+pub fn versions_index_name(main: &str) -> String {
+    let (stem, _) = split_ext(main);
+    format!("{stem}.versions.json")
+}
+
+/// The file one version is kept in; `stamp` is `%Y%m%d-%H%M%S%3f` (UTC).
+pub fn version_file_name(main: &str, stamp: &str) -> String {
+    let (stem, ext) = split_ext(main);
+    format!("{stem}.v{stamp}{}", if ext.is_empty() { ".json" } else { ext })
+}
+
+fn version_stamp(exported_at: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(exported_at)
+        .map(|t| t.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now())
+        .format("%Y%m%d-%H%M%S%3f")
+        .to_string()
+}
+
+/// Add `entry` (unless that content is already listed), newest first; returns the entries
+/// dropped beyond `keep`.
+pub fn push_version(list: &mut Vec<RemoteVersion>, entry: RemoteVersion, keep: usize) -> Vec<RemoteVersion> {
+    if !list.iter().any(|v| v.hash == entry.hash) {
+        list.retain(|v| v.name != entry.name);
+        list.push(entry);
+    }
+    list.sort_by(|a, b| b.exported_at.cmp(&a.exported_at).then_with(|| b.name.cmp(&a.name)));
+    if list.len() > keep { list.split_off(keep) } else { Vec::new() }
+}
+
+/// The version index (empty when there is none or it cannot be read).
+pub async fn remote_versions(cfg: &SyncConfig) -> Result<Vec<RemoteVersion>, String> {
+    let bytes = remote_read(cfg, &versions_index_name(&cfg.file_name())).await?;
+    Ok(bytes
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v.get("versions").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default())
+}
+
+/// Keep `bytes` (just uploaded) as a version, and `previous` (the remote file it replaced)
+/// when the index does not have it yet; then drop the versions beyond the limit.
+async fn record_versions(cfg: &SyncConfig, previous: Option<&[u8]>, bytes: &[u8]) -> Result<(), String> {
+    let keep = cfg.keep_versions();
+    let main = cfg.file_name();
+    let mut list = remote_versions(cfg).await?;
+    let before = list.clone();
+    let mut dropped = Vec::new();
+    if keep > 0 {
+        for body in previous.into_iter().chain(std::iter::once(bytes)) {
+            let Ok(env) = Envelope::parse(body) else { continue };
+            if list.iter().any(|v| v.hash == env.hash) {
+                continue;
+            }
+            let name = version_file_name(&main, &version_stamp(&env.exported_at));
+            let entry = RemoteVersion {
+                name: name.clone(),
+                exported_at: env.exported_at.clone(),
+                device: env.device.clone(),
+                hash: env.hash.clone(),
+                encrypted: env.encrypted(),
+                size: body.len() as u64,
+            };
+            let gone = push_version(&mut list, entry, keep);
+            // Older than everything kept: not worth writing.
+            if gone.iter().any(|v| v.name == name) {
+                continue;
+            }
+            remote_write(cfg, &name, body.to_vec()).await?;
+            dropped.extend(gone);
+        }
+    } else {
+        dropped = std::mem::take(&mut list);
+    }
+    for v in &dropped {
+        // A file that cannot be deleted is only left behind; the index no longer lists it.
+        let _ = remote_delete(cfg, &v.name).await;
+    }
+    if list != before {
+        let index = serde_json::json!({ "format": "nexterm-config-versions", "versions": list });
+        remote_write(cfg, &versions_index_name(&main), serde_json::to_vec_pretty(&index).map_err(|e| e.to_string())?).await?;
+    }
+    Ok(())
+}
+
+/// Read one kept version (only names the index lists).
+pub async fn remote_version(cfg: &SyncConfig, name: &str) -> Result<Envelope, String> {
+    if !remote_versions(cfg).await?.iter().any(|v| v.name == name) {
+        return Err(format!("{name}: not found"));
+    }
+    let bytes = remote_read(cfg, name).await?.ok_or_else(|| format!("{name}: not found"))?;
+    Envelope::parse(&bytes)
+}
+
+/// Write a kept version to this computer, replacing the selected categories it holds.
+/// The sync state is left alone, so the next sync uploads it (only this computer changed).
+pub async fn restore_version(storage: &Mutex<Storage>, cfg: &SyncConfig, name: &str, password: &str) -> Result<Vec<String>, String> {
+    let env = remote_version(cfg, name).await?;
+    let password = if password.is_empty() { cfg.password.as_str() } else { password };
+    let data = env.open(password)?;
+    apply_locked(storage, &data, &normalize_categories(&cfg.categories), ImportMode::Replace)
 }
 
 // ------------------------------------------------------------------ sync
@@ -1130,10 +1422,12 @@ pub async fn run(storage: &Mutex<Storage>, cfg: &SyncConfig, action: SyncAction)
     let mut state = load_state(&base);
     let local = collect(&base, &categories)?;
     let local_hash = data_hash(&local);
-    let remote = match remote_get(cfg).await? {
-        Some(bytes) => Some(Envelope::parse(&bytes)?),
+    let remote_bytes = remote_get(cfg).await?;
+    let remote = match &remote_bytes {
+        Some(bytes) => Some(Envelope::parse(bytes)?),
         None => None,
     };
+    let previous = remote_bytes.as_deref();
     let mut outcome = SyncOutcome {
         result: String::new(),
         applied: Vec::new(),
@@ -1163,13 +1457,17 @@ pub async fn run(storage: &Mutex<Storage>, cfg: &SyncConfig, action: SyncAction)
             require_export_password(&selected, &cfg.password)?;
             outcome.applied = apply_locked(storage, &data, &categories, ImportMode::Merge)?;
             let merged = collect(&base, &categories)?;
-            remote_put(cfg, seal(&merged, &cfg.password)?).await?;
+            let bytes = seal(&merged, &cfg.password)?;
+            remote_put(cfg, bytes.clone()).await?;
+            record_versions(cfg, previous, &bytes).await?;
             outcome.result = "merged".into();
             let h = data_hash(&merged);
             (h.clone(), h)
         }
         (_, Decision::Push) => {
-            remote_put(cfg, seal(&local, &cfg.password)?).await?;
+            let bytes = seal(&local, &cfg.password)?;
+            remote_put(cfg, bytes.clone()).await?;
+            record_versions(cfg, previous, &bytes).await?;
             outcome.result = "uploaded".into();
             (local_hash.clone(), local_hash)
         }
@@ -1552,6 +1850,96 @@ mod tests {
         for d in [shared, a, b] {
             let _ = fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn version_names_and_retention() {
+        assert_eq!(versions_index_name("nexterm-config.json"), "nexterm-config.versions.json");
+        assert_eq!(versions_index_name("dir/my.cfg.json"), "dir/my.cfg.versions.json");
+        assert_eq!(version_file_name("nexterm-config.json", "20261122-101500123"), "nexterm-config.v20261122-101500123.json");
+        assert_eq!(version_file_name("dir.x/cfg", "1"), "dir.x/cfg.v1.json");
+
+        let v = |name: &str, at: &str, hash: &str| RemoteVersion { name: name.into(), exported_at: at.into(), hash: hash.into(), ..Default::default() };
+        let mut list = Vec::new();
+        assert!(push_version(&mut list, v("a", "2026-01-01", "h1"), 2).is_empty());
+        assert!(push_version(&mut list, v("b", "2026-01-02", "h2"), 2).is_empty());
+        // Same content again: nothing added.
+        assert!(push_version(&mut list, v("c", "2026-01-03", "h2"), 2).is_empty());
+        let dropped = push_version(&mut list, v("d", "2026-01-04", "h4"), 2);
+        assert_eq!(dropped.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), vec!["a"]);
+        assert_eq!(list.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), vec!["d", "b"]);
+        // Older than everything kept: dropped right away.
+        let dropped = push_version(&mut list, v("old", "2025-01-01", "h0"), 2);
+        assert_eq!(dropped[0].name, "old");
+        assert_eq!(list.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn uploads_keep_versions_that_can_be_restored() {
+        let shared = tmp_dir("versions-shared");
+        let (a, b) = (tmp_dir("versions-a"), tmp_dir("versions-b"));
+        write_json(&b.join("sessions.json"), &json!([session("b0")])).unwrap();
+        let store_a = Mutex::new(Storage::new(a.clone()).unwrap());
+        let store_b = Mutex::new(Storage::new(b.clone()).unwrap());
+        let cfg = SyncConfig {
+            provider: "folder".into(),
+            folder: FolderConfig { path: shared.to_string_lossy().into() },
+            password: "secret".into(),
+            categories: vec!["sessions".into()],
+            keep_versions: Some(2),
+            ..Default::default()
+        };
+        // B's copy is on the remote first; A overwrites it: the replaced file is kept too.
+        run(&store_b, &cfg, SyncAction::Push).await.unwrap();
+        for list in [vec![session("a1")], vec![session("a1"), session("a2")]] {
+            write_json(&a.join("sessions.json"), &json!(list)).unwrap();
+            run(&store_a, &cfg, SyncAction::Push).await.unwrap();
+        }
+        let versions = remote_versions(&cfg).await.unwrap();
+        assert_eq!(versions.len(), 2);
+        assert!(versions.iter().all(|v| v.encrypted && shared.join(&v.name).exists()));
+        assert!(versions[0].exported_at >= versions[1].exported_at);
+        let kept_files = fs::read_dir(&shared).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("nexterm-config.v2")).count();
+        assert_eq!(kept_files, 2, "the oldest version file is deleted");
+
+        // Restore the older one on A: replaces sessions, leaves the sync state, so the next sync uploads it.
+        assert_eq!(restore_version(&store_a, &cfg, &versions[1].name, "").await.unwrap(), vec!["sessions".to_string()]);
+        assert_eq!(sessions_of(&a), vec!["a1"]);
+        assert_eq!(run(&store_a, &cfg, SyncAction::Auto).await.unwrap().result, "uploaded");
+        assert!(restore_version(&store_a, &cfg, "nexterm-config.json", "").await.is_err(), "only listed versions");
+        assert_eq!(restore_version(&store_a, &cfg, &versions[0].name, "nope").await.unwrap_err(), code::BAD_PASSWORD);
+
+        // keep 0: the versions go away with the next upload.
+        let off = SyncConfig { keep_versions: Some(0), ..cfg.clone() };
+        write_json(&a.join("sessions.json"), &json!([session("a9")])).unwrap();
+        run(&store_a, &off, SyncAction::Push).await.unwrap();
+        assert!(remote_versions(&off).await.unwrap().is_empty());
+        for d in [shared, a, b] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn local_backups_are_listed_and_restored() {
+        let base = tmp_dir("restore-backup");
+        let all = normalize_categories(&[]);
+        write_json(&base.join("senders.json"), &json!([{ "id": "s1" }])).unwrap();
+        let mut incoming = Map::new();
+        incoming.insert("senders".into(), json!([{ "id": "s2" }]));
+        apply(&base, &incoming, &all, ImportMode::Replace).unwrap();
+        assert_eq!(read_json(&base.join("senders.json")).unwrap(), json!([{ "id": "s2" }]));
+
+        let list = list_backups(&base);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].categories, vec!["senders".to_string()]);
+        assert!(list[0].time > 0);
+        assert_eq!(restore_backup(&base, &list[0].name).unwrap(), vec!["senders".to_string()]);
+        assert_eq!(read_json(&base.join("senders.json")).unwrap(), json!([{ "id": "s1" }]));
+        // Restoring backed up what it replaced.
+        assert_eq!(list_backups(&base).len(), 2);
+        assert!(restore_backup(&base, "../x").is_err());
+        assert!(restore_backup(&base, "nope").is_err());
+        let _ = fs::remove_dir_all(base);
     }
 
     type Log = std::sync::Arc<Mutex<Vec<String>>>;

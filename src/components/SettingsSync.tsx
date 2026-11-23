@@ -1,10 +1,19 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CloudCog, Download, FolderOpen, RefreshCw, Upload } from "lucide-react";
-import type { AppSettings, ConfigBundleInfo, SyncCategory, SyncOutcome, SyncSettings, SyncStateInfo } from "../types/domain";
+import { CloudCog, Download, FolderOpen, History, RefreshCw, RotateCcw, Upload } from "lucide-react";
+import type {
+  AppSettings,
+  ConfigBundleInfo,
+  LocalConfigBackup,
+  RemoteConfigVersion,
+  SyncCategory,
+  SyncOutcome,
+  SyncSettings,
+  SyncStateInfo,
+} from "../types/domain";
 import { backend } from "../services/backend";
 import { DEFAULT_SYNC_CATEGORIES, SYNC_CATEGORIES, syncOf } from "../utils/settingsDefaults";
-import { exportFileName, syncErrorKey, syncReady } from "../utils/configSync";
+import { exportFileName, INTERVAL_UNITS, splitInterval, syncErrorKey, syncReady, type IntervalUnit } from "../utils/configSync";
 import { confirmAsk } from "../utils/confirm";
 import { NumberInput } from "./NumberInput";
 
@@ -50,6 +59,9 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
   const [notice, setNotice] = useState<Notice>(null);
   const [conflict, setConflict] = useState<SyncOutcome | null>(null);
   const [state, setState] = useState<SyncStateInfo | null>(null);
+  // The unit stays as picked (switching it keeps the number), so 24 hours does not turn into 1 day.
+  const [intervalUnit, setIntervalUnit] = useState<IntervalUnit>(() => splitInterval(s.intervalMin).unit);
+  const intervalValue = Math.round(s.intervalMin / INTERVAL_UNITS[intervalUnit]);
 
   const [exportCats, setExportCats] = useState<SyncCategory[]>([...DEFAULT_SYNC_CATEGORIES]);
   const [exportPassword, setExportPassword] = useState("");
@@ -58,6 +70,9 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
   const [importCats, setImportCats] = useState<SyncCategory[]>([...SYNC_CATEGORIES]);
   const [importPassword, setImportPassword] = useState("");
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
+  const [versions, setVersions] = useState<RemoteConfigVersion[] | null>(null);
+  const [versionPassword, setVersionPassword] = useState("");
+  const [backups, setBackups] = useState<LocalConfigBackup[] | null>(null);
 
   useEffect(() => {
     void backend.syncState().then(setState);
@@ -105,6 +120,33 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
       setConflict(out.result === "conflict" ? out : null);
       setNotice({ kind: out.result === "conflict" ? "err" : "ok", text: t(`cfgSync.result.${out.result}`) });
       if (out.applied.length) onApplied(out.applied);
+    });
+
+  const catList = (list: SyncCategory[]) => list.map((c) => t(`cfgSync.cat.${c}`)).join(", ") || "-";
+  const fmtSize = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+  const loadVersions = () =>
+    run("versions", async () => {
+      await persistTarget();
+      setVersions(await backend.syncVersions(s));
+    });
+
+  const restoreVersion = (v: RemoteConfigVersion) =>
+    run("restoreVersion", async () => {
+      if (!(await confirmAsk(t("cfgSync.confirmRestoreVersion", { device: v.device || "?", time: fmtTime(v.exportedAt) || "?" })))) return;
+      const applied = await backend.syncRestoreVersion(s, v.name, versionPassword);
+      setNotice({ kind: "ok", text: t("cfgSync.restored", { list: catList(applied) }) });
+      if (backups) setBackups(await backend.configBackups());
+      if (applied.length) onApplied(applied);
+    });
+
+  const restoreBackup = (b: LocalConfigBackup) =>
+    run("restoreBackup", async () => {
+      if (!(await confirmAsk(t("cfgSync.confirmRestoreBackup", { time: fmtTime(b.time) || b.name })))) return;
+      const applied = await backend.configRestoreBackup(b.name);
+      setNotice({ kind: "ok", text: t("cfgSync.restored", { list: catList(applied) }) });
+      setBackups(await backend.configBackups());
+      if (applied.length) onApplied(applied);
     });
 
   const ready = syncReady(s);
@@ -315,9 +357,39 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
             </label>
             <label className="field sync-inline">
               <span>{t("cfgSync.interval")}</span>
-              <NumberInput min={0} step={5} disabled={!s.autoSync} value={s.intervalMin} onChange={(intervalMin) => set({ intervalMin })} />
+              <div className="sync-row">
+                <NumberInput
+                  min={0}
+                  integer
+                  disabled={!s.autoSync}
+                  value={intervalValue}
+                  onChange={(n) => set({ intervalMin: n * INTERVAL_UNITS[intervalUnit] })}
+                />
+                <select
+                  className="text-input"
+                  disabled={!s.autoSync}
+                  value={intervalUnit}
+                  onChange={(e) => {
+                    const unit = e.target.value as IntervalUnit;
+                    setIntervalUnit(unit);
+                    set({ intervalMin: intervalValue * INTERVAL_UNITS[unit] });
+                  }}
+                >
+                  {(["day", "hour", "minute"] as const).map((u) => (
+                    <option key={u} value={u}>
+                      {t(`cfgSync.unit.${u}`)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </label>
           </div>
+
+          <label className="field sync-inline">
+            <span>{t("cfgSync.keepVersions")}</span>
+            <NumberInput min={0} max={100} value={s.keepVersions} onChange={(keepVersions) => set({ keepVersions })} />
+          </label>
+          <p className="adv-hint">{t("cfgSync.keepVersionsHint")}</p>
 
           <div className="remote-pair-actions">
             <button
@@ -361,6 +433,42 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
               </div>
             </div>
           )}
+
+          <div className="sync-versions">
+            <div className="sync-row">
+              <b>{t("cfgSync.versions")}</b>
+              <button type="button" className="btn-secondary btn-sm" disabled={disabled || !ready} onClick={() => void loadVersions()}>
+                <History size={12} className={busy === "versions" ? "spin" : ""} /> {t("cfgSync.versionsLoad")}
+              </button>
+            </div>
+            {versions?.some((v) => v.encrypted) && (
+              <input
+                className="text-input"
+                type="password"
+                autoComplete="off"
+                placeholder={t("cfgSync.versionPassword")}
+                value={versionPassword}
+                onChange={(e) => setVersionPassword(e.target.value)}
+              />
+            )}
+            {versions && !versions.length && <div className="adv-hint">{t("cfgSync.versionsEmpty")}</div>}
+            {versions && versions.length > 0 && (
+              <ul className="sync-version-list">
+                {versions.map((v) => (
+                  <li key={v.name}>
+                    <span className="sync-version-time">{fmtTime(v.exportedAt) || v.name}</span>
+                    <span className="adv-hint">
+                      {v.device || "?"} · {fmtSize(v.size)}
+                      {v.encrypted ? ` · ${t("cfgSync.encrypted")}` : ""}
+                    </span>
+                    <button type="button" className="btn-secondary btn-sm" disabled={disabled} onClick={() => void restoreVersion(v)}>
+                      <RotateCcw size={12} /> {t("cfgSync.restore")}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </>
       )}
 
@@ -458,7 +566,39 @@ export const SyncSettingsEditor: React.FC<Props> = ({ draft, onChange, saved, on
           </div>
         </>
       )}
+      <h4 className="sync-section">{t("cfgSync.backupsTitle")}</h4>
       <p className="adv-hint">{t("cfgSync.backupHint")}</p>
+      <div className="sync-row">
+        <label className="field sync-inline">
+          <span>{t("cfgSync.keepBackups")}</span>
+          <NumberInput min={1} max={100} value={s.keepBackups} onChange={(keepBackups) => set({ keepBackups })} />
+        </label>
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={disabled}
+          onClick={() => void run("backups", async () => setBackups(await backend.configBackups()))}
+        >
+          <History size={12} /> {t("cfgSync.backupsLoad")}
+        </button>
+      </div>
+      {(s.keepBackups !== syncOf(saved).keepBackups || s.keepVersions !== syncOf(saved).keepVersions) && (
+        <p className="adv-hint">{t("cfgSync.saveFirst")}</p>
+      )}
+      {backups && !backups.length && <div className="adv-hint">{t("cfgSync.backupsEmpty")}</div>}
+      {backups && backups.length > 0 && (
+        <ul className="sync-version-list">
+          {backups.map((b) => (
+            <li key={b.name}>
+              <span className="sync-version-time">{fmtTime(b.time) || b.name}</span>
+              <span className="adv-hint">{catList(b.categories)}</span>
+              <button type="button" className="btn-secondary btn-sm" disabled={disabled} onClick={() => void restoreBackup(b)}>
+                <RotateCcw size={12} /> {t("cfgSync.restore")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 };

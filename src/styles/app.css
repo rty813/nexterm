@@ -5181,6 +5181,42 @@ html.ctxmenu-host #root {
   color: var(--success);
   word-break: break-all;
 }
+.sync-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sync-version-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+.sync-version-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+}
+.sync-version-list li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+.sync-version-list .adv-hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-version-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .sync-conflict {
   display: flex;
   flex-direction: column;

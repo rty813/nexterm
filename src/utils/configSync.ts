@@ -25,11 +25,27 @@ export function syncReady(s: SyncSettings): boolean {
   }
 }
 
+/** Longest delay `setInterval` takes (a longer one fires at once). */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /** Milliseconds between automatic syncs (null: startup only). */
 export function autoSyncInterval(s: SyncSettings): number | null {
   if (!s.autoSync || !syncReady(s)) return null;
   const min = Math.floor(Number(s.intervalMin) || 0);
-  return min > 0 ? Math.max(min, 5) * 60_000 : null;
+  return min > 0 ? Math.min(Math.max(min, 5) * 60_000, MAX_TIMER_MS) : null;
+}
+
+export type IntervalUnit = "day" | "hour" | "minute";
+
+/** Minutes in one unit. */
+export const INTERVAL_UNITS: Record<IntervalUnit, number> = { day: 1440, hour: 60, minute: 1 };
+
+/** Minutes as a number of the largest unit that divides them (0 shows as days). */
+export function splitInterval(minutes: number): { value: number; unit: IntervalUnit } {
+  const min = Math.max(0, Math.floor(Number(minutes) || 0));
+  if (min === 0) return { value: 0, unit: "day" };
+  const unit = (["day", "hour", "minute"] as const).find((u) => min % INTERVAL_UNITS[u] === 0) ?? "minute";
+  return { value: min / INTERVAL_UNITS[unit], unit };
 }
 
 /** Default export file name, e.g. nexterm-config-20261115-0930.json. */

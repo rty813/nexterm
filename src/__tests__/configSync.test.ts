@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoSyncInterval, exportFileName, syncErrorKey, syncReady } from "../utils/configSync";
+import { autoSyncInterval, exportFileName, syncErrorKey, splitInterval, syncReady } from "../utils/configSync";
 import { DEFAULT_SYNC, SYNC_CATEGORIES, syncOf } from "../utils/settingsDefaults";
 import type { AppSettings } from "../types/domain";
 
@@ -33,6 +33,16 @@ describe("config sync helpers", () => {
     expect(autoSyncInterval({ ...folder, autoSync: true, intervalMin: 0 })).toBeNull();
     expect(autoSyncInterval({ ...folder, autoSync: true, intervalMin: 1 })).toBe(5 * 60_000);
     expect(autoSyncInterval({ ...folder, autoSync: true, intervalMin: 30 })).toBe(30 * 60_000);
+    expect(autoSyncInterval({ ...folder, autoSync: true, intervalMin: 60 * 24 * 30 })).toBe(2 ** 31 - 1);
+  });
+
+  it("defaults to a daily sync and splits the interval into units", () => {
+    expect(DEFAULT_SYNC.intervalMin).toBe(1440);
+    expect(splitInterval(1440)).toEqual({ value: 1, unit: "day" });
+    expect(splitInterval(4320)).toEqual({ value: 3, unit: "day" });
+    expect(splitInterval(120)).toEqual({ value: 2, unit: "hour" });
+    expect(splitInterval(90)).toEqual({ value: 90, unit: "minute" });
+    expect(splitInterval(0)).toEqual({ value: 0, unit: "day" });
   });
 
   it("fills missing nested fields from defaults", () => {

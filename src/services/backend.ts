@@ -24,6 +24,8 @@ import type {
   TunnelConfig,
   TerminalStatePayload,
   ConfigBundleInfo,
+  LocalConfigBackup,
+  RemoteConfigVersion,
   SyncCategory,
   SyncOutcome,
   SyncSettings,
@@ -1463,6 +1465,25 @@ export const backend = {
 
   async syncRun(config: SyncSettings, action: "auto" | "push" | "pull" | "merge"): Promise<SyncOutcome> {
     return invoke<SyncOutcome>("sync_run", { config, action });
+  },
+
+  /** Earlier uploads kept next to the remote file, newest first. */
+  async syncVersions(config: SyncSettings): Promise<RemoteConfigVersion[]> {
+    return invoke<RemoteConfigVersion[]>("sync_versions", { config });
+  },
+
+  /** Write a kept remote version to this computer (empty password: the sync password). */
+  async syncRestoreVersion(config: SyncSettings, name: string, password: string): Promise<SyncCategory[]> {
+    return invoke<SyncCategory[]>("sync_restore_version", { config, name, password });
+  },
+
+  async configBackups(): Promise<LocalConfigBackup[]> {
+    if (!isTauriRuntime()) return [];
+    return invoke<LocalConfigBackup[]>("config_backups");
+  },
+
+  async configRestoreBackup(name: string): Promise<SyncCategory[]> {
+    return invoke<SyncCategory[]>("config_restore_backup", { name });
   },
 
   async syncState(): Promise<SyncStateInfo | null> {
