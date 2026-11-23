@@ -5,6 +5,9 @@ import {
   bookmarkLabel,
   bookmarksFor,
   cleanBookmarks,
+  commonPrefix,
+  completionTarget,
+  dirCompletions,
   expandHome,
   findBookmark,
   forgetRecent,
@@ -158,5 +161,43 @@ describe("pathCandidates", () => {
     expect(pathCandidates("/var", ctx).map((c) => c.shown)).toEqual(["/var/log", "/var/log/nginx"]);
     expect(pathCandidates("APP", ctx)[0]).toMatchObject({ abs: "/home/deploy/app/current", label: "app" });
     expect(pathCandidates("zzz", ctx)).toEqual([]);
+  });
+});
+
+describe("path completion", () => {
+  const ent = (name: string, kind: "dir" | "file" | "link" = "dir", linkDir = false) => ({ name, path: `/x/${name}`, kind, linkDir, size: 0 });
+
+  it("splits the typed path into the folder to list and the partial name", () => {
+    expect(completionTarget("/etc/ng", "/root", HOME)).toEqual({ dir: "/etc", head: "/etc/", prefix: "ng" });
+    expect(completionTarget("/", "/root", HOME)).toEqual({ dir: "/", head: "/", prefix: "" });
+    expect(completionTarget("~/pro", "/root", HOME)).toEqual({ dir: HOME, head: "~/", prefix: "pro" });
+    expect(completionTarget("~", "/root", HOME)).toEqual({ dir: HOME, head: "~/", prefix: "" });
+    expect(completionTarget("sub/a", "/srv", HOME)).toEqual({ dir: "/srv/sub", head: "sub/", prefix: "a" });
+    expect(completionTarget("ap", "/srv", HOME)).toEqual({ dir: "/srv", head: "", prefix: "ap" });
+    expect(completionTarget("../", "/srv/app", HOME)).toEqual({ dir: "/srv", head: "../", prefix: "" });
+  });
+
+  it("stays quiet on the untouched current folder and on . / ..", () => {
+    expect(completionTarget("/srv", "/srv", HOME)).toBeNull();
+    expect(completionTarget("~/app", "/home/deploy/app", HOME)).toBeNull();
+    expect(completionTarget("..", "/srv", HOME)).toBeNull();
+    expect(completionTarget("~/x", "/srv", "")).toBeNull();
+  });
+
+  it("lists matching folders and folder links, exact case first, hiding dot folders", () => {
+    const entries = [ent("nginx"), ent("NetworkManager"), ent("net.conf", "file"), ent("netlink", "link", true), ent(".net"), ent("ssh")];
+    const t = { dir: "/etc", head: "/etc/", prefix: "n" };
+    expect(dirCompletions(entries, t, false).map((c) => c.shown)).toEqual(["/etc/netlink/", "/etc/nginx/", "/etc/NetworkManager/"]);
+    expect(dirCompletions(entries, t, false)[0]).toMatchObject({ abs: "/etc/netlink", kind: "dir" });
+    expect(dirCompletions(entries, { ...t, prefix: ".n" }, false).map((c) => c.shown)).toEqual(["/etc/.net/"]);
+    expect(dirCompletions(entries, { ...t, prefix: "" }, true)).toHaveLength(5);
+    expect(dirCompletions(entries, { ...t, prefix: "" }, false, 2)).toHaveLength(2);
+  });
+
+  it("finds the common prefix Tab fills in", () => {
+    expect(commonPrefix(["nginx-a", "nginx-b"])).toBe("nginx-");
+    expect(commonPrefix(["one"])).toBe("one");
+    expect(commonPrefix(["a", "b"])).toBe("");
+    expect(commonPrefix([])).toBe("");
   });
 });

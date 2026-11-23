@@ -762,6 +762,9 @@
 .bm-ico.recent {
   color: var(--fg-muted);
 }
+.bm-ico.dir {
+  color: var(--accent);
+}
 .bm-rename {
   height: 20px;
   width: 110px;

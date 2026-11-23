@@ -8,7 +8,7 @@
  */
 
 import type { SftpBookmark } from "../types/domain";
-import { baseName, joinRemote, normalize } from "./sftpPaths";
+import { baseName, isDirLike, joinRemote, normalize, resolveTyped, type RemoteEntry } from "./sftpPaths";
 
 /** Recent folders kept per server. */
 export const RECENT_MAX = 10;
@@ -170,7 +170,54 @@ export interface PathCandidate {
   /** As shown (and completed with Tab): "~/x" when under home. */
   shown: string;
   label: string;
-  kind: "bookmark" | "recent";
+  kind: "bookmark" | "recent" | "dir";
+}
+
+/** What the path bar is completing: the folder to list, the typed text up to it, and the partial name after it. */
+export interface CompletionTarget {
+  dir: string;
+  head: string;
+  prefix: string;
+}
+
+/**
+ * Splits the typed path at its last "/": "/etc/ng" -> list "/etc" for names starting with "ng".
+ * Null while the box still holds the current folder untouched, or for "~" without a known home.
+ */
+export function completionTarget(input: string, cwd: string, home: string): CompletionTarget | null {
+  const p = input.replace(/^\s+/, "");
+  if (!cwd || p === cwd || p === tildePath(cwd, home)) return null;
+  if (p.startsWith("~") && !home) return null;
+  if (p === "~") return { dir: home, head: "~/", prefix: "" };
+  const i = p.lastIndexOf("/");
+  const head = p.slice(0, i + 1);
+  const prefix = p.slice(i + 1);
+  if (prefix === "." || prefix === "..") return null;
+  return { dir: head ? resolveTyped(head, cwd, home) : cwd, head, prefix };
+}
+
+/** Folders of `entries` (the listing of `target.dir`) whose names start with the typed prefix. */
+export function dirCompletions(entries: RemoteEntry[], target: CompletionTarget, showHidden: boolean, limit = 8): PathCandidate[] {
+  const q = target.prefix.toLowerCase();
+  const hidden = showHidden || target.prefix.startsWith(".");
+  const exact = (name: string) => (name.startsWith(target.prefix) ? 0 : 1);
+  return entries
+    .filter((e) => isDirLike(e) && (hidden || !e.name.startsWith(".")) && e.name.toLowerCase().startsWith(q))
+    .sort((a, b) => exact(a.name) - exact(b.name) || a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map((e) => ({ abs: joinRemote(target.dir, e.name), shown: `${target.head}${e.name}/`, label: "", kind: "dir" as const }));
+}
+
+/** Longest common prefix of names (what Tab fills in when several folders match, like a shell). */
+export function commonPrefix(names: string[]): string {
+  if (!names.length) return "";
+  let p = names[0];
+  for (const n of names.slice(1)) {
+    let i = 0;
+    while (i < p.length && i < n.length && p[i] === n[i]) i++;
+    p = p.slice(0, i);
+  }
+  return p;
 }
 
 /**

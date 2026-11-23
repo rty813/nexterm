@@ -73,6 +73,9 @@ import {
   forgetRecent,
   parseRecent,
   pathCandidates,
+  commonPrefix,
+  completionTarget,
+  dirCompletions,
   pushRecent,
   removeBookmark,
   tildePath,
@@ -196,6 +199,8 @@ export const SftpPanel: React.FC<{
   const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
   const [bmPopover, setBmPopover] = useState<BookmarkPopover>(null);
   const [suggest, setSuggest] = useState(-1);
+  /** Folder listings fetched for path-bar completion, while the bar is being edited. */
+  const [dirCache, setDirCache] = useState<ReadonlyMap<string, RemoteEntry[]>>(new Map());
   const hostKey = target?.hostKey ?? "";
   const hostKeyRef = useRef(hostKey);
   hostKeyRef.current = hostKey;
@@ -595,7 +600,44 @@ export const SftpPanel: React.FC<{
     }
   };
 
-  const suggestions = editingPath === null ? [] : pathCandidates(editingPath, { bookmarks: shownBookmarks, recent, home, cwd });
+  const completing = editingPath === null ? null : completionTarget(editingPath, cwd, home);
+  const completeDir = completing?.dir;
+  const dirListing = completeDir === undefined ? undefined : completeDir === cwd ? entries : dirCache.get(completeDir);
+  const dirMatches = completing && dirListing ? dirCompletions(dirListing, completing, settings.showHidden) : [];
+  const dirSeen = new Set(dirMatches.map((c) => c.abs));
+  const suggestions =
+    editingPath === null
+      ? []
+      : [...dirMatches, ...pathCandidates(editingPath, { bookmarks: shownBookmarks, recent, home, cwd }).filter((c) => !dirSeen.has(c.abs))].slice(0, 10);
+
+  // Lists the folder being typed into (debounced); failures just leave no folder suggestions.
+  useEffect(() => {
+    if (!paneId || completeDir === undefined || completeDir === cwd || dirCache.has(completeDir)) return;
+    let live = true;
+    const timer = window.setTimeout(() => {
+      backend
+        .sftpList(paneId, completeDir)
+        .then((l) => l.entries)
+        .catch(() => [] as RemoteEntry[])
+        .then((list) => live && setDirCache((m) => new Map(m).set(completeDir, list)));
+    }, 150);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [paneId, completeDir, cwd, dirCache]);
+  useEffect(() => {
+    if (editingPath === null) setDirCache((m) => (m.size ? new Map() : m));
+  }, [editingPath]);
+
+  /** Tab: like a shell, fill the common part of several matching folders, else take the highlighted suggestion. */
+  const completeTab = () => {
+    if (suggest < 0 && completing && dirMatches.length > 1) {
+      const common = commonPrefix(dirMatches.map((c) => c.shown.slice(completing.head.length, -1)));
+      if (common.length > completing.prefix.length) return setEditingPath(completing.head + common);
+    }
+    setEditingPath(suggestions[Math.max(0, suggest)].shown);
+  };
   const cwdBookmarked = Boolean(cwd && hostKey && findBookmark(settings.bookmarks, hostKey, cwd, home));
 
   const goTerminalCwd = () => {
@@ -901,7 +943,7 @@ export const SftpPanel: React.FC<{
                     setSuggest((i) => (e.key === "ArrowDown" ? (i + 1) % n : i <= 0 ? n - 1 : i - 1));
                   } else if (e.key === "Tab" && suggestions.length) {
                     e.preventDefault();
-                    setEditingPath(suggestions[Math.max(0, suggest)].shown);
+                    completeTab();
                     setSuggest(-1);
                   } else if (e.key === "Enter") {
                     const pick = suggest >= 0 ? suggestions[suggest] : undefined;
@@ -924,12 +966,18 @@ export const SftpPanel: React.FC<{
                         void openFolder(c.abs, e.altKey);
                       }}
                     >
-                      {c.kind === "bookmark" ? <Star size={12} className="bm-ico own" fill="currentColor" /> : <Clock size={12} className="bm-ico recent" />}
+                      {c.kind === "bookmark" ? (
+                        <Star size={12} className="bm-ico own" fill="currentColor" />
+                      ) : c.kind === "dir" ? (
+                        <Folder size={12} className="bm-ico dir" />
+                      ) : (
+                        <Clock size={12} className="bm-ico recent" />
+                      )}
                       <span className="bm-row-text">
                         {c.label && <span className="bm-row-label">{c.label}</span>}
                         <span className="bm-row-path mono strong">{c.shown}</span>
                       </span>
-                      <span className="bm-kind">{c.kind === "bookmark" ? t("sftp.bm.kindBookmark") : t("sftp.bm.kindRecent")}</span>
+                      <span className="bm-kind">{t(c.kind === "bookmark" ? "sftp.bm.kindBookmark" : c.kind === "dir" ? "sftp.bm.kindFolder" : "sftp.bm.kindRecent")}</span>
                     </div>
                   ))}
                   <div className="sftp-suggest-hint">{t("sftp.bm.suggestHint")}</div>
