@@ -490,21 +490,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </label>
           </div>
 
-          <div className="form-grid-2">
-            <label className="field" title={t("conpty.tip")}>
-              <span>{t("conpty.label")}</span>
-              <select
-                className="text-input"
-                value={draft.conpty ?? "auto"}
-                onChange={(e) => setDraft({ ...draft, conpty: e.target.value as AppSettings["conpty"] })}
-              >
-                <option value="auto">{t("conpty.auto")}</option>
-                <option value="bundled">{t("conpty.bundled")}</option>
-                <option value="system">{t("conpty.system")}</option>
-              </select>
-            </label>
-          </div>
-
           <div className="settings-section-title">{t("agent.section")}</div>
           <label className="checkbox-row">
             <input

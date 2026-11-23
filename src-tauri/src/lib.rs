@@ -265,7 +265,6 @@ fn apply_settings_effects(ctx: &AppContext, settings: &AppSettings) {
     ctx.ask_before_quit
         .store(extra_bool(&settings, "askBeforeCloseWindow", true), Ordering::Relaxed);
     crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
-    crate::local_pty::set_conpty_mode(&extra_str(settings, "conpty"));
     crate::http_proxy::configure(crate::http_proxy::from_settings(settings.extra.get("httpProxy")));
     let (history_on, history_limits) = history_config(settings);
     crate::history::configure(history_on, history_limits);
@@ -1841,7 +1840,6 @@ pub fn run() {
                 let _ = win.set_focus();
             }
             crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
-            crate::local_pty::set_conpty_mode(&extra_str(&settings, "conpty"));
             crate::http_proxy::configure(crate::http_proxy::from_settings(settings.extra.get("httpProxy")));
             let (history_on, history_limits) = history_config(&settings);
             crate::history::configure(history_on, history_limits);

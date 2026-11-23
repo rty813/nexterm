@@ -815,13 +815,6 @@ export const extraResources = {
       unsupported: "当前 shell 不支持 Shell 集成（仅支持 bash、zsh、fish）",
       noAnswer: "Shell 集成没有响应：请停在提示符处，确认有 base64、gunzip、可写的 /tmp 和用户主目录；tmux 里无效",
     },
-    conpty: {
-      label: "本地终端的 ConPTY（重启后生效）",
-      auto: "自动（Windows 11 24H2 之前用自带的）",
-      bundled: "程序自带（OpenConsole）",
-      system: "系统自带",
-      tip: "本地终端（PowerShell、CMD、WSL）经 ConPTY 运行。Windows 10 和较早的 Windows 11 自带的 ConPTY 输出慢、会丢掉不认识的控制序列；程序自带的是 Windows Terminal 使用的新版本。",
-    },
     tabbar: {
       renameHint: "双击 / 中键的动作可在 设置 › 鼠标 中修改",
       host: "主机",
@@ -1330,13 +1323,6 @@ export const extraResources = {
       failed: "Could not save shell integration: check write permissions for the current user's home and shell startup files",
       unsupported: "This shell has no shell integration (bash, zsh and fish only)",
       noAnswer: "Shell integration did not answer: stop at a prompt; base64, gunzip, a writable /tmp and home directory are required; no effect inside tmux",
-    },
-    conpty: {
-      label: "ConPTY for local terminals (after a restart)",
-      auto: "Auto (bundled before Windows 11 24H2)",
-      bundled: "Bundled (OpenConsole)",
-      system: "System",
-      tip: "Local terminals (PowerShell, CMD, WSL) run through ConPTY. The one in Windows 10 and early Windows 11 is slow and drops control sequences it doesn't know; the bundled one is the newer version Windows Terminal uses.",
     },
     tabbar: {
       renameHint: "Double / middle click actions: Settings › Mouse",

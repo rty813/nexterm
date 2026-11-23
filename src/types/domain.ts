@@ -394,8 +394,6 @@ export interface AppSettings {
   tabCommand?: boolean;
   /** Load shell integration (OSC 133 / 633 / 7) into SSH and WSL bash / zsh / fish and local PowerShell (default on; read by the backend from settings.extra). */
   shellIntegration?: boolean;
-  /** ConPTY for local terminals: auto (bundled before Windows 11 24H2) / bundled / system; read by the backend from settings.extra, applies after a restart. */
-  conpty?: "auto" | "bundled" | "system";
   /** Keep every pane's whole output in the backend and scroll back through all of it (default on; read by the backend from settings.extra). */
   fullHistory?: boolean;
   /** Compressed history kept in memory per pane, in MB (default 32); older parts go to encrypted temp files. */

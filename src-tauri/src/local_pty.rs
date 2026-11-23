@@ -11,68 +11,16 @@ use crate::manager::{ControlMsg, RuntimeControl, TerminalSink};
 use crate::models::{ProtocolType, SessionConfig};
 use crate::shell_integration::{Injector, Step};
 
-/// Settings › "conpty": which ConPTY local terminals use. Read once, when the first
-/// local terminal opens; a change applies after a restart.
-static CONPTY_MODE: Mutex<String> = Mutex::new(String::new());
-
-pub fn set_conpty_mode(mode: &str) {
-    *CONPTY_MODE.lock().unwrap() = mode.to_string();
-}
-
-/// First Windows build whose inbox ConPTY is the rewritten one (Windows 11 24H2). On
-/// build 28000 the system ConPTY measured faster than the bundled one (conpty_bench).
-const NEW_INBOX_CONPTY_BUILD: u32 = 26100;
-
-/// "bundled" / "system"; anything else is "auto": the bundled one on older Windows.
-fn use_bundled_conpty(mode: &str, build: Option<u32>) -> bool {
-    match mode {
-        "bundled" => true,
-        "system" => false,
-        _ => build.map_or(true, |b| b < NEW_INBOX_CONPTY_BUILD),
-    }
-}
-
-/// CurrentBuildNumber from the registry (GetVersionEx reports 6.2 without a manifest).
-fn windows_build() -> Option<u32> {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
-        let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
-        let key = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-        let name = wide("CurrentBuildNumber");
-        let mut buf = [0u16; 32];
-        let mut len = (buf.len() * 2) as u32;
-        let rc = unsafe {
-            RegGetValueW(HKEY_LOCAL_MACHINE, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut len)
-        };
-        if rc != 0 {
-            return None;
-        }
-        let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        String::from_utf16_lossy(&buf[..n]).trim().parse().ok()
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
-}
-
 /// Loads the bundled ConPTY (resources/conpty: Microsoft.Windows.Console.ConPTY, the
 /// conpty.dll + OpenConsole.exe that Windows Terminal ships) before the first pseudo
-/// console is created, when Settings › "conpty" picks it. The inbox conhost of
-/// Windows 10 / early 11 renders slowly and drops sequences it doesn't know.
+/// console is created; local terminals always use it, whatever the Windows version.
 /// portable-pty prefers a `conpty.dll` that loads by name, and a module already loaded
 /// is found by its name, so loading it once by full path is enough. conpty.dll starts
-/// `<arch>\OpenConsole.exe` from its own folder. Missing or failing to load (e.g. an
-/// ARM64 build, the DLL is x64): the system ConPTY is used.
+/// `<arch>\OpenConsole.exe` from its own folder. Only if it is missing or fails to load
+/// (e.g. an ARM64 build, the DLL is x64) does the system ConPTY get used.
 pub fn preload_bundled_conpty() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let mode = CONPTY_MODE.lock().unwrap().clone();
-        if use_bundled_conpty(&mode, windows_build()) {
-            load_conpty_dll(&crate::app_paths::resource("conpty").join("conpty.dll"));
-        }
-    });
+    ONCE.call_once(|| load_conpty_dll(&crate::app_paths::resource("conpty").join("conpty.dll")));
 }
 
 fn load_conpty_dll(dll: &std::path::Path) {
@@ -582,31 +530,5 @@ mod conpty_bench {
         let _ = std::fs::remove_file(&file);
         eprintln!("{} ConPTY: {} bytes out in {:?} ({:.1} MB/s)", if system { "system" } else { "bundled" }, total, elapsed, total as f64 / 1e6 / elapsed.as_secs_f64());
         assert!(total > 0);
-    }
-}
-
-#[cfg(test)]
-mod conpty_choice {
-    use super::*;
-
-    #[test]
-    fn explicit_modes_win() {
-        assert!(use_bundled_conpty("bundled", Some(28000)));
-        assert!(!use_bundled_conpty("system", Some(19045)));
-    }
-
-    #[test]
-    fn auto_uses_bundled_only_before_the_new_inbox_conpty() {
-        assert!(use_bundled_conpty("auto", Some(19045)));
-        assert!(use_bundled_conpty("", Some(22631)));
-        assert!(!use_bundled_conpty("auto", Some(26100)));
-        assert!(!use_bundled_conpty("", Some(28000)));
-        assert!(use_bundled_conpty("auto", None));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn reads_the_windows_build() {
-        assert!(windows_build().is_some_and(|b| b >= 10240));
     }
 }
