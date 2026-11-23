@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { QuickCommand } from "../types/domain";
-import { commandsOf, fromEditor, moveInGroup, parseQuickIcon, quickGroups, quickPayload, toEditor } from "../utils/quickCommands";
+import {
+  QUICKBAR_MAX_ROWS,
+  commandsOf,
+  fromEditor,
+  moveInGroup,
+  parseQuickIcon,
+  quickBarHeight,
+  quickBarRowsAfterDrag,
+  quickGroups,
+  quickPayload,
+  toEditor,
+} from "../utils/quickCommands";
 
 const qc = (id: string, group: string, extra: Partial<QuickCommand> = {}): QuickCommand => ({
   id,
@@ -69,5 +80,23 @@ describe("quick command groups", () => {
     expect(moved.map((c) => c.id)).toEqual(["c", "a", "b", "d"]);
     expect(moveInGroup(list, "b", -1, "自定义")).toBe(list);
     expect(moveInGroup(list, "a", 1, "自定义")).toBe(list);
+  });
+});
+
+describe("quick bar rows", () => {
+  it("keeps the single-row height and grows by one chip row each", () => {
+    expect(quickBarHeight(1)).toBe(38);
+    expect(quickBarHeight(2)).toBe(68);
+    expect(quickBarHeight(0)).toBe(38);
+    expect(quickBarHeight(99)).toBe(quickBarHeight(QUICKBAR_MAX_ROWS));
+  });
+
+  it("snaps a drag of the top edge to whole rows", () => {
+    expect(quickBarRowsAfterDrag(1, -10)).toBe(1);
+    expect(quickBarRowsAfterDrag(1, -16)).toBe(2);
+    expect(quickBarRowsAfterDrag(1, -60)).toBe(3);
+    expect(quickBarRowsAfterDrag(3, 60)).toBe(1);
+    expect(quickBarRowsAfterDrag(1, 200)).toBe(1);
+    expect(quickBarRowsAfterDrag(1, -2000)).toBe(QUICKBAR_MAX_ROWS);
   });
 });

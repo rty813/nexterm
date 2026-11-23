@@ -26,4 +26,10 @@ describe("mergeUiState", () => {
     expect("other" in next).toBe(false);
     expect(mergeUiState(UI_DEFAULTS, null)).toBe(UI_DEFAULTS);
   });
+
+  it("restores the quick bar row count within limits", () => {
+    expect(mergeUiState(UI_DEFAULTS, { quickBarRows: 3 }).quickBarRows).toBe(3);
+    expect(mergeUiState(UI_DEFAULTS, { quickBarRows: 50 }).quickBarRows).toBe(8);
+    expect(mergeUiState(UI_DEFAULTS, { quickBarRows: "2" }).quickBarRows).toBe(1);
+  });
 });

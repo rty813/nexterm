@@ -172,6 +172,7 @@ export const App: React.FC = () => {
     setSidebarOpen,
     setSidebarWidth,
     setQuickBarOpen,
+    setQuickBarRows,
     setSidebarRecentOpen,
     setSenderOpen,
     setHistoryOpen,
@@ -2871,6 +2872,8 @@ export const App: React.FC = () => {
               commands={quickCommands}
               hasActivePane={Boolean(activeLeaf)}
               bar={settings.quickBar ?? {}}
+              rows={ui.quickBarRows}
+              onRowsChange={setQuickBarRows}
               onExecute={runQuickCommand}
               onManage={(target) => setQuickManager(target ?? {})}
             />

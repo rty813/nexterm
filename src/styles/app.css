@@ -1127,8 +1127,9 @@ textarea {
   border-top: 1px solid var(--border-subtle);
 }
 
-/* QuickBar: one row — badge | groups | commands (scrolls) | buttons */
+/* QuickBar: badge | groups | commands (scrolls) | buttons; height set inline from its row count */
 .quickbar {
+  position: relative;
   height: 38px;
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
@@ -1214,14 +1215,145 @@ textarea {
 .hscroll::-webkit-scrollbar {
   display: none;
 }
-.hscroll.fade-right {
+.hscroll.fade-end {
   mask-image: linear-gradient(to right, #000 calc(100% - var(--fade)), transparent);
 }
-.hscroll.fade-left {
+.hscroll.fade-start {
   mask-image: linear-gradient(to right, transparent, #000 var(--fade));
 }
-.hscroll.fade-left.fade-right {
+.hscroll.fade-start.fade-end {
   mask-image: linear-gradient(to right, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+}
+.vscroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  --fade: 14px;
+}
+.vscroll::-webkit-scrollbar {
+  display: none;
+}
+.vscroll.fade-end {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade)), transparent);
+}
+.vscroll.fade-start {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade));
+}
+.vscroll.fade-start.fade-end {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+}
+/* Top edge of the quick bar: drag for more rows of commands, double-click for one. */
+.quickbar-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -4px;
+  height: 8px;
+  cursor: ns-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.quickbar-resize:hover,
+.quickbar-resize:active {
+  background: linear-gradient(to bottom, transparent 3px, var(--accent-line) 3px, var(--accent-line) 5px, transparent 5px);
+}
+/* Several rows: chips wrap and scroll vertically, side controls stay level with the first row. */
+.quickbar.multi-row {
+  align-items: flex-start;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.quickbar.multi-row > .quickbar-items {
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-self: stretch;
+  row-gap: 4px;
+}
+.quickbar.multi-row > .quickbar-badge,
+.quickbar.multi-row > .quickbar-groups {
+  height: 26px;
+}
+.quickbar.multi-row > .icon-btn-xs {
+  margin-top: 2px;
+}
+.quickbar.multi-row > .quickbar-sep {
+  margin-top: 5px;
+}
+.quickbar.multi-row .quick-group-title {
+  line-height: 26px;
+}
+/* "All" in a multi-row bar: each group starts a new line behind a small name tag. */
+.quick-group-line {
+  flex: 0 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.quick-group-tag {
+  max-width: 96px;
+  height: 18px;
+  line-height: 18px;
+  padding: 0 6px;
+  margin-right: 2px;
+  border-radius: 999px;
+  background: var(--bg-active);
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Group list down the left of a multi-row bar. */
+.quickbar-side-groups {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 132px;
+  flex-shrink: 0;
+  padding-right: 6px;
+  border-right: 1px solid var(--border-subtle);
+}
+.side-group {
+  flex-shrink: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.side-group:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+.side-group.active {
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+}
+.side-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-group-count {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.side-group.active .side-group-count {
+  color: var(--accent);
 }
 .quickbar > .btn-ghost {
   flex-shrink: 0;

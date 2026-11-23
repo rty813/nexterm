@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { backend } from "../services/backend";
+import { clampQuickBarRows } from "../utils/quickCommands";
 
 export interface UiState {
   sidebarOpen: boolean;
   sidebarWidth: number;
   quickBarOpen: boolean;
+  /** Rows of chips the quick bar shows (dragged on its top edge). */
+  quickBarRows: number;
   /** Collapsed sidebar sections ("recent", ...). */
   sidebarRecentOpen: boolean;
   /** Side panels left open at exit, reopened on the next start. */
@@ -20,6 +23,7 @@ export const UI_DEFAULTS: UiState = {
   sidebarOpen: true,
   sidebarWidth: 268,
   quickBarOpen: true,
+  quickBarRows: 1,
   sidebarRecentOpen: true,
   senderOpen: false,
   historyOpen: false,
@@ -35,11 +39,12 @@ export function mergeUiState(cur: UiState, saved: unknown): UiState {
   const src = saved as Record<string, unknown>;
   const next = { ...cur };
   for (const key of Object.keys(UI_DEFAULTS) as (keyof UiState)[]) {
-    if (key === "sidebarWidth") continue;
+    if (key === "sidebarWidth" || key === "quickBarRows") continue;
     if (typeof src[key] === "boolean") (next as Record<string, unknown>)[key] = src[key];
   }
   const width = Number(src.sidebarWidth);
   if (Number.isFinite(width) && width > 0) next.sidebarWidth = Math.min(480, Math.max(190, width));
+  if (typeof src.quickBarRows === "number") next.quickBarRows = clampQuickBarRows(src.quickBarRows);
   return next;
 }
 
@@ -76,6 +81,7 @@ export function usePersistentUiState(persist: boolean) {
     setSidebarOpen: set("sidebarOpen"),
     setSidebarWidth: set("sidebarWidth"),
     setQuickBarOpen: set("quickBarOpen"),
+    setQuickBarRows: set("quickBarRows"),
     setSidebarRecentOpen: set("sidebarRecentOpen"),
     setSenderOpen: set("senderOpen"),
     setHistoryOpen: set("historyOpen"),

@@ -138,3 +138,21 @@ export function moveInGroup(commands: QuickCommand[], id: string, dir: -1 | 1, f
   [next[idx[pos]], next[other]] = [next[other], next[idx[pos]]];
   return next;
 }
+
+/** Quick bar height: rows of 26px chips 4px apart, plus 5px padding and a 1px border top and bottom. */
+export const QUICKBAR_MAX_ROWS = 8;
+const QUICKBAR_ROW = 30;
+
+export function quickBarHeight(rows: number): number {
+  return 8 + QUICKBAR_ROW * clampQuickBarRows(rows);
+}
+
+export function clampQuickBarRows(rows: number): number {
+  if (!Number.isFinite(rows)) return 1;
+  return Math.min(QUICKBAR_MAX_ROWS, Math.max(1, Math.round(rows)));
+}
+
+/** Rows after dragging the bar's top edge by `dy` pixels (up is negative, makes it taller). */
+export function quickBarRowsAfterDrag(startRows: number, dy: number): number {
+  return clampQuickBarRows((quickBarHeight(startRows) - dy - 8) / QUICKBAR_ROW);
+}
