@@ -17,6 +17,7 @@ import { sessionTargetSummary } from "../utils/sessionSummary";
 import { compactMenu, useContextMenu } from "./ContextMenu";
 import { ProtocolBadge } from "./ProtocolBadge";
 import { SessionModal } from "./SessionModal";
+import { GroupInput } from "./GroupInput";
 import { hasSavedPassword } from "../utils/paneSession";
 
 type SortKey = "label" | "group" | "protocol" | "target";
@@ -349,20 +350,14 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
           }}
         >
           <span>{t("manager.movePrompt", { count: selected.size })}</span>
-          <input
-            type="text"
+          <GroupInput
             autoFocus
-            className="text-input input-sm"
-            list="manager-group-list"
+            className="input-sm"
+            groups={groups}
             placeholder={t("sessionModal.groupPlaceholder")}
             value={moveTarget}
-            onChange={(e) => setMoveTarget(e.target.value)}
+            onChange={setMoveTarget}
           />
-          <datalist id="manager-group-list">
-            {groups.filter(Boolean).map((g) => (
-              <option key={g} value={g} />
-            ))}
-          </datalist>
           <button type="submit" className="btn-primary btn-sm">
             {t("manager.moveBtn")}
           </button>
