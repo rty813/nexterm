@@ -146,7 +146,7 @@ export const GroupInput: React.FC<GroupInputProps> = ({ value, onChange, groups,
             ref={listRef}
             className="combo-list"
             role="listbox"
-            style={{ position: "fixed", left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom, right: "auto" }}
+            style={{ left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom }}
             onMouseDown={(e) => e.preventDefault()}
           >
             {shown.length === 0 ? (
