@@ -43,6 +43,20 @@ export interface RawSample {
   uptime: number | null;
   nics: Record<string, NicCounters>;
   disks: DiskUsage[];
+  /** Android (`dumpsys battery`), else null. */
+  battery?: BatteryInfo | null;
+}
+
+export interface BatteryInfo {
+  /** 0-100. */
+  level: number;
+  /** "charging" | "discharging" | "full" | "not charging" | "unknown" */
+  status: string;
+  /** AC / USB / wireless, or "" on battery. */
+  plugged: string;
+  /** Celsius. */
+  temperature: number | null;
+  health: string;
 }
 
 export type ParseResult = { supported: true; sample: RawSample } | { supported: false; os: string };
@@ -74,6 +88,7 @@ export interface ServerStats {
   rxRate: number | null;
   txRate: number | null;
   disks: DiskUsage[];
+  battery: BatteryInfo | null;
 }
 
 /** Split the script output into `@@name` sections. */
@@ -202,13 +217,37 @@ export function parseDf(lines: string[]): DiskUsage[] {
   return out;
 }
 
+/** `dumpsys battery`: "  level: 87", "  status: 2", "  AC powered: true", "  temperature: 312". */
+export function parseBattery(lines: string[]): BatteryInfo | null {
+  const kv = new Map<string, string>();
+  for (const line of lines) {
+    const i = line.indexOf(":");
+    if (i > 0) kv.set(line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim());
+  }
+  const level = Number(kv.get("level"));
+  const scale = Number(kv.get("scale")) || 100;
+  if (!Number.isFinite(level) || !kv.has("level")) return null;
+  const statuses: Record<string, string> = { "1": "unknown", "2": "charging", "3": "discharging", "4": "not charging", "5": "full" };
+  const healths: Record<string, string> = { "1": "unknown", "2": "good", "3": "overheat", "4": "dead", "5": "over voltage", "6": "failure", "7": "cold" };
+  const plugged = ["AC", "USB", "Wireless", "Dock"].filter((k) => kv.get(`${k.toLowerCase()} powered`) === "true").join(" / ");
+  const temp = Number(kv.get("temperature"));
+  return {
+    level: Math.round((level / scale) * 100),
+    status: statuses[kv.get("status") ?? ""] ?? "unknown",
+    plugged,
+    temperature: Number.isFinite(temp) && kv.has("temperature") ? temp / 10 : null,
+    health: healths[kv.get("health") ?? ""] ?? "unknown",
+  };
+}
+
 /** Parse one sampling script output. Non-Linux hosts (no /proc) report `supported: false`. */
 export function parseServerSample(text: string, at: number): ParseResult {
   const sec = splitSections(text);
   if (sec.has("unsupported")) return { supported: false, os: (sec.get("unsupported") ?? [])[0] ?? "" };
-  const cpuLines = sec.get("cpu");
+  // Android 8+ hides /proc/stat from the shell user: CPU then stays unknown.
+  const cpuLines = sec.get("cpu") ?? [];
   const memLines = sec.get("mem");
-  if (!cpuLines || !memLines) return { supported: false, os: "" };
+  if (!memLines) return { supported: false, os: "" };
   const { cpu, cores } = parseProcStat(cpuLines);
   const mem = parseMeminfo(memLines);
   if (!cpu && mem.memTotal === 0) return { supported: false, os: "" };
@@ -223,6 +262,7 @@ export function parseServerSample(text: string, at: number): ParseResult {
       uptime: parseUptime(sec.get("uptime") ?? []),
       nics: parseNetDev(sec.get("net") ?? []),
       disks: parseDf(sec.get("df") ?? []),
+      battery: sec.has("battery") ? parseBattery(sec.get("battery") ?? []) : null,
     },
   };
 }
@@ -284,6 +324,7 @@ export function computeServerStats(prev: RawSample | null, cur: RawSample): Serv
     rxRate: sum("rxRate"),
     txRate: sum("txRate"),
     disks: cur.disks,
+    battery: cur.battery ?? null,
   };
 }
 

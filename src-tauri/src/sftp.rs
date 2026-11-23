@@ -79,6 +79,8 @@ pub enum Fs {
     Sftp(Arc<SftpSession>),
     /// No SFTP on the server: shell commands on exec channels (transfers use SCP).
     Shell(SshLink),
+    /// An Android device: shell commands for browsing, the adb sync protocol for files.
+    Adb(crate::adb::AdbDevice),
 }
 
 /// SFTP when the server has it, else shell commands. The answer is kept per connection.
@@ -109,60 +111,73 @@ impl Fs {
         match self {
             Fs::Sftp(s) => home(s).await,
             Fs::Shell(l) => crate::scp::shell_home(l).await,
+            Fs::Adb(_) => Ok("/sdcard".into()),
         }
     }
     pub async fn list(&self, path: &str) -> Result<Listing> {
         match self {
             Fs::Sftp(s) => list(s, path).await,
             Fs::Shell(l) => crate::scp::shell_list(l, path).await,
+            Fs::Adb(d) => crate::scp::shell_list(d, path).await.map(|mut l| {
+                l.mode = "adb".into();
+                l
+            }),
         }
     }
     pub async fn stat(&self, path: &str) -> Result<RemoteEntry> {
         match self {
             Fs::Sftp(s) => stat(s, path).await,
             Fs::Shell(l) => crate::scp::shell_stat(l, path).await,
+            Fs::Adb(d) => crate::scp::shell_stat(d, path).await,
         }
     }
     pub async fn mkdir(&self, path: &str) -> Result<()> {
         match self {
             Fs::Sftp(s) => mkdir(s, path).await,
             Fs::Shell(l) => crate::scp::shell_mkdir(l, path).await,
+            Fs::Adb(d) => crate::scp::shell_mkdir(d, path).await,
         }
     }
     pub async fn touch(&self, path: &str) -> Result<()> {
         match self {
             Fs::Sftp(s) => touch(s, path).await,
             Fs::Shell(l) => crate::scp::shell_touch(l, path).await,
+            Fs::Adb(d) => crate::scp::shell_touch(d, path).await,
         }
     }
     pub async fn rename(&self, from: &str, to: &str) -> Result<()> {
         match self {
             Fs::Sftp(s) => rename(s, from, to).await,
             Fs::Shell(l) => crate::scp::shell_rename(l, from, to).await,
+            Fs::Adb(d) => crate::scp::shell_rename(d, from, to).await,
         }
     }
     pub async fn remove(&self, path: &str) -> Result<()> {
         match self {
             Fs::Sftp(s) => remove(s, path).await,
             Fs::Shell(l) => crate::scp::shell_remove(l, path).await,
+            Fs::Adb(d) => crate::scp::shell_remove(d, path).await,
         }
     }
     pub async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         match self {
             Fs::Sftp(s) => chmod(s, path, mode).await,
             Fs::Shell(l) => crate::scp::shell_chmod(l, path, mode).await,
+            Fs::Adb(d) => crate::scp::shell_chmod(d, path, mode).await,
         }
     }
     pub async fn symlink(&self, path: &str, target: &str) -> Result<()> {
         match self {
             Fs::Sftp(s) => symlink(s, path, target).await,
             Fs::Shell(l) => crate::scp::shell_symlink(l, path, target).await,
+            Fs::Adb(d) => crate::scp::shell_symlink(d, path, target).await,
         }
     }
     pub fn sftp(&self) -> Result<&Arc<SftpSession>> {
         match self {
             Fs::Sftp(s) => Ok(s),
             Fs::Shell(_) => bail!("服务器不支持 SFTP，预览和本地编辑不可用（上传 / 下载会使用 SCP）"),
+            Fs::Adb(_) => bail!("ADB 设备不支持该操作"),
         }
     }
 }
@@ -735,9 +750,15 @@ fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
     Some((m.modified().ok()?, m.len()))
 }
 
+/// Where an edited file lives: an SSH pane (SFTP) or an ADB device.
+pub enum EditTarget {
+    Ssh(SshLink),
+    Adb(crate::adb::AdbDevice),
+}
+
 /// Download a remote file to a private folder, open it with the program Windows uses for
 /// it, and upload it again whenever it is saved, until stopped or the pane closes.
-pub async fn edit_start(app: AppHandle, instance_id: &str, link: &SshLink, remote: &str, open_with: Option<String>) -> Result<EditInfo> {
+pub async fn edit_start(app: AppHandle, instance_id: &str, target: EditTarget, remote: &str, open_with: Option<String>) -> Result<EditInfo> {
     let existing = lock(edits())
         .iter()
         .find(|e| e.info.instance_id == instance_id && e.info.remote_path == remote && e.info.state != "stopped")
@@ -746,18 +767,27 @@ pub async fn edit_start(app: AppHandle, instance_id: &str, link: &SshLink, remot
         open_local(&info.local_path, open_with.as_deref())?;
         return Ok(info);
     }
-    let sftp = Arc::clone(fs(instance_id, link).await?.sftp()?);
-    let meta = sftp.metadata(remote).await.ctx(|| format!("无法读取 {}", remote))?;
-    if meta.file_type().is_dir() {
-        bail!("{} 是文件夹", remote);
-    }
+    let is_adb = matches!(target, EditTarget::Adb(_));
     let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
     let name = local_component(&split_remote(remote).1).unwrap_or_else(|| "file".into());
     let dir = edit_root().join(&id);
     std::fs::create_dir_all(&dir)?;
     let local = dir.join(name);
-    let mut m = Meter::detached(crate::transfer::Policy::Overwrite, true);
-    get_file(&sftp, remote, &local, &meta, &mut m).await?;
+    match &target {
+        EditTarget::Ssh(link) => {
+            let sftp = Arc::clone(fs(instance_id, link).await?.sftp()?);
+            let meta = sftp.metadata(remote).await.ctx(|| format!("无法读取 {}", remote))?;
+            if meta.file_type().is_dir() {
+                bail!("{} 是文件夹", remote);
+            }
+            let mut m = Meter::detached(crate::transfer::Policy::Overwrite, true);
+            get_file(&sftp, remote, &local, &meta, &mut m).await?;
+        }
+        EditTarget::Adb(device) => {
+            let data = crate::adb::sync::read_limited(device, remote, 64 << 20).await?;
+            std::fs::write(&local, data)?;
+        }
+    }
 
     let info = EditInfo {
         id: id.clone(),
@@ -795,6 +825,24 @@ pub async fn edit_start(app: AppHandle, instance_id: &str, link: &SshLink, remot
             }
             seen = settled;
             // Looked up each time: the pane may have reconnected.
+            if is_adb {
+                let ctx = app.state::<crate::AppContext>();
+                let Ok(device) = ctx.connections.adb_device(&instance) else {
+                    patch_edit(&app, &id, |i| {
+                        i.state = "error".into();
+                        i.error = Some("设备已断开，修改未上传（重新连接后点重试）".into());
+                    });
+                    continue;
+                };
+                patch_edit(&app, &id, |i| i.state = "uploading".into());
+                let result = async {
+                    let data = std::fs::read(&local)?;
+                    crate::adb::sync::write_all(&device, &remote, 0o644, &data).await
+                }
+                .await;
+                patch_edit(&app, &id, |i| finish_upload(i, result));
+                continue;
+            }
             let Ok(link) = app.state::<crate::AppContext>().connections.ssh_link(&instance) else {
                 patch_edit(&app, &id, |i| {
                     i.state = "error".into();
@@ -814,21 +862,25 @@ pub async fn edit_start(app: AppHandle, instance_id: &str, link: &SshLink, remot
                     forget(&instance);
                 }
             }
-            patch_edit(&app, &id, |i| match result {
-                Ok(()) => {
-                    i.state = "watching".into();
-                    i.uploads += 1;
-                    i.last_upload = Some(crate::transfer::now_ms());
-                    i.error = None;
-                }
-                Err(e) => {
-                    i.state = "error".into();
-                    i.error = Some(format!("{:#}", e));
-                }
-            });
+            patch_edit(&app, &id, |i| finish_upload(i, result));
         }
     });
     Ok(info)
+}
+
+fn finish_upload(i: &mut EditInfo, result: Result<()>) {
+    match result {
+        Ok(()) => {
+            i.state = "watching".into();
+            i.uploads += 1;
+            i.last_upload = Some(crate::transfer::now_ms());
+            i.error = None;
+        }
+        Err(e) => {
+            i.state = "error".into();
+            i.error = Some(format!("{:#}", e));
+        }
+    }
 }
 
 /// Stop watching (the local copy is deleted).

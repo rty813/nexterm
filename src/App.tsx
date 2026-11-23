@@ -31,6 +31,10 @@ import {
 } from "./utils/layout";
 import { canReuseSsh, duplicateReusesSsh } from "./utils/duplicate";
 import { dropZoneAt, type DropHint } from "./utils/dropZones";
+import { isLogcatSession, type LogcatPrefs } from "./types/domain";
+import { adbSerialOf, logcatSessionOf } from "./utils/adbSession";
+import { AdbScreenPanel } from "./components/AdbScreenPanel";
+import { AdbDevicePanel } from "./components/AdbDevicePanel";
 import type {
   AppSettings,
   ImportResult,
@@ -157,6 +161,11 @@ export const App: React.FC = () => {
   quickCommandsRef.current = quickCommands;
   /** The Quick Commands dialog, and what it opens on. */
   const [quickManager, setQuickManager] = useState<QuickManagerTarget | null>(null);
+  /** ADB side panels (screen mirror, apps / processes): the pane each was opened on. */
+  const [mirrorPaneId, setMirrorPaneId] = useState<string | null>(null);
+  /** Mirror opened from the sidebar device list (by serial, no shell tab needed). */
+  const [mirrorSerial, setMirrorSerial] = useState<{ serial: string; label: string } | null>(null);
+  const [adbPanelPaneId, setAdbPanelPaneId] = useState<string | null>(null);
   const [customThemes, setCustomThemes] = useState<ThemeDefinition[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [initialSnapshot, setInitialSnapshot] = useState<{ sessions: SessionConfig[]; settings: AppSettings } | null>(null);
@@ -611,6 +620,7 @@ export const App: React.FC = () => {
         telnet: "Telnet",
         rdp: "RDP",
         vnc: "VNC",
+        adb: "ADB",
       };
       openSessionInNewTab(
         {
@@ -864,12 +874,46 @@ export const App: React.FC = () => {
       sessionId: l.session.id,
       saved: sessions.find((s) => s.id === l.session.id)?.tunnels ?? [],
     }));
+  /** Connected ADB shell tabs (monitor, screen mirror, apps / processes). */
+  const adbTargets = allLeaves(ws.root)
+    .filter((l) => l.session.protocol === "adb" && !isLogcatSession(l.session) && l.status === "connected")
+    .map((l) => ({ paneId: l.paneId, title: tabTitle(l), summary: sessionTargetSummary(l.session) }));
+  const monitorTargets = [...forwardTargets, ...adbTargets];
+  const mirrorTargets = [
+    ...adbTargets,
+    ...(mirrorSerial ? [{ paneId: `serial:${mirrorSerial.serial}`, title: mirrorSerial.label, summary: mirrorSerial.serial, serial: mirrorSerial.serial }] : []),
+  ];
+  const openSerialMirror = (serial: string, label: string) => {
+    setMirrorSerial({ serial, label });
+    setMirrorPaneId(`serial:${serial}`);
+  };
+  /** ADB actions (palette / shortcuts): the active ADB tab, else the first connected one. */
+  const runAdbAction = (tool: "mirror" | "apps" | "logcat") => {
+    const shells = allLeaves(ws.root).filter((l) => l.session.protocol === "adb" && !isLogcatSession(l.session));
+    const active = activeLeaf?.session.protocol === "adb" ? activeLeaf : null;
+    const leaf =
+      (active && !isLogcatSession(active.session) ? active : null) ??
+      (active ? shells.find((l) => adbSerialOf(l.session) === adbSerialOf(active.session) && l.status === "connected") : undefined) ??
+      shells.find((l) => l.status === "connected") ??
+      (tool === "logcat" ? active ?? shells[0] : undefined);
+    if (tool === "logcat" && leaf) return openAdbTool(leaf, "logcat");
+    if (!leaf || leaf.status !== "connected") return setToast(t("adb.noSession"));
+    if (tool === "mirror" && mirrorPaneId === leaf.paneId) return setMirrorPaneId(null);
+    if (tool === "apps" && adbPanelPaneId === leaf.paneId) return setAdbPanelPaneId(null);
+    openAdbTool(leaf, tool);
+  };
+  const openAdbTool = (leaf: TerminalLeafNode, tool: "mirror" | "apps" | "logcat" | "files") => {
+    if (tool === "mirror") setMirrorPaneId(leaf.paneId);
+    else if (tool === "apps") setAdbPanelPaneId(leaf.paneId);
+    else if (tool === "files") openFileBrowser(leaf.paneId);
+    else openSessionInNewTab(logcatSessionOf(leaf.session, uid("logcat"), `Logcat · ${tabTitle(leaf)}`));
+  };
 
   // SSH tabs in this window, for the file browser (offline ones stay listed while selected).
   const sftpTargets: SftpTarget[] = useMemo(
     () =>
       allLeaves(ws.root)
-        .filter((l) => l.session.protocol === "ssh")
+        .filter((l) => l.session.protocol === "ssh" || (l.session.protocol === "adb" && !isLogcatSession(l.session)))
         .map((l) => ({ paneId: l.paneId, title: tabTitle(l), connected: l.status === "connected", hostKey: hostKeyOf(l.session) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [ws.root]
@@ -1525,6 +1569,15 @@ export const App: React.FC = () => {
         return true;
       case "view.portForward":
         setPortForwardOpen((v) => !v);
+        return true;
+      case "adb.mirror":
+        runAdbAction("mirror");
+        return true;
+      case "adb.logcat":
+        runAdbAction("logcat");
+        return true;
+      case "adb.apps":
+        runAdbAction("apps");
         return true;
       case "view.serverMonitor":
         setMonitorOpen((v) => !v);
@@ -2296,6 +2349,14 @@ export const App: React.FC = () => {
   };
 
   const paneExtras: PaneExtras = {
+    onLogcatPrefs: (paneId: string, prefs: LogcatPrefs) =>
+      setWs((prev) => ({
+        ...prev,
+        root: updateLeaf(prev.root, paneId, (l) =>
+          l.session.adb ? { ...l, session: { ...l.session, adb: { ...l.session.adb, logcat: prefs } } } : l
+        ),
+      })),
+    onAdbTool: openAdbTool,
     onPaneSettings: setSettingsPaneId,
     isSavedSession: (id) => sessionsRef.current.some((session) => session.id === id),
     quickCommands,
@@ -2821,6 +2882,8 @@ export const App: React.FC = () => {
                 onEditSession={(s) =>
                   setSessionModalState({ open: true, editing: s })
                 }
+                onNewSessionFrom={(s) => setSessionModalState({ open: true, editing: s, isNew: true })}
+                onAdbMirror={openSerialMirror}
                 onDuplicateSession={handleDuplicateSession}
                 onDeleteSession={handleDeleteSession}
                 onOpenImport={() => setImportModalOpen(true)}
@@ -2886,9 +2949,35 @@ export const App: React.FC = () => {
 
         {monitorOpen && (
           <ServerMonitorPanel
-            targets={forwardTargets}
-            preferredPaneId={activeLeaf?.session.protocol === "ssh" && activeLeaf.status === "connected" ? activeLeaf.paneId : null}
+            targets={monitorTargets}
+            preferredPaneId={
+              (activeLeaf?.session.protocol === "ssh" || activeLeaf?.session.protocol === "adb") && activeLeaf.status === "connected"
+                ? activeLeaf.paneId
+                : null
+            }
             onClose={() => setMonitorOpen(false)}
+          />
+        )}
+        {mirrorPaneId && (
+          <AdbScreenPanel
+            targets={mirrorTargets}
+            paneId={mirrorPaneId}
+            onPane={setMirrorPaneId}
+            onToast={setToast}
+            onClose={() => {
+              setMirrorPaneId(null);
+              setMirrorSerial(null);
+            }}
+          />
+        )}
+        {adbPanelPaneId && (
+          <AdbDevicePanel
+            targets={adbTargets}
+            paneId={adbPanelPaneId}
+            onPane={setAdbPanelPaneId}
+            ask={ask}
+            onToast={setToast}
+            onClose={() => setAdbPanelPaneId(null)}
           />
         )}
         {portForwardOpen && (

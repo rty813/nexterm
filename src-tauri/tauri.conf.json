@@ -43,7 +43,8 @@
     "resources": {
       "resources/vcxsrv/": "vcxsrv/",
       "resources/commands/": "commands/",
-      "resources/conpty/": "conpty/"
+      "resources/conpty/": "conpty/",
+      "resources/scrcpy/": "scrcpy/"
     }
   }
 }

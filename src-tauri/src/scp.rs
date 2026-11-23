@@ -303,6 +303,24 @@ pub async fn download(link: &SshLink, remote: &str, local: &Path, m: &mut Meter)
 
 use crate::sftp::{Listing, RemoteEntry};
 
+/// Something that runs a POSIX shell command and returns its stdout (an error with stderr
+/// on a non-zero exit): an SSH exec channel, or an ADB device shell.
+pub trait ShellExec: Sync {
+    fn exec_output<'a>(&'a self, command: &'a str) -> impl std::future::Future<Output = Result<String>> + Send + 'a;
+}
+
+impl ShellExec for SshLink {
+    fn exec_output<'a>(&'a self, command: &'a str) -> impl std::future::Future<Output = Result<String>> + Send + 'a {
+        crate::ssh_conn::SshShared::exec_output(self, command)
+    }
+}
+
+impl ShellExec for crate::adb::AdbDevice {
+    fn exec_output<'a>(&'a self, command: &'a str) -> impl std::future::Future<Output = Result<String>> + Send + 'a {
+        crate::adb::AdbDevice::exec_output(self, command)
+    }
+}
+
 /// One line per entry: `raw mode hex|size|mtime|atime|uid|gid|user|group|name`, then
 /// `L|target` and `D` (points to a folder) after links.
 const LIST_SCRIPT: &str = r#"
@@ -363,11 +381,11 @@ fn parse_listing(dir: &str, out: &str) -> Vec<RemoteEntry> {
     entries
 }
 
-pub async fn shell_home(link: &SshLink) -> Result<String> {
+pub async fn shell_home<L: ShellExec>(link: &L) -> Result<String> {
     Ok(link.exec_output("cd && pwd").await?.trim().to_string())
 }
 
-pub async fn shell_list(link: &SshLink, path: &str) -> Result<Listing> {
+pub async fn shell_list<L: ShellExec>(link: &L, path: &str) -> Result<Listing> {
     let path = if path.trim().is_empty() { "." } else { path.trim() };
     let script = format!(
         "{LIST_SCRIPT}cd -- {} || exit 1\npwd\nfor f in .* *; do [ \"$f\" = . ] || [ \"$f\" = .. ] && continue; [ -e \"$f\" ] || [ -L \"$f\" ] || continue; show \"$f\"; done",
@@ -379,27 +397,27 @@ pub async fn shell_list(link: &SshLink, path: &str) -> Result<Listing> {
     Ok(Listing { entries: parse_listing(&dir, rest), path: dir, mode: "scp".into() })
 }
 
-pub async fn shell_stat(link: &SshLink, path: &str) -> Result<RemoteEntry> {
+pub async fn shell_stat<L: ShellExec>(link: &L, path: &str) -> Result<RemoteEntry> {
     let (dir, _) = split_remote(path);
     let out = link.exec_output(&format!("{LIST_SCRIPT}show {}", shell_quote(path))).await?;
     parse_listing(&dir, &out).into_iter().next().with_context(|| format!("{} 不存在", path))
 }
 
 /// A one-line shell command; `what` names it in errors.
-async fn shell_run(link: &SshLink, script: String, what: String) -> Result<()> {
+async fn shell_run<L: ShellExec>(link: &L, script: String, what: String) -> Result<()> {
     link.exec_output(&script).await.map(|_| ()).context(what)
 }
 
-pub async fn shell_mkdir(link: &SshLink, path: &str) -> Result<()> {
+pub async fn shell_mkdir<L: ShellExec>(link: &L, path: &str) -> Result<()> {
     shell_run(link, format!("mkdir -- {}", shell_quote(path)), format!("无法创建文件夹 {}", path)).await
 }
 
-pub async fn shell_touch(link: &SshLink, path: &str) -> Result<()> {
+pub async fn shell_touch<L: ShellExec>(link: &L, path: &str) -> Result<()> {
     let q = shell_quote(path);
     shell_run(link, format!("if [ -e {q} ]; then echo exists >&2; exit 1; fi; : > {q}"), format!("无法创建文件 {}", path)).await
 }
 
-pub async fn shell_rename(link: &SshLink, from: &str, to: &str) -> Result<()> {
+pub async fn shell_rename<L: ShellExec>(link: &L, from: &str, to: &str) -> Result<()> {
     let (f, t) = (shell_quote(from), shell_quote(to));
     shell_run(
         link,
@@ -409,15 +427,15 @@ pub async fn shell_rename(link: &SshLink, from: &str, to: &str) -> Result<()> {
     .await
 }
 
-pub async fn shell_remove(link: &SshLink, path: &str) -> Result<()> {
+pub async fn shell_remove<L: ShellExec>(link: &L, path: &str) -> Result<()> {
     shell_run(link, format!("rm -rf -- {}", shell_quote(path)), format!("无法删除 {}", path)).await
 }
 
-pub async fn shell_chmod(link: &SshLink, path: &str, mode: u32) -> Result<()> {
+pub async fn shell_chmod<L: ShellExec>(link: &L, path: &str, mode: u32) -> Result<()> {
     shell_run(link, format!("chmod {:o} -- {}", mode & 0o7777, shell_quote(path)), format!("无法修改 {} 的权限", path)).await
 }
 
-pub async fn shell_symlink(link: &SshLink, path: &str, target: &str) -> Result<()> {
+pub async fn shell_symlink<L: ShellExec>(link: &L, path: &str, target: &str) -> Result<()> {
     let p = shell_quote(path);
     shell_run(
         link,

@@ -8,7 +8,8 @@ export type ProtocolType =
   | "serial"
   | "telnet"
   | "rdp"
-  | "vnc";
+  | "vnc"
+  | "adb";
 
 /** RDP / VNC: graphical panes (`DesktopPane`), not terminals. */
 export function isDesktopProtocol(protocol: ProtocolType | undefined): boolean {
@@ -86,6 +87,8 @@ export interface SessionConfig {
   privateKeyPath?: string;
   passphrase?: string;
   jumpHost?: JumpHostConfig | null;
+  /** ADB device and view (shell terminal or logcat tab). */
+  adb?: AdbConfig | null;
   term: string;
   keepAliveSecs: number;
   startupCommand?: string;
@@ -905,3 +908,110 @@ export interface UpdateProgress {
   /** 0 when the size is not known. */
   total: number;
 }
+
+/** ADB session options (Rust `AdbConfig`). A WLAN device's address is `host` / `port`. */
+export interface AdbConfig {
+  /** Device serial on the adb server; empty = the only connected device. */
+  serial: string;
+  connect: "usb" | "wlan";
+  /** shell: terminal pane; logcat: log tab (`LogcatPane`). */
+  view: "shell" | "logcat";
+  /** Logcat tab state (filters, buffers). */
+  logcat?: LogcatPrefs | null;
+}
+
+export interface LogcatPrefs {
+  /** Lowest level shown. */
+  level: "V" | "D" | "I" | "W" | "E" | "F";
+  /** Free-form query: words, `tag:` / `-tag:`, `pid:`, `package:`, `/regex/`. */
+  query: string;
+  buffers: string[];
+  /** Lines kept in the tab (older ones dropped). */
+  maxLines: number;
+}
+
+export const DEFAULT_LOGCAT: LogcatPrefs = { level: "V", query: "", buffers: ["main", "system", "crash"], maxLines: 200000 };
+
+/** A logcat tab: an ADB session showing the device log instead of a shell. */
+export function isLogcatSession(s: Pick<SessionConfig, "protocol" | "adb"> | undefined): boolean {
+  return s?.protocol === "adb" && s.adb?.view === "logcat";
+}
+
+/** One device the adb server knows (Rust `adb::client::DeviceInfo`). */
+export interface AdbDeviceInfo {
+  serial: string;
+  /** "device" when ready; "unauthorized", "offline", ... */
+  state: string;
+  model: string;
+  product: string;
+  device: string;
+  transport: "usb" | "tcp";
+}
+
+export interface AdbStatus {
+  path: string | null;
+  serverVersion: number | null;
+}
+
+export interface AdbAppInfo {
+  package: string;
+  apk: string;
+  uid: number | null;
+  system: boolean;
+  disabled: boolean;
+  versionName: string | null;
+  versionCode: string | null;
+}
+
+export type AdbAppAction = "launch" | "forceStop" | "clear" | "uninstall" | "uninstallKeepData" | "disable" | "enable";
+
+export interface AdbProcessInfo {
+  pid: number;
+  ppid: number;
+  user: string;
+  cpu: number;
+  /** KB */
+  rss: number;
+  state: string;
+  name: string;
+}
+
+export interface AdbDeviceProps {
+  manufacturer: string;
+  model: string;
+  android: string;
+  sdk: string;
+  abi: string;
+}
+
+/** One parsed logcat line (Rust `adb::logcat::LogEntry`). */
+export interface LogEntry {
+  ts: string;
+  pid: number;
+  tid: number;
+  uid: number | null;
+  level: string;
+  tag: string;
+  msg: string;
+}
+
+export interface MirrorInfo {
+  deviceName: string;
+  width: number;
+  height: number;
+}
+
+/** Input for the screen mirror (Rust `adb::scrcpy::MirrorInput`). */
+export type MirrorInput =
+  | { type: "key"; keycode: number; down: boolean; meta?: number; repeat?: number }
+  | { type: "text"; text: string }
+  | { type: "touch"; action: 0 | 1 | 2; x: number; y: number; w: number; h: number }
+  | { type: "scroll"; x: number; y: number; w: number; h: number; hscroll: number; vscroll: number }
+  | { type: "backOrScreenOn" }
+  | { type: "expandNotifications" }
+  | { type: "expandSettings" }
+  | { type: "collapsePanels" }
+  | { type: "getClipboard" }
+  | { type: "setClipboard"; text: string; paste: boolean }
+  | { type: "displayPower"; on: boolean }
+  | { type: "rotate" };

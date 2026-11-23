@@ -6,6 +6,7 @@ import {
   Network,
   Server,
   SquareTerminal,
+  Smartphone,
   Terminal,
   TerminalSquare,
   Usb,
@@ -74,6 +75,12 @@ export const ProtocolBadge: React.FC<ProtocolBadgeProps> = ({
       return (
         <span className="proto-badge proto-serial" title="Serial">
           <Usb size={size} />
+        </span>
+      );
+    case "adb":
+      return (
+        <span className="proto-badge proto-adb" title="ADB">
+          <Smartphone size={size} />
         </span>
       );
     default:

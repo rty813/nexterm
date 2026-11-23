@@ -41,6 +41,15 @@ const StatsView: React.FC<{ s: ServerStats; stale: boolean }> = ({ s, stale }) =
   return (
     <>
       {stale && <p className="adv-hint">{t("monitor.stale")}</p>}
+      {s.battery && (
+        <Meter
+          label={t("monitor.battery")}
+          percent={100 - s.battery.level}
+          detail={`${s.battery.level}% · ${t(`monitor.batteryStatus.${s.battery.status.replace(/ /g, "_")}`)}${
+            s.battery.plugged ? ` · ${s.battery.plugged}` : ""
+          }${s.battery.temperature != null ? ` · ${s.battery.temperature.toFixed(1)}°C` : ""}`}
+        />
+      )}
       <Meter
         label={t("monitor.cpu")}
         percent={s.cpuPercent}

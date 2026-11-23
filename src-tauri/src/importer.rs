@@ -271,6 +271,7 @@ fn parse_windterm_sessions_with_login(
             system: get_str("session.system").map(|s| s.to_ascii_lowercase()).unwrap_or_default(),
             skip_host_key_check: obj.get("ssh.verifyServerFingerprint").and_then(|v| v.as_bool()) == Some(false),
             desktop: None,
+            adb: None,
             extra: match get_str("session.dataType") {
                 Some(t) if t.eq_ignore_ascii_case("binary") => {
                     [("dataType".to_string(), Value::from("binary"))].into_iter().collect()

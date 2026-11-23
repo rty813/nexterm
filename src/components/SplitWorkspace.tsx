@@ -12,7 +12,8 @@ import type {
 } from "../types/domain";
 import { TerminalPane } from "./TerminalPane";
 import { DesktopPane } from "./DesktopPane";
-import { isDesktopProtocol } from "../types/domain";
+import { LogcatPane } from "./LogcatPane";
+import { isDesktopProtocol, isLogcatSession } from "../types/domain";
 import type { PaneExtras, ReconnectCredentials } from "./TerminalPane";
 import { GroupTabBar, SESSION_MIME, TAB_MIME, type GroupTabBarProps } from "./TabBar";
 import type { DropHint } from "../utils/dropZones";
@@ -378,7 +379,17 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
             className="split-slot"
             style={{ ...boxStyle(slot.rect, tabbarH), display: visible ? "flex" : "none" }}
           >
-            {isDesktopProtocol(leaf.session.protocol) ? (
+            {isLogcatSession(leaf.session) ? (
+              <LogcatPane
+                leaf={leaf}
+                visible={visible}
+                isActive={visible && slot.group.id === activeGroupId}
+                extras={extras}
+                onActivate={onActivatePane}
+                onReconnectPane={(id) => onReconnectPane(id)}
+                onPrefs={(id, prefs) => extras.onLogcatPrefs?.(id, prefs)}
+              />
+            ) : isDesktopProtocol(leaf.session.protocol) ? (
               <DesktopPane
                 leaf={leaf}
                 visible={visible}

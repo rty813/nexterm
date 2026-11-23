@@ -21,6 +21,9 @@ export const ACTIONS: ActionDef[] = [
   { id: "view.history", group: "view", defaultKey: "Alt+H" },
   { id: "view.files", group: "view", defaultKey: "Ctrl+Shift+O" },
   { id: "view.serverMonitor", group: "view", defaultKey: "" },
+  { id: "adb.mirror", group: "view", defaultKey: "Ctrl+Shift+K" },
+  { id: "adb.logcat", group: "view", defaultKey: "Ctrl+Shift+G" },
+  { id: "adb.apps", group: "view", defaultKey: "Ctrl+Shift+A" },
 
   { id: "terminal.copy", group: "terminal", defaultKey: "Ctrl+Shift+C" },
   { id: "terminal.paste", group: "terminal", defaultKey: "Ctrl+Shift+V" },

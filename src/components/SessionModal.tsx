@@ -5,9 +5,11 @@ import { backend } from "../services/backend";
 import { SessionAdvanced, advancedToSession, initialAdvanced } from "./SessionAdvanced";
 import { ProtocolBadge } from "./ProtocolBadge";
 import { GroupInput } from "./GroupInput";
+import { AdbSessionFields } from "./AdbSessionFields";
 import { useCloseGuard } from "./useCloseGuard";
 import {
   DEFAULT_DESKTOP,
+  type AdbConfig,
   hasDataType,
   isDesktopProtocol,
   type AuthType,
@@ -24,10 +26,10 @@ const BAUD_RATES = [
   921600, 1000000, 1500000, 2000000, 3000000,
 ];
 
-const PROTOCOLS: ProtocolType[] = ["ssh", "rdp", "vnc", "powershell", "cmd", "wsl", "serial", "telnet", "tcp", "custom"];
+const PROTOCOLS: ProtocolType[] = ["ssh", "rdp", "vnc", "adb", "powershell", "cmd", "wsl", "serial", "telnet", "tcp", "custom"];
 const REMOTE: ProtocolType[] = ["ssh", "tcp", "telnet", "rdp", "vnc"];
 /** Default port per network protocol: switching protocol replaces a port left at another's default. */
-const DEFAULT_PORTS: Partial<Record<ProtocolType, number>> = { ssh: 22, telnet: 23, rdp: 3389, vnc: 5900 };
+const DEFAULT_PORTS: Partial<Record<ProtocolType, number>> = { ssh: 22, telnet: 23, rdp: 3389, vnc: 5900, adb: 5555 };
 const LOCAL: ProtocolType[] = ["powershell", "cmd", "wsl", "custom"];
 
 interface SessionModalProps {
@@ -117,6 +119,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [desktop, setDesktopCfg] = useState<DesktopConfig>({ ...DEFAULT_DESKTOP, ...(initial?.desktop ?? {}) });
   const setDesktop = (patch: Partial<DesktopConfig>) => setDesktopCfg((d) => ({ ...d, ...patch }));
   const isDesktop = isDesktopProtocol(protocol);
+  const [adbCfg, setAdbCfg] = useState<AdbConfig>({ serial: "", connect: "usb", view: "shell", ...(initial?.adb ?? {}) });
+  const setAdb = (patch: Partial<AdbConfig>) => setAdbCfg((c) => ({ ...c, ...patch }));
   const [serialPorts, setSerialPorts] = useState<string[]>([]);
 
   useEffect(() => {
@@ -162,6 +166,10 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       ? `${host} (${serialCfg.baudRate})`
       : protocol === "tcp" || protocol === "telnet"
       ? `${protocol === "tcp" ? "TCP" : "Telnet"} ${host}:${port}`
+      : protocol === "adb"
+      ? adbCfg.connect === "wlan"
+        ? `ADB ${host}`
+        : `ADB ${adbCfg.serial || "auto"}`
       : isDesktop
       ? `${protocol.toUpperCase()} ${host}${port && port !== DEFAULT_PORTS[protocol] ? `:${port}` : ""}`
       : protocol.toUpperCase();
@@ -187,7 +195,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       group: group.trim(),
       protocol,
       host: host.trim(),
-      port: protocol === "serial" ? 0 : Number(port) || DEFAULT_PORTS[protocol] || 0,
+      port: protocol === "serial" || (protocol === "adb" && adbCfg.connect !== "wlan") ? 0 : protocol === "adb" ? Number(port) || 5555 : Number(port) || DEFAULT_PORTS[protocol] || 0,
       username: username.trim(),
       authType: protocol === "ssh" ? authType : "none",
       password: password || (initial?.password === "" ? "" : undefined),
@@ -206,6 +214,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       antiIdleString: Number(antiIdleSecs) > 0 && antiIdleString ? antiIdleString : undefined,
       ...advancedToSession(advanced, protocol),
       desktop: isDesktop ? { ...desktop, domain: protocol === "rdp" ? desktop.domain.trim() : "" } : null,
+      adb: protocol === "adb" ? { ...adbCfg, serial: adbCfg.connect === "wlan" ? "" : adbCfg.serial } : null,
     };
   };
 
@@ -324,6 +333,10 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                   />
                 </label>
               </div>
+            )}
+
+            {protocol === "adb" && (
+              <AdbSessionFields cfg={adbCfg} onCfg={setAdb} host={host} port={port} onHost={setHost} onPort={setPort} />
             )}
 
             {protocol === "serial" && (

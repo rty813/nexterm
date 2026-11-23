@@ -64,7 +64,7 @@ const BACKGROUND_FILE: &str = "background_image";
 const DEFAULT_OFF: &[&str] = &["credentials"];
 
 /// Settings that belong to this computer: never exported, kept when importing.
-const LOCAL_SETTING_KEYS: &[&str] = &["sync", "logDir", "zmodemDownloadDir", "xserver", "httpProxy"];
+const LOCAL_SETTING_KEYS: &[&str] = &["sync", "logDir", "zmodemDownloadDir", "xserver", "httpProxy", "adbPath"];
 /// Remote access: the relay (address + token) is shared, the rest (`enabled`, `readOnly`) stays local.
 /// The pairing secret lives in `remote_pairing.json` and is never synced.
 const REMOTE_KEY: &str = "remote";

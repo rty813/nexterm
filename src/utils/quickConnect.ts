@@ -1,4 +1,5 @@
 import type { SessionConfig } from "../types/domain";
+import { adbSessionFor } from "./adbSession";
 
 function makeId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -62,6 +63,17 @@ export function parseQuickConnectInput(raw: string): SessionConfig | null {
       term: "xterm-256color",
       keepAliveSecs: 0,
     };
+  }
+
+  // adb, adb <serial>, adb 192.168.1.5[:5555] (also adb://...).
+  const adb = /^adb(?::\/\/|\s+|$)(.*)$/i.exec(trimmed);
+  if (adb) {
+    const target = adb[1].trim().replace(/\/+$/, "");
+    const id = makeId();
+    if (!target) return adbSessionFor("", { id, label: "ADB", group: "Quick Connect" });
+    // A bare IP (no port) is WLAN on 5555.
+    const serial = /^[\d.]+$/.test(target) ? `${target}:5555` : target;
+    return adbSessionFor(serial, { id, label: `ADB ${target}`, group: "Quick Connect" });
   }
 
   // rdp://[user@]host[:port], vnc://host[:port] (also "rdp host", "vnc host").

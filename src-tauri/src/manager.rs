@@ -489,6 +489,8 @@ struct ActiveEntry {
     log: SharedLog,
     sink: Arc<ScopedSink>,
     ssh: SshSlot,
+    /// The device of an ADB pane (file browser, monitor, mirror, logcat).
+    adb: crate::adb::AdbSlot,
     /// Session name, protocol ("ssh", "powershell" ...) and target ("me@host:22"), for the
     /// MCP pane list.
     label: String,
@@ -548,6 +550,7 @@ impl ConnectionManager {
         };
         self.disconnect(&instance_id);
         let ssh_slot: SshSlot = Arc::default();
+        let adb_slot: crate::adb::AdbSlot = Arc::default();
 
         let cancelled = Arc::new(AtomicBool::new(false));
         let binary = config.binary_data();
@@ -598,6 +601,14 @@ impl ConnectionManager {
                 reuse,
             ),
             ProtocolType::Tcp => spawn_tcp_session(instance_id.clone(), config, scoped_sink),
+            ProtocolType::Adb => crate::adb_conn::spawn_adb_session(
+                instance_id.clone(),
+                config,
+                cols,
+                rows,
+                scoped_sink,
+                Arc::clone(&adb_slot),
+            ),
             ProtocolType::Telnet => {
                 spawn_telnet_session(instance_id.clone(), config, cols, rows, scoped_sink)
             }
@@ -636,6 +647,7 @@ impl ConnectionManager {
                                 log,
                                 sink: scoped,
                                 ssh: ssh_slot,
+                                adb: adb_slot,
                                 label,
                                 protocol,
                                 target,
@@ -651,7 +663,7 @@ impl ConnectionManager {
             spawn_anti_idle(anti_idle, Arc::clone(&scoped), control.clone(), Arc::clone(&cancelled));
         }
         lock(&self.sessions)
-            .insert(instance_id, ActiveEntry { control, cancelled, log, sink: scoped, ssh: ssh_slot, label, protocol, target });
+            .insert(instance_id, ActiveEntry { control, cancelled, log, sink: scoped, ssh: ssh_slot, adb: adb_slot, label, protocol, target });
         Ok(())
     }
 
@@ -791,6 +803,16 @@ impl ConnectionManager {
             .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
         let link = lock(&entry.ssh).clone();
         link.ok_or_else(|| anyhow::anyhow!("该窗格不是已连接的 SSH 会话"))
+    }
+
+    /// The device behind a connected ADB pane.
+    pub fn adb_device(&self, instance_id: &str) -> Result<crate::adb::AdbDevice> {
+        let map = lock(&self.sessions);
+        let entry = map
+            .get(instance_id)
+            .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
+        let device = lock(&entry.adb).clone();
+        device.ok_or_else(|| anyhow::anyhow!("该窗格不是已连接的 ADB 会话"))
     }
 
     /// Session name of a pane ("一楼服务器"), for transfer records.

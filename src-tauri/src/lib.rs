@@ -1,3 +1,5 @@
+pub mod adb;
+pub mod adb_conn;
 pub mod agent;
 pub mod anti_idle;
 pub mod app_paths;
@@ -266,6 +268,7 @@ fn apply_settings_effects(ctx: &AppContext, settings: &AppSettings) {
         .store(extra_bool(&settings, "askBeforeCloseWindow", true), Ordering::Relaxed);
     crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
     crate::http_proxy::configure(crate::http_proxy::from_settings(settings.extra.get("httpProxy")));
+    crate::adb::locate::configure(&extra_str(&settings, "adbPath"));
     let (history_on, history_limits) = history_config(settings);
     crate::history::configure(history_on, history_limits);
     crate::xserver::configure(xserver_config(settings));
@@ -1100,6 +1103,9 @@ where
     F: Fn(crate::sftp::Fs) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<T>>,
 {
+    if let Ok(device) = ctx.connections.adb_device(instance_id) {
+        return f(crate::sftp::Fs::Adb(device)).await.map_err(|e| format!("{:#}", e));
+    }
     let mut retried = false;
     loop {
         let link = ctx.connections.ssh_link(instance_id).map_err(|e| format!("{:#}", e))?;
@@ -1204,7 +1210,12 @@ async fn sftp_symlink(ctx: State<'_, AppContext>, instance_id: String, link: Str
 async fn sftp_read(ctx: State<'_, AppContext>, instance_id: String, path: String, limit: u64) -> Result<tauri::ipc::Response, String> {
     let bytes = with_sftp(&ctx, &instance_id, |s| {
         let path = path.clone();
-        async move { crate::sftp::read_limited(s.sftp()?, &path, limit).await }
+        async move {
+            match &s {
+                crate::sftp::Fs::Adb(d) => crate::adb::sync::read_limited(d, &path, limit).await,
+                _ => crate::sftp::read_limited(s.sftp()?, &path, limit).await,
+            }
+        }
     })
     .await?;
     Ok(tauri::ipc::Response::new(bytes))
@@ -1262,8 +1273,11 @@ async fn sftp_edit_start(
     path: String,
     program: Option<String>,
 ) -> Result<crate::sftp::EditInfo, String> {
-    let link = ctx.connections.ssh_link(&instance_id).map_err(|e| format!("{:#}", e))?;
-    crate::sftp::edit_start(app, &instance_id, &link, &path, program)
+    let target = match ctx.connections.adb_device(&instance_id) {
+        Ok(d) => crate::sftp::EditTarget::Adb(d),
+        Err(_) => crate::sftp::EditTarget::Ssh(ctx.connections.ssh_link(&instance_id).map_err(|e| format!("{:#}", e))?),
+    };
+    crate::sftp::edit_start(app, &instance_id, target, &path, program)
         .await
         .map_err(|e| format!("{:#}", e))
 }
@@ -1272,6 +1286,9 @@ async fn sftp_edit_start(
 /// its existing connection. Parsed by the frontend (utils/serverStats.ts).
 #[tauri::command]
 async fn server_stats_sample(ctx: State<'_, AppContext>, instance_id: String) -> Result<String, String> {
+    if let Ok(device) = ctx.connections.adb_device(&instance_id) {
+        return crate::server_stats::sample_adb(&device).await.map_err(|e| format!("{:#}", e));
+    }
     let link = ctx.connections.ssh_link(&instance_id).map_err(|e| format!("{:#}", e))?;
     crate::server_stats::sample(&link).await.map_err(|e| format!("{:#}", e))
 }
@@ -1583,6 +1600,7 @@ fn disconnect_terminal(
     ctx.connections.disconnect(&instance_id);
     // Closing a tab goes through here for every pane kind.
     ctx.desktops.disconnect(&instance_id);
+    crate::adb::logcat::stop(&instance_id);
     mcp::forget(&instance_id);
     crate::sftp::forget_instance(&app, &instance_id);
     if let Some(hub) = crate::transfer::hub() {
@@ -1841,6 +1859,7 @@ pub fn run() {
             }
             crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
             crate::http_proxy::configure(crate::http_proxy::from_settings(settings.extra.get("httpProxy")));
+            crate::adb::locate::configure(&extra_str(&settings, "adbPath"));
             let (history_on, history_limits) = history_config(&settings);
             crate::history::configure(history_on, history_limits);
             app.manage(AppContext {
@@ -2030,6 +2049,30 @@ pub fn run() {
             desktop_resize,
             desktop_ack,
             desktop_disconnect,
+            adb::commands::adb_status,
+            adb::commands::adb_download,
+            adb::commands::adb_devices,
+            adb::commands::adb_watch_devices,
+            adb::commands::adb_start_server,
+            adb::commands::adb_connect,
+            adb::commands::adb_disconnect,
+            adb::commands::adb_pair,
+            adb::commands::adb_enable_wlan,
+            adb::commands::adb_props,
+            adb::commands::adb_apps,
+            adb::commands::adb_app_action,
+            adb::commands::adb_install,
+            adb::commands::adb_export_apk,
+            adb::commands::adb_processes,
+            adb::commands::adb_kill,
+            adb::commands::adb_logcat_start,
+            adb::commands::adb_logcat_stop,
+            adb::commands::adb_logcat_clear,
+            adb::commands::adb_mirror_start,
+            adb::commands::adb_mirror_input,
+            adb::commands::adb_mirror_ack,
+            adb::commands::adb_mirror_stop,
+            adb::commands::adb_screenshot,
             subscribe_output,
             unsubscribe_output,
             ack_output,

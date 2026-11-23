@@ -717,6 +717,16 @@ impl Hub {
     }
 
     async fn execute(&self, id: &str, req: &TransferRequest, m: &mut Meter) -> Result<()> {
+        let adb = self.app.state::<crate::AppContext>().connections.adb_device(&req.instance_id);
+        if let Ok(device) = adb {
+            self.patch(id, |i| i.protocol = "adb".into());
+            let local = Path::new(&req.local_path);
+            return if req.direction == "upload" {
+                crate::adb::sync::upload(&device, local, &req.remote_path, m).await
+            } else {
+                crate::adb::sync::download(&device, &req.remote_path, local, m).await
+            };
+        }
         let link = self.app.state::<crate::AppContext>().connections.ssh_link(&req.instance_id)?;
         let sftp = match req.options.protocol.as_str() {
             "scp" => None,
@@ -724,7 +734,7 @@ impl Hub {
             // SFTP when the server has it, else SCP.
             _ => match crate::sftp::fs(&req.instance_id, &link).await? {
                 crate::sftp::Fs::Sftp(s) => Some(s),
-                crate::sftp::Fs::Shell(_) => None,
+                crate::sftp::Fs::Shell(_) | crate::sftp::Fs::Adb(_) => None,
             },
         };
         self.patch(id, |i| i.protocol = if sftp.is_some() { "sftp" } else { "scp" }.into());

@@ -2,6 +2,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { deepMerge, extraResources } from "./i18n.extra";
 import { uiResources } from "./i18n.ui";
+import { adbResources } from "./i18n.adb";
 
 export const resources = {
   "zh-CN": {
@@ -1301,6 +1302,7 @@ export const resources = {
 for (const lng of ["zh-CN", "en-US"] as const) {
   deepMerge(resources[lng].translation as Record<string, unknown>, extraResources[lng]);
   deepMerge(resources[lng].translation as Record<string, unknown>, uiResources[lng]);
+  deepMerge(resources[lng].translation as Record<string, unknown>, adbResources[lng]);
 }
 
 void i18n.use(initReactI18next).init({

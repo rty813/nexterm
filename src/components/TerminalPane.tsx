@@ -30,6 +30,9 @@ import {
   Play,
   Square,
   LogOut,
+  Smartphone,
+  ScrollText,
+  Boxes,
 } from "lucide-react";
 
 import { buildXtermTheme } from "../constants/themes";
@@ -45,6 +48,7 @@ import {
   hasDataType,
   type AiControl,
   type AiControlMode,
+  type LogcatPrefs,
   type McpClient,
   type AppSettings,
   type SplitDirection,
@@ -182,6 +186,10 @@ export interface PaneExtras {
   commandWatches: Record<string, { armedAt: number }>;
   onToggleCommandWatch: (paneId: string) => void;
   onCommandDone: (paneId: string, info: CommandDone) => void;
+  /** A logcat tab changed its filters (kept on the tab's session). */
+  onLogcatPrefs?: (paneId: string, prefs: LogcatPrefs) => void;
+  /** ADB pane tools: screen mirror, apps / processes, logcat tab. */
+  onAdbTool?: (leaf: TerminalLeafNode, tool: "mirror" | "apps" | "logcat" | "files") => void;
   /** Paste into a pane, through the multi-line paste confirmation. */
   onPasteRequest: (paneId: string, text: string, altScreen: boolean, paste: (text: string) => void) => void;
   /** Ask whether the remote program may read / write the clipboard (OSC 52). */
@@ -325,6 +333,8 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const sentSizeRef = useRef("");
 
   const isSsh = leaf.session.protocol === "ssh";
+  /** Quick buttons on a connected ADB shell: mirror, logcat, apps. */
+  const adbTools = leaf.session.protocol === "adb" && leaf.status === "connected" && Boolean(extras.onAdbTool);
   const needsUsername = isSsh && !leaf.session.username.trim();
   const usesPassword = isSsh && leaf.session.authType === "password";
   const needsInitialPassword =
@@ -1483,10 +1493,18 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           onClick: () => extras.onPauseLog(leaf.paneId, !extras.pausedLogs[leaf.paneId]),
         },
         { label: t("menu.openLogFolder"), onClick: () => extras.onRevealLog(leaf.paneId) },
-        leaf.session.protocol === "ssh" && {
-          label: t("sftp.openHere"),
+        (leaf.session.protocol === "ssh" || leaf.session.protocol === "adb") && {
+          label: t(leaf.session.protocol === "adb" ? "adb.filesHere" : "sftp.openHere"),
           disabled: !connected,
           onClick: () => extras.onOpenFileBrowser(leaf.paneId),
+        },
+        leaf.session.protocol === "adb" && {
+          label: t("adb.menu"),
+          children: [
+            { label: t("adb.menuMirror"), disabled: !connected, onClick: () => extras.onAdbTool?.(leaf, "mirror") },
+            { label: t("adb.menuLogcat"), onClick: () => extras.onAdbTool?.(leaf, "logcat") },
+            { label: t("adb.menuApps"), disabled: !connected, onClick: () => extras.onAdbTool?.(leaf, "apps") },
+          ],
         },
         {
           label: relayConfigured || share ? t("share.menu") : t("share.menuNoRelay"),
@@ -1710,8 +1728,32 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           </button>
         </div>
       )}
-      {(logPath || phoneSize || share) && (
+      {(logPath || phoneSize || share || adbTools) && (
         <div className="pane-badges">
+          {adbTools && (
+            <div className="adb-pane-tools" role="toolbar" aria-label={t("adb.menu")}>
+              {([
+                ["mirror", "adb.mirror", t("adb.toolMirror"), t("adb.menuMirror"), <Smartphone size={14} key="i" />],
+                ["logcat", "adb.logcat", t("adb.toolLogcat"), t("adb.menuLogcat"), <ScrollText size={14} key="i" />],
+                ["apps", "adb.apps", t("adb.toolApps"), t("adb.menuApps"), <Boxes size={14} key="i" />],
+              ] as const).map(([tool, action, label, tip, icon]) => (
+                <button
+                  key={tool}
+                  type="button"
+                  className="adb-pane-tool"
+                  title={extras.keymap[action] ? `${tip} (${extras.keymap[action]})` : tip}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    extras.onAdbTool?.(leaf, tool);
+                  }}
+                >
+                  {icon}
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {share && shareInfo && (
             <button
               type="button"

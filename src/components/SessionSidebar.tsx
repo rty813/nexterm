@@ -25,6 +25,7 @@ import { sessionTargetSummary } from "../utils/sessionSummary";
 import { useContextMenu } from "./ContextMenu";
 import { SESSION_MIME } from "./TabBar";
 import { PluginSessionSources } from "./PluginSessions";
+import { AdbDeviceSource } from "./AdbDevices";
 import { plugins } from "../plugins/platform";
 
 /** Tabs of a saved session open in this window: how many, and the best status among them. */
@@ -56,6 +57,10 @@ interface SessionSidebarProps {
   onOpenInSplit: (session: SessionConfig) => void;
   onCreateSession: () => void;
   onEditSession: (session: SessionConfig) => void;
+  /** Open the session form prefilled with `session`, as a new session (ADB devices). */
+  onNewSessionFrom?: (session: SessionConfig) => void;
+  /** Mirror the screen of a device in the ADB device list. */
+  onAdbMirror?: (serial: string, label: string) => void;
   onDuplicateSession: (session: SessionConfig) => void;
   onDeleteSession: (session: SessionConfig) => void;
   onOpenImport: () => void;
@@ -85,6 +90,8 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onOpenInSplit,
   onCreateSession,
   onEditSession,
+  onNewSessionFrom,
+  onAdbMirror,
   onDuplicateSession,
   onDeleteSession,
   onOpenImport,
@@ -352,6 +359,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         ) : (
           tree.map((node) => renderNode(node, 0))
         )}
+        <AdbDeviceSource filter={filter} sessions={sessions} onOpen={onOpenSession} onSave={(s) => (onNewSessionFrom ?? onEditSession)(s)} onMirror={onAdbMirror} />
         <PluginSessionSources filter={filter} selectedId={selectedSessionId} onSelect={onSelectSession} openState={openState} onFocus={onFocusPluginSession} />
       </div>
 

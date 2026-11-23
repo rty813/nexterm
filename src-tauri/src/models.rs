@@ -15,6 +15,8 @@ pub enum ProtocolType {
     /// Remote desktop panes (`desktop/`), not terminals.
     Rdp,
     Vnc,
+    /// Android device through the adb server (`adb/`, `adb_conn.rs`).
+    Adb,
 }
 
 impl ProtocolType {
@@ -112,9 +114,37 @@ pub struct SessionConfig {
     /// RDP / VNC display options.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<DesktopConfig>,
+    /// ADB device and view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adb: Option<AdbConfig>,
     /// Frontend-only options (terminal keys, bell, tab color, ...) kept verbatim.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// ADB session options (`SessionConfig::adb`). A WLAN device's address is `host` / `port`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AdbConfig {
+    /// Device serial on the adb server ("R5CT...", "192.168.1.5:5555"). Empty: the only
+    /// device connected, or `host:port` for WLAN.
+    #[serde(default)]
+    pub serial: String,
+    /// "usb" | "wlan" (run `adb connect host:port` first).
+    #[serde(default)]
+    pub connect: String,
+    /// "shell" (terminal) | "logcat" (log tab, `LogcatPane`).
+    #[serde(default)]
+    pub view: String,
+    /// Logcat tab state (filters, buffers): frontend only, kept verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logcat: Option<serde_json::Value>,
+}
+
+impl AdbConfig {
+    pub fn is_wlan(&self) -> bool {
+        self.connect == "wlan"
+    }
 }
 
 /// RDP / VNC session options (`SessionConfig::desktop`).

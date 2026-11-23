@@ -26,6 +26,16 @@ pub async fn sample(link: &crate::ssh_conn::SshLink) -> anyhow::Result<String> {
     link.exec_output(&script()).await
 }
 
+/// Android: the same /proc sections (toybox sh runs the script; /proc/stat is hidden from
+/// the shell user on Android 8+, then CPU shows as unavailable), plus `dumpsys battery`.
+pub async fn sample_adb(device: &crate::adb::AdbDevice) -> anyhow::Result<String> {
+    device.exec_output(&adb_script()).await
+}
+
+pub fn adb_script() -> String {
+    script().replace("echo \"@@end\"", "echo \"@@battery\"; dumpsys battery 2>/dev/null\necho \"@@end\"")
+}
+
 /// The script with LF line endings (a CRLF checkout must not send CRs to the remote sh).
 pub fn script() -> String {
     SCRIPT.replace('\r', "")
@@ -40,5 +50,13 @@ mod tests {
         for s in ["@@cpu", "@@mem", "@@load", "@@net", "@@uptime", "@@df", "@@end", "@@unsupported"] {
             assert!(super::SCRIPT.contains(s), "{s}");
         }
+    }
+
+    #[test]
+    fn adb_script_adds_battery_before_end() {
+        let s = super::adb_script();
+        let battery = s.find("@@battery").expect("battery section");
+        assert!(battery < s.find("echo \"@@end\"").unwrap());
+        assert!(!s.contains('\r'));
     }
 }
