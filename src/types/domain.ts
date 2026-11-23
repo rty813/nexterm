@@ -370,6 +370,8 @@ export interface AppSettings {
 
   /** Ask before closing a tab with a live connection (terminal.askBeforeCloseTab). */
   askBeforeCloseTab?: boolean;
+  /** Closing the main window: ask, hide to the tray, or quit (see utils/closeAction.ts). */
+  closeAction?: "ask" | "tray" | "quit";
   /** Ask before quitting / closing the main window with sessions open (terminal.askBeforeCloseWindow). */
   askBeforeCloseWindow?: boolean;
   /** Confirm pasting multi-line text (terminal.screen.pasteDialog). */

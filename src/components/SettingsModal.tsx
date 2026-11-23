@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { backend } from "../services/backend";
 import { Globe, Keyboard, Monitor, Mouse, Palette, PanelTop, Puzzle, RefreshCw, ScrollText, Search, Settings2, TerminalSquare, X, Zap } from "lucide-react";
 import { findSettingElement, searchSettings, type SettingsSearchHit } from "../utils/settingsSearch";
+import { closeActionOf, withCloseAction, type CloseAction } from "../utils/closeAction";
 import type { AppSettings, HttpProxyMode, HttpProxySettings, SessionConfig, SyncCategory, ThemeDefinition, UpdateInfo } from "../types/domain";
 import { LogTransferSettings, MouseSettingsEditor, TerminalSettings, XServerSettingsEditor } from "./SettingsTerminal";
 
@@ -567,13 +568,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
           <p className="adv-hint">{t("agent.hint")}</p>
 
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={draft.closeToTray !== false}
-              onChange={(e) => setDraft({ ...draft, closeToTray: e.target.checked })}
-            />
-            <span>{t("settingsModal.closeToTray")}</span>
+          <label className="field">
+            <span>{t("settingsModal.closeAction")}</span>
+            <select
+              className="text-input"
+              value={closeActionOf(draft)}
+              onChange={(e) => setDraft(withCloseAction(draft, e.target.value as CloseAction))}
+            >
+              <option value="ask">{t("settingsModal.closeAsk")}</option>
+              <option value="tray">{t("settingsModal.closeTray")}</option>
+              <option value="quit">{t("settingsModal.closeQuit")}</option>
+            </select>
           </label>
 
           <h4 className="section-heading">{t("update.section")}</h4>

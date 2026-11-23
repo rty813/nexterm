@@ -1678,6 +1678,18 @@ export const backend = {
     return getCurrentWindow().listen<number>("confirm-quit", (e) => handler(e.payload));
   },
 
+  /** Closing the main window with `closeAction: "ask"`: the page asks tray or quit. */
+  async onCloseChoice(handler: () => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return getCurrentWindow().listen("close-choice", () => handler());
+  },
+
+  /** Answer to `close-choice`: hide to the tray, or quit (still asks about open sessions). */
+  async closeMainWindow(toTray: boolean): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("close_main_window", { toTray });
+  },
+
   async stopSessionLog(instanceId: string): Promise<void> {
     if (!isTauriRuntime()) return;
     await invoke("stop_session_log", { instanceId });

@@ -53,7 +53,7 @@ pub mod zmodem;
 use crate::serial_conn::list_serial_ports as windterm_serial_ports;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -72,8 +72,8 @@ use crate::storage::Storage;
 pub struct AppContext {
     pub storage: Mutex<Storage>,
     pub connections: ConnectionManager,
-    /// Mirrors AppSettings.close_to_tray for the window close handler.
-    pub close_to_tray: AtomicBool,
+    /// What closing the main window does (CLOSE_ASK / CLOSE_TRAY / CLOSE_QUIT).
+    pub close_action: AtomicU8,
     /// Mirrors AppSettings.askBeforeCloseWindow: confirm quitting while sessions are open.
     pub ask_before_quit: AtomicBool,
     /// Set once the user confirmed quitting.
@@ -98,6 +98,22 @@ fn log_dir(settings: &AppSettings) -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("Nexterm")
             .join("logs"),
+    }
+}
+
+const CLOSE_ASK: u8 = 0;
+const CLOSE_TRAY: u8 = 1;
+const CLOSE_QUIT: u8 = 2;
+
+/// `extra.closeAction` ("ask" / "tray" / "quit"). Older settings only have `closeToTray`:
+/// off keeps quitting, on (the old default) asks. Mirrors `utils/closeAction.ts`.
+fn close_action(settings: &AppSettings) -> u8 {
+    match settings.extra.get("closeAction").and_then(|v| v.as_str()) {
+        Some("tray") => CLOSE_TRAY,
+        Some("quit") => CLOSE_QUIT,
+        Some("ask") => CLOSE_ASK,
+        _ if !settings.close_to_tray => CLOSE_QUIT,
+        _ => CLOSE_ASK,
     }
 }
 
@@ -242,7 +258,7 @@ fn save_settings(ctx: State<'_, AppContext>, settings: AppSettings) -> Result<()
 
 /// Push saved settings into the backend's running parts.
 fn apply_settings_effects(ctx: &AppContext, settings: &AppSettings) {
-    ctx.close_to_tray.store(settings.close_to_tray, Ordering::Relaxed);
+    ctx.close_action.store(close_action(settings), Ordering::Relaxed);
     ctx.ask_before_quit
         .store(extra_bool(&settings, "askBeforeCloseWindow", true), Ordering::Relaxed);
     crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
@@ -850,6 +866,19 @@ fn request_quit(app: &AppHandle) {
             let _ = win.set_focus();
             let _ = win.emit("quit-blocked", count);
         }
+    }
+}
+
+/// The answer to `close-choice`: hide the main window to the tray, or quit (which still
+/// asks about open / locked sessions).
+#[tauri::command]
+fn close_main_window(app: AppHandle, to_tray: bool) {
+    if to_tray {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.hide();
+        }
+    } else {
+        request_quit(&app);
     }
 }
 
@@ -1730,7 +1759,7 @@ pub fn run() {
             app.manage(AppContext {
                 storage: Mutex::new(storage),
                 connections: ConnectionManager::new(),
-                close_to_tray: AtomicBool::new(settings.close_to_tray),
+                close_action: AtomicU8::new(close_action(&settings)),
                 ask_before_quit: AtomicBool::new(extra_bool(&settings, "askBeforeCloseWindow", true)),
                 quit_confirmed: AtomicBool::new(false),
             });
@@ -1793,13 +1822,23 @@ pub fn run() {
                     let _ = window.hide();
                     return;
                 }
-                let to_tray = label == "main"
-                    && window
+                let action = if label == "main" {
+                    window
                         .app_handle()
                         .try_state::<AppContext>()
-                        .map(|ctx| ctx.close_to_tray.load(Ordering::Relaxed))
-                        .unwrap_or(false);
-                if to_tray {
+                        .map(|ctx| ctx.close_action.load(Ordering::Relaxed))
+                        .unwrap_or(CLOSE_QUIT)
+                } else {
+                    CLOSE_QUIT
+                };
+                if action == CLOSE_ASK {
+                    // The page asks: hide to the tray or quit (close_main_window).
+                    use tauri::Emitter;
+                    api.prevent_close();
+                    let _ = window.emit("close-choice", ());
+                    return;
+                }
+                if action == CLOSE_TRAY {
                     // Keep every SSH / serial / shell connection alive in the background.
                     api.prevent_close();
                     let _ = window.hide();
@@ -1857,6 +1896,7 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            close_main_window,
             set_window_background,
             plugin_http::plugin_grant,
             plugin_http::plugin_allow_origin,
@@ -2010,4 +2050,31 @@ pub fn run() {
                 crate::history::shutdown();
             }
         });
+}
+
+#[cfg(test)]
+mod close_action_tests {
+    use super::*;
+
+    fn with(close_to_tray: bool, action: Option<&str>) -> AppSettings {
+        let mut s = AppSettings { close_to_tray, ..Default::default() };
+        if let Some(a) = action {
+            s.extra.insert("closeAction".into(), serde_json::Value::String(a.into()));
+        }
+        s
+    }
+
+    #[test]
+    fn explicit_choice_wins() {
+        assert_eq!(close_action(&with(false, Some("tray"))), CLOSE_TRAY);
+        assert_eq!(close_action(&with(true, Some("quit"))), CLOSE_QUIT);
+        assert_eq!(close_action(&with(false, Some("ask"))), CLOSE_ASK);
+    }
+
+    #[test]
+    fn old_settings_fall_back_to_close_to_tray() {
+        assert_eq!(close_action(&with(true, None)), CLOSE_ASK);
+        assert_eq!(close_action(&with(false, None)), CLOSE_QUIT);
+        assert_eq!(close_action(&with(false, Some("bogus"))), CLOSE_QUIT);
+    }
 }

@@ -70,6 +70,7 @@ import type { RunningCommand } from "./utils/runningCommand";
 import { useAgentHooks } from "./hooks/useAgentHooks";
 import { compactMenu, ContextMenuProvider, type MenuItem } from "./components/ContextMenu";
 import { HostKeyDialog, ZmodemDialog } from "./components/TransferDialogs";
+import { withCloseAction } from "./utils/closeAction";
 import { ConfirmDialog, PasteDialog, type ConfirmAnswer, type ConfirmRequest } from "./components/ConfirmDialog";
 import { StorageLocationPrompt } from "./components/StorageLocation";
 import type { HighlightRule, StorageLocationInfo } from "./types/domain";
@@ -389,6 +390,26 @@ export const App: React.FC = () => {
       if (a.checked) saveSettings({ ...settingsRef.current, askBeforeCloseWindow: false });
       commandHistory.flush();
       await backend.quitApp(true);
+    });
+    return () => void un.then((f) => f());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Closing the main window with closeAction "ask": hide to the tray or quit.
+  useEffect(() => {
+    const un = backend.onCloseChoice(async () => {
+      const a = await ask({
+        title: t("confirm.closeWindowTitle"),
+        message: t("confirm.closeWindowMsg"),
+        okLabel: t("confirm.toTray"),
+        extraLabel: t("confirm.quit"),
+        checkboxLabel: t("confirm.rememberChoice"),
+      });
+      if (!a.ok) return;
+      const toTray = !a.extra;
+      if (a.checked) saveSettings(withCloseAction(settingsRef.current, toTray ? "tray" : "quit"));
+      if (!toTray) commandHistory.flush();
+      await backend.closeMainWindow(toTray);
     });
     return () => void un.then((f) => f());
     // eslint-disable-next-line react-hooks/exhaustive-deps

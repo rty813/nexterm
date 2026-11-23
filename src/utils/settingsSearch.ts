@@ -55,7 +55,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     "tabbar.shellIntegration",
     "agent.screenDetect",
     "agent.notifySetting",
-    "settingsModal.closeToTray",
+    "settingsModal.closeAction",
     "update.section",
     "update.checkAtStartup",
     "httpProxy.section",

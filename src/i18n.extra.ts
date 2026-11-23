@@ -842,6 +842,10 @@ export const extraResources = {
       closeTabMany: "{{count}} 个会话仍在连接中，关闭会断开它们。确定关闭吗？",
       quitTitle: "退出 Nexterm",
       quitMsg: "还有 {{count}} 个会话打开着，退出会全部断开。确定退出吗？",
+      closeWindowTitle: "关闭 Nexterm",
+      closeWindowMsg: "最小化到系统托盘（连接保持在后台运行），还是退出 Nexterm？",
+      toTray: "最小化到托盘",
+      rememberChoice: "记住我的选择（可在设置中修改）",
     },
     paste: {
       title: "粘贴 {{lines}} 行文本",
@@ -1347,6 +1351,10 @@ export const extraResources = {
       closeTabMany: "{{count}} sessions are still connected. Closing disconnects them. Close them?",
       quitTitle: "Quit Nexterm",
       quitMsg: "{{count}} sessions are open and will be disconnected. Quit?",
+      closeWindowTitle: "Close Nexterm",
+      closeWindowMsg: "Minimize to the system tray (connections keep running), or quit Nexterm?",
+      toTray: "Minimize to Tray",
+      rememberChoice: "Remember my choice (can be changed in Settings)",
     },
     paste: {
       title: "Paste {{lines}} Lines",
