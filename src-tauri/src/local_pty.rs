@@ -11,6 +11,88 @@ use crate::manager::{ControlMsg, RuntimeControl, TerminalSink};
 use crate::models::{ProtocolType, SessionConfig};
 use crate::shell_integration::{Injector, Step};
 
+/// Settings › "conpty": which ConPTY local terminals use. Read once, when the first
+/// local terminal opens; a change applies after a restart.
+static CONPTY_MODE: Mutex<String> = Mutex::new(String::new());
+
+pub fn set_conpty_mode(mode: &str) {
+    *CONPTY_MODE.lock().unwrap() = mode.to_string();
+}
+
+/// First Windows build whose inbox ConPTY is the rewritten one (Windows 11 24H2). On
+/// build 28000 the system ConPTY measured faster than the bundled one (conpty_bench).
+const NEW_INBOX_CONPTY_BUILD: u32 = 26100;
+
+/// "bundled" / "system"; anything else is "auto": the bundled one on older Windows.
+fn use_bundled_conpty(mode: &str, build: Option<u32>) -> bool {
+    match mode {
+        "bundled" => true,
+        "system" => false,
+        _ => build.map_or(true, |b| b < NEW_INBOX_CONPTY_BUILD),
+    }
+}
+
+/// CurrentBuildNumber from the registry (GetVersionEx reports 6.2 without a manifest).
+fn windows_build() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+        let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let key = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+        let name = wide("CurrentBuildNumber");
+        let mut buf = [0u16; 32];
+        let mut len = (buf.len() * 2) as u32;
+        let rc = unsafe {
+            RegGetValueW(HKEY_LOCAL_MACHINE, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut len)
+        };
+        if rc != 0 {
+            return None;
+        }
+        let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..n]).trim().parse().ok()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Loads the bundled ConPTY (resources/conpty: Microsoft.Windows.Console.ConPTY, the
+/// conpty.dll + OpenConsole.exe that Windows Terminal ships) before the first pseudo
+/// console is created, when Settings › "conpty" picks it. The inbox conhost of
+/// Windows 10 / early 11 renders slowly and drops sequences it doesn't know.
+/// portable-pty prefers a `conpty.dll` that loads by name, and a module already loaded
+/// is found by its name, so loading it once by full path is enough. conpty.dll starts
+/// `<arch>\OpenConsole.exe` from its own folder. Missing or failing to load (e.g. an
+/// ARM64 build, the DLL is x64): the system ConPTY is used.
+pub fn preload_bundled_conpty() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let mode = CONPTY_MODE.lock().unwrap().clone();
+        if use_bundled_conpty(&mode, windows_build()) {
+            load_conpty_dll(&crate::app_paths::resource("conpty").join("conpty.dll"));
+        }
+    });
+}
+
+fn load_conpty_dll(dll: &std::path::Path) {
+    if !dll.is_file() {
+        eprintln!("bundled ConPTY not found at {}, using the system one", dll.display());
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = dll.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        // Stays loaded for the life of the process (portable-pty keeps function
+        // pointers into it).
+        let module = unsafe { windows_sys::Win32::System::LibraryLoader::LoadLibraryW(wide.as_ptr()) };
+        if module == 0 {
+            eprintln!("loading {} failed ({}), using the system ConPTY", dll.display(), std::io::Error::last_os_error());
+        }
+    }
+}
+
 pub fn spawn_local_pty(
     instance_id: String,
     session: SessionConfig,
@@ -18,6 +100,7 @@ pub fn spawn_local_pty(
     rows: u16,
     sink: Arc<dyn TerminalSink>,
 ) -> Result<RuntimeControl> {
+    preload_bundled_conpty();
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -454,5 +537,76 @@ mod powershell_integration {
         for mark in [format!("{e}]633;E;Write-Output hi"), format!("{e}]133;C{b}"), format!("{e}]133;D;3{b}")] {
             assert!(text.contains(&mark), "missing {mark:?} in {text:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod conpty_bench {
+    /// Output throughput of the bundled vs the system ConPTY (Windows, run each mode in
+    /// its own process, the choice is made once):
+    /// `cargo test --lib conpty_bench -- --ignored --nocapture` and the same with
+    /// `NEXTERM_SYSTEM_CONPTY=1`.
+    #[test]
+    #[ignore]
+    fn cat_large_file() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::Read;
+        let system = std::env::var_os("NEXTERM_SYSTEM_CONPTY").is_some();
+        if !system {
+            super::load_conpty_dll(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/conpty/conpty.dll"));
+        }
+        let file = std::env::temp_dir().join("nexterm-conpty-bench.txt");
+        let line = "The quick brown fox \x1b[31mjumps\x1b[0m over the lazy dog 0123456789 abcdefghijklmnopqrstuvwxyz\r\n";
+        let line = if std::env::var_os("NEXTERM_BENCH_PLAIN").is_some() { line.replace("\x1b[31m", "").replace("\x1b[0m", "") } else { line.to_string() };
+        std::fs::write(&file, line.repeat(200_000)).unwrap();
+        let pair = native_pty_system().openpty(PtySize { rows: 40, cols: 160, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut c = CommandBuilder::new("cmd.exe");
+        c.args(["/c", "type", file.to_str().unwrap()]);
+        let start = std::time::Instant::now();
+        let mut child = pair.slave.spawn_command(c).unwrap();
+        drop(pair.slave);
+        let mut r = pair.master.try_clone_reader().unwrap();
+        let mut w = pair.master.take_writer().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || { let mut b = vec![0u8; 64 * 1024]; while let Ok(n) = r.read(&mut b) { if n == 0 || tx.send(b[..n].to_vec()).is_err() { break; } } });
+        let mut total = 0usize;
+        let mut exited = None;
+        while let Ok(chunk) = rx.recv_timeout(std::time::Duration::from_millis(if exited.is_some() { 300 } else { 5000 })) {
+            // ConPTY asks for the cursor position before it starts (INHERIT_CURSOR).
+            if chunk.windows(4).any(|x| x == b"\x1b[6n") { let _ = std::io::Write::write_all(&mut w, b"\x1b[1;1R"); }
+            total += chunk.len();
+            if exited.is_none() && child.try_wait().ok().flatten().is_some() { exited = Some(start.elapsed()); }
+        }
+        let elapsed = exited.unwrap_or_else(|| start.elapsed());
+        let _ = child.kill();
+        let _ = std::fs::remove_file(&file);
+        eprintln!("{} ConPTY: {} bytes out in {:?} ({:.1} MB/s)", if system { "system" } else { "bundled" }, total, elapsed, total as f64 / 1e6 / elapsed.as_secs_f64());
+        assert!(total > 0);
+    }
+}
+
+#[cfg(test)]
+mod conpty_choice {
+    use super::*;
+
+    #[test]
+    fn explicit_modes_win() {
+        assert!(use_bundled_conpty("bundled", Some(28000)));
+        assert!(!use_bundled_conpty("system", Some(19045)));
+    }
+
+    #[test]
+    fn auto_uses_bundled_only_before_the_new_inbox_conpty() {
+        assert!(use_bundled_conpty("auto", Some(19045)));
+        assert!(use_bundled_conpty("", Some(22631)));
+        assert!(!use_bundled_conpty("auto", Some(26100)));
+        assert!(!use_bundled_conpty("", Some(28000)));
+        assert!(use_bundled_conpty("auto", None));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reads_the_windows_build() {
+        assert!(windows_build().is_some_and(|b| b >= 10240));
     }
 }

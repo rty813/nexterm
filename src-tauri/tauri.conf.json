@@ -42,7 +42,8 @@
     ],
     "resources": {
       "resources/vcxsrv/": "vcxsrv/",
-      "resources/commands/": "commands/"
+      "resources/commands/": "commands/",
+      "resources/conpty/": "conpty/"
     }
   }
 }
