@@ -320,6 +320,14 @@ impl SshShared {
         Ok(ch)
     }
 
+    /// A `direct-tcpip` channel to `host:port` as seen from the server (`ssh -L`).
+    pub async fn open_direct(&self, host: &str, port: u16) -> Result<russh::Channel<client::Msg>> {
+        self.handle
+            .channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
+            .await
+            .with_context(|| format!("SSH 服务器拒绝转发到 {}:{}", host, port))
+    }
+
     /// Run a POSIX sh script on an exec channel and return its stdout.
     pub async fn exec_output(&self, command: &str) -> Result<String> {
         run_exec(&self.handle, command).await

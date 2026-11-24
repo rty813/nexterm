@@ -17,7 +17,7 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { adb, DEFAULT_MIRROR } from "../services/adb";
+import { adb, mirrorOptions, type MirrorQuality } from "../services/adb";
 import { backend } from "../services/backend";
 import type { MirrorInput, MirrorRecordResult } from "../types/domain";
 import { KEYCODE, avcCodecString, fitBox, joinBytes, keycodeFor, metaState, parseMirrorPacket, textFor, toDevice } from "../utils/adbScreen";
@@ -28,6 +28,8 @@ interface Target {
   paneId: string;
   title: string;
   summary: string;
+  /** Reached through an SSH pane (a remote host): starts at low quality. */
+  remote?: boolean;
 }
 
 type Phase = { kind: "starting" } | { kind: "running" } | { kind: "error"; message: string } | { kind: "unsupported" };
@@ -59,6 +61,9 @@ export const AdbScreenPanel: React.FC<{
   const recordingRef = useRef(recording);
   recordingRef.current = recording;
   const [, setTick] = useState(0);
+  // Quality per target (paneId), remembered for this panel; remote devices start low.
+  const [qualities, setQualities] = useState<Record<string, MirrorQuality>>({});
+  const quality: MirrorQuality = current ? (qualities[current.paneId] ?? (current.remote ? "low" : "high")) : "high";
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const areaRef = useRef<HTMLDivElement>(null);
@@ -135,7 +140,7 @@ export const AdbScreenPanel: React.FC<{
     };
 
     void adb
-      .mirrorStart(id, targetOf(current), DEFAULT_MIRROR, onPacket)
+      .mirrorStart(id, targetOf(current), mirrorOptions(quality), onPacket)
       .then((info) => {
         if (disposed) return;
         setDeviceName(info.deviceName);
@@ -175,7 +180,7 @@ export const AdbScreenPanel: React.FC<{
       if (decoder.state !== "closed") decoder.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.paneId]);
+  }, [current?.paneId, quality]);
 
   // ---- layout
   useEffect(() => {
@@ -343,8 +348,8 @@ export const AdbScreenPanel: React.FC<{
           <X size={13} />
         </button>
       </div>
-      {targets.length > 1 && (
-        <div className="mirror-target">
+      <div className="mirror-target">
+        {targets.length > 1 && (
           <select className="text-input input-sm" value={paneId} onChange={(e) => onPane(e.target.value)}>
             {targets.map((x) => (
               <option key={x.paneId} value={x.paneId}>
@@ -352,8 +357,21 @@ export const AdbScreenPanel: React.FC<{
               </option>
             ))}
           </select>
-        </div>
-      )}
+        )}
+        <select
+          className="text-input input-sm mirror-quality"
+          value={quality}
+          title={t("mirror.quality")}
+          disabled={!current}
+          onChange={(e) => current && setQualities((q) => ({ ...q, [current.paneId]: e.target.value as MirrorQuality }))}
+        >
+          {(["high", "medium", "low"] as const).map((q) => (
+            <option key={q} value={q}>
+              {t(`mirror.qualities.${q}`)}
+            </option>
+          ))}
+        </select>
+      </div>
       <div
         ref={areaRef}
         className="mirror-area"

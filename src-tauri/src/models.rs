@@ -136,6 +136,10 @@ pub struct AdbConfig {
     /// "shell" (terminal) | "logcat" (log tab, `LogcatPane`).
     #[serde(default)]
     pub view: String,
+    /// The SSH pane (its id) whose host runs the adb server, for devices plugged into a
+    /// remote Linux machine (bastion panes included). Empty: this computer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
     /// Logcat tab state (filters, buffers): frontend only, kept verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logcat: Option<serde_json::Value>,

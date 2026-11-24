@@ -89,7 +89,9 @@ import { installTriggerLinks } from "../utils/triggerLinks";
 import { runTriggerScript } from "../services/triggerScript";
 import { ambiguousIsWide, WIDE_AMBIGUOUS_VERSION } from "../utils/ambiguousWidth";
 import { registerUnicodeWidths } from "../services/unicodeWidth";
-import type { QuickCommand } from "../types/domain";
+import type { AdbDeviceInfo, QuickCommand } from "../types/domain";
+import { adb } from "../services/adb";
+import { adbDeviceLabel } from "../utils/adbSession";
 
 /** Serializers of mounted terminals, used to carry scrollback when a tab moves to another window. */
 const serializers = new Map<string, () => string>();
@@ -190,6 +192,8 @@ export interface PaneExtras {
   onLogcatPrefs?: (paneId: string, prefs: LogcatPrefs) => void;
   /** ADB pane tools: screen mirror, apps / processes, logcat tab. */
   onAdbTool?: (leaf: TerminalLeafNode, tool: "mirror" | "apps" | "logcat" | "files") => void;
+  /** SSH panes: open a device of that host's adb server (an ADB tab through this pane). */
+  onRemoteAdb?: (leaf: TerminalLeafNode, device: AdbDeviceInfo) => void;
   /** Paste into a pane, through the multi-line paste confirmation. */
   onPasteRequest: (paneId: string, text: string, altScreen: boolean, paste: (text: string) => void) => void;
   /** Ask whether the remote program may read / write the clipboard (OSC 52). */
@@ -1247,6 +1251,28 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const syncPausedHere = Boolean(syncBadge) && (extras.syncPaused || pausedOnItsOwn);
   const inChannel = extras.syncScope === "channels" && Boolean(channel);
 
+  /** "Android devices on this host": the host's adb server over this SSH connection. */
+  const remoteAdbMenu = async (at: { clientX: number; clientY: number }) => {
+    extras.onToast(t("adb.remoteLoading"));
+    let list: AdbDeviceInfo[];
+    try {
+      list = await adb.devices(leaf.paneId);
+    } catch (err) {
+      extras.onToast(String(err));
+      return;
+    }
+    const ready = list.filter((d) => d.state === "device");
+    if (ready.length === 1) return extras.onRemoteAdb?.(leaf, ready[0]);
+    const items: MenuItem[] = list.length
+      ? list.map((d) => ({
+          label: `${adbDeviceLabel(d)}  ${d.serial}${d.state === "device" ? "" : ` (${d.state})`}`,
+          disabled: d.state !== "device",
+          onClick: () => extras.onRemoteAdb?.(leaf, d),
+        }))
+      : [{ label: t("adb.remoteNone"), disabled: true, onClick: () => {} }];
+    openMenu(at, items);
+  };
+
   const showPaneMenu = async (e: React.MouseEvent) => {
     const term = xtermRef.current;
     if (!term) return;
@@ -1498,6 +1524,12 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           disabled: !connected,
           onClick: () => extras.onOpenFileBrowser(leaf.paneId),
         },
+        leaf.session.protocol === "ssh" &&
+          Boolean(extras.onRemoteAdb) && {
+            label: t("adb.remoteMenu"),
+            disabled: !connected,
+            onClick: () => void remoteAdbMenu({ clientX: e.clientX, clientY: e.clientY }),
+          },
         leaf.session.protocol === "adb" && {
           label: t("adb.menu"),
           children: [

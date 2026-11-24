@@ -15,14 +15,19 @@ fn err(e: anyhow::Error) -> String {
     format!("{:#}", e)
 }
 
+/// The adb server: this computer, or the host of SSH pane `via`.
+fn route_of(via: Option<&str>) -> Result<super::route::Route, String> {
+    super::route::for_via(via).map_err(err)
+}
+
 /// The device of a connected ADB pane, or a serial given directly (sidebar device list,
 /// session form).
-async fn device_of(ctx: &AppContext, instance_id: Option<&str>, serial: Option<&str>) -> Result<AdbDevice, String> {
+async fn device_of(ctx: &AppContext, instance_id: Option<&str>, serial: Option<&str>, via: Option<&str>) -> Result<AdbDevice, String> {
     if let Some(id) = instance_id.filter(|s| !s.is_empty()) {
         return ctx.connections.adb_device(id).map_err(err);
     }
     match serial.filter(|s| !s.is_empty()) {
-        Some(s) => Ok(AdbDevice::new(s)),
+        Some(s) => Ok(AdbDevice::on(route_of(via)?, s)),
         None => Err("没有指定设备".into()),
     }
 }
@@ -44,8 +49,8 @@ pub async fn adb_download(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn adb_devices() -> Result<Vec<client::DeviceInfo>, String> {
-    client::devices().await.map_err(err)
+pub async fn adb_devices(via: Option<String>) -> Result<Vec<client::DeviceInfo>, String> {
+    client::devices(&route_of(via.as_deref())?).await.map_err(err)
 }
 
 /// Device list updates as `adb-devices` events (the adb server pushes them). One watcher
@@ -56,7 +61,7 @@ pub fn adb_watch_devices(app: AppHandle) {
     if WATCHING.swap(true, Ordering::SeqCst) {
         // Already running: send the current list to the caller's window right away.
         tauri::async_runtime::spawn(async move {
-            if let Ok(list) = client::devices().await {
+            if let Ok(list) = client::devices(&super::route::Route::Local).await {
                 let _ = app.emit("adb-devices", list);
             }
         });
@@ -81,31 +86,31 @@ pub fn adb_watch_devices(app: AppHandle) {
 }
 
 #[tauri::command]
-pub async fn adb_start_server() -> Result<u32, String> {
-    client::version().await.map_err(err)
+pub async fn adb_start_server(via: Option<String>) -> Result<u32, String> {
+    client::version(&route_of(via.as_deref())?).await.map_err(err)
 }
 
 #[tauri::command]
-pub async fn adb_connect(addr: String) -> Result<String, String> {
-    client::connect_network(addr.trim()).await.map_err(err)
+pub async fn adb_connect(addr: String, via: Option<String>) -> Result<String, String> {
+    client::connect_network(&route_of(via.as_deref())?, addr.trim()).await.map_err(err)
 }
 
 #[tauri::command]
-pub async fn adb_disconnect(addr: String) -> Result<String, String> {
-    client::disconnect_network(addr.trim()).await.map_err(err)
+pub async fn adb_disconnect(addr: String, via: Option<String>) -> Result<String, String> {
+    client::disconnect_network(&route_of(via.as_deref())?, addr.trim()).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn adb_pair(addr: String, code: String) -> Result<String, String> {
     // pair needs a running server too.
-    client::version().await.map_err(err)?;
+    client::version(&super::route::Route::Local).await.map_err(err)?;
     locate::pair(&addr, &code).await.map_err(err)
 }
 
 /// Switch a USB device to WLAN debugging (`adb tcpip 5555`) and return its Wi-Fi address.
 #[tauri::command]
-pub async fn adb_enable_wlan(serial: String, port: Option<u16>) -> Result<String, String> {
-    let device = AdbDevice::new(serial.trim());
+pub async fn adb_enable_wlan(serial: String, port: Option<u16>, via: Option<String>) -> Result<String, String> {
+    let device = AdbDevice::on(route_of(via.as_deref())?, serial.trim());
     let port = port.unwrap_or(5555);
     let ip = device
         .exec_output("ip -f inet addr show wlan0 2>/dev/null | grep -o 'inet [0-9.]*' | head -n1 | cut -d' ' -f2")
@@ -122,8 +127,8 @@ pub async fn adb_enable_wlan(serial: String, port: Option<u16>) -> Result<String
 }
 
 #[tauri::command]
-pub async fn adb_props(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>) -> Result<ops::DeviceProps, String> {
-    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref()).await?;
+pub async fn adb_props(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>, via: Option<String>) -> Result<ops::DeviceProps, String> {
+    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref(), via.as_deref()).await?;
     ops::props(&d).await.map_err(err)
 }
 
@@ -131,44 +136,44 @@ pub async fn adb_props(ctx: State<'_, AppContext>, instance_id: Option<String>, 
 // Apps / processes
 
 #[tauri::command]
-pub async fn adb_apps(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>, versions: bool) -> Result<Vec<ops::AppInfo>, String> {
-    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref()).await?;
+pub async fn adb_apps(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>, via: Option<String>, versions: bool) -> Result<Vec<ops::AppInfo>, String> {
+    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref(), via.as_deref()).await?;
     ops::apps(&d, versions).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn adb_app_action(ctx: State<'_, AppContext>, instance_id: String, package: String, action: ops::AppAction) -> Result<String, String> {
-    let d = device_of(&ctx, Some(&instance_id), None).await?;
+    let d = device_of(&ctx, Some(&instance_id), None, None).await?;
     ops::app_action(&d, &package, action).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn adb_install(ctx: State<'_, AppContext>, instance_id: String, path: String) -> Result<String, String> {
-    let d = device_of(&ctx, Some(&instance_id), None).await?;
+    let d = device_of(&ctx, Some(&instance_id), None, None).await?;
     ops::install(&d, &PathBuf::from(path)).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn adb_export_apk(ctx: State<'_, AppContext>, instance_id: String, package: String, dir: String) -> Result<Vec<String>, String> {
-    let d = device_of(&ctx, Some(&instance_id), None).await?;
+    let d = device_of(&ctx, Some(&instance_id), None, None).await?;
     ops::export_apk(&d, &package, &PathBuf::from(dir)).await.map_err(err)
 }
 
 #[tauri::command]
-pub async fn adb_foreground(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>) -> Result<Option<String>, String> {
-    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref()).await?;
+pub async fn adb_foreground(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>, via: Option<String>) -> Result<Option<String>, String> {
+    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref(), via.as_deref()).await?;
     ops::foreground(&d).await.map_err(err)
 }
 
 #[tauri::command]
-pub async fn adb_processes(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>) -> Result<Vec<ops::ProcessInfo>, String> {
-    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref()).await?;
+pub async fn adb_processes(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>, via: Option<String>) -> Result<Vec<ops::ProcessInfo>, String> {
+    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref(), via.as_deref()).await?;
     ops::processes(&d).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn adb_kill(ctx: State<'_, AppContext>, instance_id: String, pids: Vec<u32>, signal: Option<u8>) -> Result<(), String> {
-    let d = device_of(&ctx, Some(&instance_id), None).await?;
+    let d = device_of(&ctx, Some(&instance_id), None, None).await?;
     ops::kill(&d, &pids, signal.unwrap_or(15)).await.map_err(err)
 }
 
@@ -218,10 +223,11 @@ pub async fn adb_mirror_start(
     mirror_id: String,
     instance_id: Option<String>,
     serial: Option<String>,
+    via: Option<String>,
     options: scrcpy::MirrorOptions,
     channel: Channel<InvokeResponseBody>,
 ) -> Result<scrcpy::MirrorInfo, String> {
-    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref()).await?;
+    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref(), via.as_deref()).await?;
     scrcpy::start(app, mirror_id, d, options, channel).await.map_err(err)
 }
 
@@ -253,8 +259,8 @@ pub fn adb_mirror_record_stop(mirror_id: String) -> Result<scrcpy::RecordResult,
 
 /// A PNG of the device screen (`screencap -p`), saved to `path`.
 #[tauri::command]
-pub async fn adb_screenshot(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>, path: String) -> Result<(), String> {
-    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref()).await?;
+pub async fn adb_screenshot(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>, via: Option<String>, path: String) -> Result<(), String> {
+    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref(), via.as_deref()).await?;
     let r = super::shell::exec(&d, "screencap -p", std::time::Duration::from_secs(20)).await.map_err(err)?;
     if r.stdout.len() < 8 || &r.stdout[..4] != b"\x89PNG" {
         return Err(format!("截图失败：{}", String::from_utf8_lossy(&r.stderr).trim()));

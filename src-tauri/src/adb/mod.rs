@@ -11,6 +11,7 @@ pub mod locate;
 pub mod logcat;
 pub mod mp4;
 pub mod ops;
+pub mod route;
 pub mod scrcpy;
 pub mod shell;
 pub mod sync;
@@ -25,22 +26,29 @@ pub use client::DeviceInfo;
 /// The server we talk to. adb listens on loopback only.
 pub const SERVER: (&str, u16) = ("127.0.0.1", 5037);
 
-/// One device on the adb server: its serial ("R5CT..." over USB, "192.168.1.5:5555" over
-/// WLAN). Cheap to clone; every operation opens its own socket.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// One device on an adb server: its serial ("R5CT..." over USB, "192.168.1.5:5555" over
+/// WLAN), and where that server is (this computer, or a host behind an SSH pane). Cheap to
+/// clone; every operation opens its own socket.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdbDevice {
     pub serial: String,
+    #[serde(skip)]
+    pub route: route::Route,
 }
 
 impl AdbDevice {
     pub fn new(serial: impl Into<String>) -> Self {
-        AdbDevice { serial: serial.into() }
+        AdbDevice { serial: serial.into(), route: route::Route::Local }
+    }
+
+    pub fn on(route: route::Route, serial: impl Into<String>) -> Self {
+        AdbDevice { serial: serial.into(), route }
     }
 
     /// A stream to `service` on the device (`shell,v2,pty:`, `sync:`, `localabstract:x`).
     pub async fn open(&self, service: &str) -> Result<crate::net::BoxedStream> {
-        client::open_device(&self.serial, service).await
+        client::open_device(&self.route, &self.serial, service).await
     }
 
     /// Run a shell command and return its stdout; a non-zero exit is an error carrying

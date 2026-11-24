@@ -107,9 +107,10 @@ export const LogcatPane: React.FC<LogcatPaneProps> = ({ leaf, visible, isActive,
     { packages: [], running: new Set(), foreground: null, processes: [] }
   );
   const loadedAt = useRef({ apps: 0, live: 0 });
+  const via = leaf.session.adb?.via ?? null;
   const serialOf = async () => {
     const s = adbSerialOf(leaf.session);
-    return s || ((await adb.devices()).find((d) => d.state === "device")?.serial ?? "");
+    return s || ((await adb.devices(via)).find((d) => d.state === "device")?.serial ?? "");
   };
   /** Apps (with uids) once; processes and the foreground app again after 10 s. */
   const loadDevice = useCallback(async () => {
@@ -124,9 +125,9 @@ export const LogcatPane: React.FC<LogcatPaneProps> = ({ leaf, visible, isActive,
       const serial = await serialOf();
       if (!serial) return;
       const [apps, procs, fg] = await Promise.all([
-        needApps ? adb.apps({ serial }, false).catch(() => null) : Promise.resolve(null),
-        needLive ? adb.processes({ serial }).catch(() => null) : Promise.resolve(null),
-        needLive ? adb.foreground({ serial }).catch(() => null) : Promise.resolve(undefined),
+        needApps ? adb.apps({ serial, via }, false).catch(() => null) : Promise.resolve(null),
+        needLive ? adb.processes({ serial, via }).catch(() => null) : Promise.resolve(null),
+        needLive ? adb.foreground({ serial, via }).catch(() => null) : Promise.resolve(undefined),
       ]);
       if (apps) setUids(new Map(apps.filter((a) => a.uid !== null).map((a) => [a.package, a.uid as number])));
       setDevice((d) => ({
@@ -308,7 +309,7 @@ export const LogcatPane: React.FC<LogcatPaneProps> = ({ leaf, visible, isActive,
           onWantDevice={() => void loadDevice()}
           onForeground={async () => {
             try {
-              const pkg = await adb.foreground({ serial: await serialOf() });
+              const pkg = await adb.foreground({ serial: await serialOf(), via });
               if (!pkg) extras.onToast(t("logcat.noForeground"));
               else void loadDevice();
               return pkg;

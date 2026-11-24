@@ -6168,7 +6168,17 @@ html.ctxmenu-host #root {
   z-index: 5;
 }
 .mirror-target {
+  display: flex;
+  gap: 6px;
   padding: 6px 8px 0;
+}
+.mirror-target select:first-child:not(.mirror-quality) {
+  flex: 1;
+  min-width: 0;
+}
+.mirror-quality {
+  flex: none;
+  width: auto;
 }
 .mirror-area {
   flex: 1;

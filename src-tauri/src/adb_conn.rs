@@ -18,6 +18,7 @@ use crate::pump::OutputPump;
 /// neither a serial nor an address, the only device that is ready.
 pub async fn resolve_device(session: &SessionConfig) -> Result<AdbDevice> {
     let cfg = session.adb.clone().unwrap_or_default();
+    let route = crate::adb::route::for_via(cfg.via.as_deref())?;
     let host = session.host.trim();
     if cfg.is_wlan() {
         if host.is_empty() {
@@ -26,31 +27,32 @@ pub async fn resolve_device(session: &SessionConfig) -> Result<AdbDevice> {
         let port = if session.port == 0 || session.port == 22 { 5555 } else { session.port };
         let addr = if host.contains(':') && !host.starts_with('[') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
         // Already listed (connected earlier, or by Android Studio): no reconnect needed.
-        let listed = crate::adb::client::devices().await?;
+        let listed = crate::adb::client::devices(&route).await?;
         if !listed.iter().any(|d| d.serial == addr && d.state == "device") {
-            crate::adb::client::connect_network(&addr).await?;
+            crate::adb::client::connect_network(&route, &addr).await?;
         }
-        return wait_ready(&addr).await;
+        return wait_ready(&route, &addr).await;
     }
     let serial = cfg.serial.trim();
     if !serial.is_empty() {
-        return wait_ready(serial).await;
+        return wait_ready(&route, serial).await;
     }
-    let ready: Vec<_> = crate::adb::client::devices().await?.into_iter().filter(|d| d.state == "device").collect();
+    let ready: Vec<_> = crate::adb::client::devices(&route).await?.into_iter().filter(|d| d.state == "device").collect();
     match ready.len() {
-        0 => bail!("没有已连接的 Android 设备：请用 USB 连接并允许 USB 调试"),
-        1 => Ok(AdbDevice::new(ready[0].serial.clone())),
+        0 if route.is_local() => bail!("没有已连接的 Android 设备：请用 USB 连接并允许 USB 调试"),
+        0 => bail!("远端主机上没有已连接的 Android 设备（在那台主机上运行 adb devices 查看）"),
+        1 => Ok(AdbDevice::on(route, ready[0].serial.clone())),
         _ => bail!("连接了多台设备，请在会话里选择一台"),
     }
 }
 
 /// A just-connected device can be "offline" / "authorizing" for a moment.
-async fn wait_ready(serial: &str) -> Result<AdbDevice> {
+async fn wait_ready(route: &crate::adb::route::Route, serial: &str) -> Result<AdbDevice> {
     let mut last = String::from("未找到");
     for _ in 0..20 {
-        let list = crate::adb::client::devices().await?;
+        let list = crate::adb::client::devices(route).await?;
         match list.iter().find(|d| d.serial == serial) {
-            Some(d) if d.state == "device" => return Ok(AdbDevice::new(serial)),
+            Some(d) if d.state == "device" => return Ok(AdbDevice::on(route.clone(), serial)),
             Some(d) if d.state == "unauthorized" => bail!("设备未授权：请在手机上允许 USB 调试（勾选“一律允许”）"),
             Some(d) => last = d.state.clone(),
             None => {}
@@ -76,8 +78,8 @@ pub fn spawn_adb_session(
         sink.emit_state(&instance_id, "connecting", None);
         let opened = async {
             let device = resolve_device(&session).await?;
-            crate::adb::shell::forget_features(&device.serial);
-            let v2 = crate::adb::shell::has_v2(&device.serial).await;
+            crate::adb::shell::forget_features(&device);
+            let v2 = crate::adb::shell::has_v2(&device).await;
             let term = if session.term.trim().is_empty() { "xterm-256color" } else { session.term.trim() };
             let stream = device
                 .open(&crate::adb::shell::service(v2, true, term, ""))

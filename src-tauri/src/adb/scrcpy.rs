@@ -220,6 +220,9 @@ struct Mirror {
     acked: Arc<AtomicU32>,
     stop: Arc<Notify>,
     video: Arc<Mutex<VideoState>>,
+    /// To end the server on the device (see `stop`).
+    device: AdbDevice,
+    scid: u32,
 }
 
 /// What the video task knows about the stream, shared with the recording commands.
@@ -355,7 +358,7 @@ pub async fn start(
     }
     super::sync::push_file(&device, &jar, REMOTE_JAR, 0o644).await.context("无法把 scrcpy-server 推送到设备")?;
     let scid: u32 = rand_scid();
-    let v2 = super::shell::has_v2(&device.serial).await;
+    let v2 = super::shell::has_v2(&device).await;
     let mut server = device.open(&super::shell::service(v2, false, "dumb", &server_args(&version, scid, &opts))).await?;
 
     // Collect the server's output while we wait for its socket: shown if it fails.
@@ -440,7 +443,7 @@ pub async fn start(
     let state = Arc::new(Mutex::new(VideoState { size: (width, height), ..Default::default() }));
     lock(mirrors()).insert(
         mirror_id.clone(),
-        Mirror { control: control_tx.clone(), acked: Arc::clone(&acked), stop: Arc::clone(&stop_n), video: Arc::clone(&state) },
+        Mirror { control: control_tx.clone(), acked: Arc::clone(&acked), stop: Arc::clone(&stop_n), video: Arc::clone(&state), device: device.clone(), scid },
     );
     if opts.screen_off {
         let _ = control_tx.send(encode(&MirrorInput::DisplayPower { on: false }));
@@ -690,7 +693,18 @@ pub fn stop(mirror_id: &str) {
         if let Some(rec) = lock(&m.video).recording.take() {
             let _ = rec.finish();
         }
+        // Closing our sockets ends the server only once the device notices; through an
+        // SSH relay that can take long (or never happen), so end it explicitly.
+        let (device, scid) = (m.device, m.scid);
+        tauri::async_runtime::spawn(async move {
+            let _ = tokio::time::timeout(Duration::from_secs(10), device.exec_output(&kill_command(scid))).await;
+        });
     }
+}
+
+/// Ends the server of mirror `scid` (and only that one).
+fn kill_command(scid: u32) -> String {
+    format!("pkill -f 'scid={scid:08x} ' 2>/dev/null; true")
 }
 
 #[cfg(test)]

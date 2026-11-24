@@ -200,7 +200,7 @@ pub fn start(instance_id: String, device: AdbDevice, opts: LogcatOptions, channe
     tauri::async_runtime::spawn(async move {
         sink.emit_state(&instance_id, "connecting", None);
         let run = async {
-            let v2 = super::shell::has_v2(&device.serial).await;
+            let v2 = super::shell::has_v2(&device).await;
             let mut s = device.open(&super::shell::service(v2, false, "dumb", &command(&opts))).await?;
             sink.emit_state(&instance_id, "connected", None);
             let mut dec = PacketDecoder::default();

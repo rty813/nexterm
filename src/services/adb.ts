@@ -26,10 +26,24 @@ export interface MirrorOptions {
 
 export const DEFAULT_MIRROR: MirrorOptions = { maxSize: 1280, bitRate: 8_000_000, maxFps: 60, stayAwake: true, screenOff: false };
 
+/** Mirror quality presets: size / bit rate / fps. "low" suits mobile links and bastions. */
+export const MIRROR_QUALITY = {
+  high: { maxSize: 1280, bitRate: 8_000_000, maxFps: 60 },
+  medium: { maxSize: 1024, bitRate: 3_000_000, maxFps: 30 },
+  low: { maxSize: 720, bitRate: 1_000_000, maxFps: 20 },
+} as const;
+export type MirrorQuality = keyof typeof MIRROR_QUALITY;
+
+export function mirrorOptions(quality: MirrorQuality): MirrorOptions {
+  return { ...DEFAULT_MIRROR, ...MIRROR_QUALITY[quality] };
+}
+
 /** Where a command acts: a connected ADB pane, or a device by serial. */
 export interface AdbTarget {
   instanceId?: string | null;
   serial?: string | null;
+  /** With `serial`: the SSH pane whose host runs the adb server. */
+  via?: string | null;
 }
 
 function need() {
@@ -49,13 +63,14 @@ export const adb = {
     if (!isTauriRuntime()) return Promise.resolve(() => {});
     return listen<{ received: number; total: number }>("adb-download-progress", (e) => handler(e.payload));
   },
-  async startServer(): Promise<number> {
+  async startServer(via?: string | null): Promise<number> {
     need();
-    return invoke<number>("adb_start_server");
+    return invoke<number>("adb_start_server", { via: via ?? null });
   },
-  async devices(): Promise<AdbDeviceInfo[]> {
+  /** Devices on this computer's adb server, or on the host of SSH pane `via`. */
+  async devices(via?: string | null): Promise<AdbDeviceInfo[]> {
     if (!isTauriRuntime()) return [];
-    return invoke<AdbDeviceInfo[]>("adb_devices");
+    return invoke<AdbDeviceInfo[]>("adb_devices", { via: via ?? null });
   },
   /** Device list pushes (`adb-devices`); starts the app-wide watcher. */
   async watchDevices(handler: (list: AdbDeviceInfo[]) => void): Promise<UnlistenFn> {
@@ -64,30 +79,30 @@ export const adb = {
     void invoke("adb_watch_devices").catch(() => undefined);
     return un;
   },
-  async connect(addr: string): Promise<string> {
+  async connect(addr: string, via?: string | null): Promise<string> {
     need();
-    return invoke<string>("adb_connect", { addr });
+    return invoke<string>("adb_connect", { addr, via: via ?? null });
   },
-  async disconnect(addr: string): Promise<string> {
+  async disconnect(addr: string, via?: string | null): Promise<string> {
     need();
-    return invoke<string>("adb_disconnect", { addr });
+    return invoke<string>("adb_disconnect", { addr, via: via ?? null });
   },
   async pair(addr: string, code: string): Promise<string> {
     need();
     return invoke<string>("adb_pair", { addr, code });
   },
-  async enableWlan(serial: string, port?: number): Promise<string> {
+  async enableWlan(serial: string, port?: number, via?: string | null): Promise<string> {
     need();
-    return invoke<string>("adb_enable_wlan", { serial, port: port ?? null });
+    return invoke<string>("adb_enable_wlan", { serial, port: port ?? null, via: via ?? null });
   },
   async props(target: AdbTarget): Promise<AdbDeviceProps> {
     need();
-    return invoke<AdbDeviceProps>("adb_props", { instanceId: target.instanceId ?? null, serial: target.serial ?? null });
+    return invoke<AdbDeviceProps>("adb_props", { instanceId: target.instanceId ?? null, serial: target.serial ?? null, via: target.via ?? null });
   },
 
   async apps(target: AdbTarget, versions: boolean): Promise<AdbAppInfo[]> {
     need();
-    return invoke<AdbAppInfo[]>("adb_apps", { instanceId: target.instanceId ?? null, serial: target.serial ?? null, versions });
+    return invoke<AdbAppInfo[]>("adb_apps", { instanceId: target.instanceId ?? null, serial: target.serial ?? null, via: target.via ?? null, versions });
   },
   async appAction(instanceId: string, pkg: string, action: AdbAppAction): Promise<string> {
     need();
@@ -103,12 +118,12 @@ export const adb = {
   },
   async processes(target: AdbTarget): Promise<AdbProcessInfo[]> {
     need();
-    return invoke<AdbProcessInfo[]>("adb_processes", { instanceId: target.instanceId ?? null, serial: target.serial ?? null });
+    return invoke<AdbProcessInfo[]>("adb_processes", { instanceId: target.instanceId ?? null, serial: target.serial ?? null, via: target.via ?? null });
   },
   /** Package of the app in the foreground, or null. */
   async foreground(target: AdbTarget): Promise<string | null> {
     need();
-    return invoke<string | null>("adb_foreground", { instanceId: target.instanceId ?? null, serial: target.serial ?? null });
+    return invoke<string | null>("adb_foreground", { instanceId: target.instanceId ?? null, serial: target.serial ?? null, via: target.via ?? null });
   },
   async kill(instanceId: string, pids: number[], signal = 15): Promise<void> {
     need();
@@ -143,6 +158,7 @@ export const adb = {
       mirrorId,
       instanceId: target.instanceId ?? null,
       serial: target.serial ?? null,
+      via: target.via ?? null,
       options,
       channel,
     });
@@ -183,6 +199,6 @@ export const adb = {
   },
   async screenshot(target: AdbTarget, path: string): Promise<void> {
     need();
-    await invoke("adb_screenshot", { instanceId: target.instanceId ?? null, serial: target.serial ?? null, path });
+    await invoke("adb_screenshot", { instanceId: target.instanceId ?? null, serial: target.serial ?? null, via: target.via ?? null, path });
   },
 };

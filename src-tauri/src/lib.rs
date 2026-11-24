@@ -1870,6 +1870,8 @@ pub fn run() {
                 ask_before_quit: AtomicBool::new(extra_bool(&settings, "askBeforeCloseWindow", true)),
                 quit_confirmed: AtomicBool::new(false),
             });
+            let lookup_app = app.handle().clone();
+            crate::adb::route::set_lookup(Box::new(move |pane| lookup_app.state::<AppContext>().connections.ssh_link(pane)));
             let xs_app = app.handle().clone();
             crate::xserver::init(
                 Box::new(move |status| {

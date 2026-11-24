@@ -916,6 +916,8 @@ export interface AdbConfig {
   connect: "usb" | "wlan";
   /** shell: terminal pane; logcat: log tab (`LogcatPane`). */
   view: "shell" | "logcat";
+  /** SSH pane (id) whose host runs the adb server: devices on a remote Linux machine. */
+  via?: string | null;
   /** Logcat tab state (filters, buffers). */
   logcat?: LogcatPrefs | null;
 }

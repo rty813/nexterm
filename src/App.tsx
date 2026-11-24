@@ -32,7 +32,7 @@ import {
 import { canReuseSsh, duplicateReusesSsh } from "./utils/duplicate";
 import { dropZoneAt, type DropHint } from "./utils/dropZones";
 import { isLogcatSession, type LogcatPrefs } from "./types/domain";
-import { adbSerialOf, logcatSessionOf } from "./utils/adbSession";
+import { adbDeviceLabel, adbSerialOf, adbSessionFor, logcatSessionOf } from "./utils/adbSession";
 import { AdbScreenPanel } from "./components/AdbScreenPanel";
 import { AdbDevicePanel } from "./components/AdbDevicePanel";
 import type {
@@ -881,7 +881,7 @@ export const App: React.FC = () => {
   /** Connected ADB shell tabs (monitor, screen mirror, apps / processes). */
   const adbTargets = allLeaves(ws.root)
     .filter((l) => l.session.protocol === "adb" && !isLogcatSession(l.session) && l.status === "connected")
-    .map((l) => ({ paneId: l.paneId, title: tabTitle(l), summary: sessionTargetSummary(l.session) }));
+    .map((l) => ({ paneId: l.paneId, title: tabTitle(l), summary: sessionTargetSummary(l.session), remote: Boolean(l.session.adb?.via) }));
   const monitorTargets = [...forwardTargets, ...adbTargets];
   const mirrorTargets = [
     ...adbTargets,
@@ -2361,6 +2361,14 @@ export const App: React.FC = () => {
         ),
       })),
     onAdbTool: openAdbTool,
+    onRemoteAdb: (leaf, device) =>
+      openSessionInNewTab(
+        adbSessionFor(device.serial, {
+          id: uid("adb"),
+          label: `${adbDeviceLabel(device)} · ${tabTitle(leaf)}`,
+          via: leaf.paneId,
+        })
+      ),
     onPaneSettings: setSettingsPaneId,
     isSavedSession: (id) => sessionsRef.current.some((session) => session.id === id),
     quickCommands: allQuickCommands,

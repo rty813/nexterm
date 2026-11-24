@@ -9,7 +9,9 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+use super::route::Route;
 use super::SERVER;
+use crate::net::BoxedStream;
 
 /// One request on the wire.
 pub fn encode_request(payload: &str) -> Vec<u8> {
@@ -80,6 +82,14 @@ async fn dial() -> std::io::Result<TcpStream> {
     }
 }
 
+/// A socket to the adb server `route` points at.
+pub async fn server(route: &Route) -> Result<BoxedStream> {
+    match route {
+        Route::Local => Ok(Box::new(connect_server().await?)),
+        Route::Ssh(r) => r.connect().await,
+    }
+}
+
 /// A socket to the adb server, starting it (adb.exe start-server) when nothing listens.
 pub async fn connect_server() -> Result<TcpStream> {
     if let Ok(s) = dial().await {
@@ -97,16 +107,16 @@ pub async fn connect_server() -> Result<TcpStream> {
 }
 
 /// A `host:` request whose reply is `OKAY` + a block.
-pub async fn host_query(request: &str) -> Result<String> {
-    let mut s = connect_server().await?;
+pub async fn host_query(route: &Route, request: &str) -> Result<String> {
+    let mut s = server(route).await?;
     send(&mut s, request).await?;
     read_status(&mut s).await?;
     read_block(&mut s).await
 }
 
 /// Server protocol version (41 for current platform-tools).
-pub async fn version() -> Result<u32> {
-    let v = host_query("host:version").await?;
+pub async fn version(route: &Route) -> Result<u32> {
+    let v = host_query(route, "host:version").await?;
     u32::from_str_radix(v.trim(), 16).context("adb server 版本格式错误")
 }
 
@@ -177,8 +187,8 @@ pub fn is_network_serial(serial: &str) -> bool {
     }
 }
 
-pub async fn devices() -> Result<Vec<DeviceInfo>> {
-    Ok(parse_devices(&host_query("host:devices-l").await?))
+pub async fn devices(route: &Route) -> Result<Vec<DeviceInfo>> {
+    Ok(parse_devices(&host_query(route, "host:devices-l").await?))
 }
 
 /// A socket on which the server sends the device list (one block) whenever it changes.
@@ -191,8 +201,8 @@ pub async fn track_devices() -> Result<TcpStream> {
 
 /// `adb connect host:port`. The server answers OKAY even when the connection failed, so
 /// the message decides.
-pub async fn connect_network(addr: &str) -> Result<String> {
-    let msg = host_query(&format!("host:connect:{}", addr)).await?;
+pub async fn connect_network(route: &Route, addr: &str) -> Result<String> {
+    let msg = host_query(route, &format!("host:connect:{}", addr)).await?;
     let lower = msg.to_ascii_lowercase();
     if lower.starts_with("connected to") || lower.starts_with("already connected") {
         Ok(msg.trim().to_string())
@@ -201,25 +211,25 @@ pub async fn connect_network(addr: &str) -> Result<String> {
     }
 }
 
-pub async fn disconnect_network(addr: &str) -> Result<String> {
-    Ok(host_query(&format!("host:disconnect:{}", addr)).await?.trim().to_string())
+pub async fn disconnect_network(route: &Route, addr: &str) -> Result<String> {
+    Ok(host_query(route, &format!("host:disconnect:{}", addr)).await?.trim().to_string())
 }
 
 /// Device features ("shell_v2", "stat_v2", "ls_v2", "cmd", ...).
-pub async fn features(serial: &str) -> Result<Vec<String>> {
-    let f = host_query(&format!("host-serial:{}:features", serial)).await?;
+pub async fn features(route: &Route, serial: &str) -> Result<Vec<String>> {
+    let f = host_query(route, &format!("host-serial:{}:features", serial)).await?;
     Ok(f.trim().split(',').filter(|s| !s.is_empty()).map(str::to_string).collect())
 }
 
 /// Switch a fresh server socket to `serial` and open `service` there.
-pub async fn open_device(serial: &str, service: &str) -> Result<crate::net::BoxedStream> {
-    let mut s = connect_server().await?;
+pub async fn open_device(route: &Route, serial: &str, service: &str) -> Result<BoxedStream> {
+    let mut s = server(route).await?;
     send(&mut s, &format!("host:transport:{}", serial)).await?;
     read_status(&mut s).await?;
     send(&mut s, service).await?;
     let name = service.split([':', ',']).next().unwrap_or(service).to_string();
     read_status(&mut s).await.with_context(|| format!("设备拒绝了请求 {}", name))?;
-    Ok(Box::new(s))
+    Ok(s)
 }
 
 #[cfg(test)]
@@ -291,7 +301,7 @@ mod tests {
             assert_eq!(req, b"sync:");
             s.write_all(b"FAIL0006closed").await.unwrap();
         });
-        let err = match open_device("ABC", "sync:").await {
+        let err = match open_device(&Route::Local, "ABC", "sync:").await {
             Ok(_) => panic!("expected FAIL"),
             Err(e) => format!("{:#}", e),
         };

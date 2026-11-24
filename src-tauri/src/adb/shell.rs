@@ -65,25 +65,27 @@ fn features_cache() -> &'static Mutex<HashMap<String, Vec<String>>> {
 
 /// Device features, asked once per serial (a reconnected device may have updated: callers
 /// that open a new pane call `forget_features`).
-pub async fn features(serial: &str) -> Vec<String> {
-    if let Some(f) = features_cache().lock().ok().and_then(|c| c.get(serial).cloned()) {
+pub async fn features(device: &AdbDevice) -> Vec<String> {
+    let key = format!("{}/{}", device.route.key(), device.serial);
+    if let Some(f) = features_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
         return f;
     }
-    let f = super::client::features(serial).await.unwrap_or_default();
+    let f = super::client::features(&device.route, &device.serial).await.unwrap_or_default();
     if let Ok(mut c) = features_cache().lock() {
-        c.insert(serial.to_string(), f.clone());
+        c.insert(key, f.clone());
     }
     f
 }
 
-pub fn forget_features(serial: &str) {
+pub fn forget_features(device: &AdbDevice) {
+    let key = format!("{}/{}", device.route.key(), device.serial);
     if let Ok(mut c) = features_cache().lock() {
-        c.remove(serial);
+        c.remove(&key);
     }
 }
 
-pub async fn has_v2(serial: &str) -> bool {
-    features(serial).await.iter().any(|f| f == "shell_v2")
+pub async fn has_v2(device: &AdbDevice) -> bool {
+    features(device).await.iter().any(|f| f == "shell_v2")
 }
 
 /// The service string for a command without a PTY (`raw`), or the interactive shell.
@@ -104,7 +106,7 @@ pub struct ExecResult {
 }
 
 pub async fn exec(device: &AdbDevice, command: &str, timeout: Duration) -> Result<ExecResult> {
-    let v2 = has_v2(&device.serial).await;
+    let v2 = has_v2(device).await;
     let mut s = device.open(&service(v2, false, "dumb", command)).await?;
     let work = async {
         let mut stdout = Vec::new();

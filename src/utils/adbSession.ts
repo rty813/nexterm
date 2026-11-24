@@ -24,9 +24,16 @@ export function adbDeviceLabel(d: Pick<AdbDeviceInfo, "model" | "serial">): stri
   return d.model ? `${d.model}` : d.serial;
 }
 
-/** A session for a device the adb server lists (sidebar, quick connect). */
-export function adbSessionFor(serial: string, opts: { id: string; label?: string; view?: AdbConfig["view"]; group?: string }): SessionConfig {
-  const wlan = isNetworkSerial(serial) && !serial.includes("._adb");
+/**
+ * A session for a device the adb server lists (sidebar, quick connect). `via`: the device is
+ * on the adb server of that SSH pane's host; the serial is then kept as that server names it
+ * (a WLAN device there is already connected by that server).
+ */
+export function adbSessionFor(
+  serial: string,
+  opts: { id: string; label?: string; view?: AdbConfig["view"]; group?: string; via?: string | null }
+): SessionConfig {
+  const wlan = !opts.via && isNetworkSerial(serial) && !serial.includes("._adb");
   const { host, port } = wlan ? splitAdbAddress(serial) : { host: "", port: 0 };
   return {
     id: opts.id,
@@ -39,7 +46,12 @@ export function adbSessionFor(serial: string, opts: { id: string; label?: string
     authType: "none",
     term: "xterm-256color",
     keepAliveSecs: 0,
-    adb: { serial: wlan ? "" : serial, connect: wlan ? "wlan" : "usb", view: opts.view ?? "shell" },
+    adb: {
+      serial: wlan ? "" : serial,
+      connect: wlan ? "wlan" : "usb",
+      view: opts.view ?? "shell",
+      ...(opts.via ? { via: opts.via } : {}),
+    },
   };
 }
 
