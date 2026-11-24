@@ -4,7 +4,7 @@
 
 <img src="src-tauri/icons/128x128.png" alt="" width="64" align="right" />
 
-**Nexterm** 是一款高性能 Windows 终端客户端，支持 SSH、本地 Shell（PowerShell / CMD / WSL）、Telnet、TCP、串口以及内嵌的 RDP / VNC 远程桌面，基于 Rust + Tauri v2 + React + [xterm.js](https://xtermjs.org) 构建。
+**Nexterm** 是一款高性能 Windows 终端客户端，支持 SSH、本地 Shell（PowerShell / CMD / WSL）、Telnet、TCP、串口、Android 设备（ADB）以及内嵌的 RDP / VNC 远程桌面，基于 Rust + Tauri v2 + React + [xterm.js](https://xtermjs.org) 构建。
 
 延续 WindTerm 的交互习惯（会话树、嵌套分屏、快捷命令、一键导入 WindTerm、Xshell、MobaXterm、SecureCRT、FinalShell 配置），并内置了几项特色能力：
 
@@ -39,6 +39,14 @@
 - **免下载预览**：直接预览代码/文本、JSON、Markdown、CSV/TSV 表格、图片（缩放/旋转）与 PDF。
 - **并发传输队列**：支持拖拽上传文件/文件夹、软链接、权限修改（勾选或八进制），支持暂停 / 续传 / 重试与冲突策略，统一显示 ZMODEM 进度。SFTP 加大了在途请求和接收窗口，高延迟链路（200 ms）下上传约快 4 倍、下载约快 3.5 倍。
 - **ZMODEM 接收重名文件**：远端执行 `sz` 时，传输卡片会显示保存位置（默认是下载文件夹），可以在卡片上更改或直接接收。本地已有同名文件时，可以另存为新文件名、明确覆盖或取消传输，不会静默覆盖原文件。
+
+### Android 设备（ADB）
+
+- **ADB 会话**：USB 或 WLAN 连接 Android 设备，连上后直接进入设备 Shell（带 PTY，支持调整窗口大小和退出码）。侧栏「ADB 设备」自动列出已连接的设备，一键打开 Shell、屏幕镜像或 Logcat；会话表单可以开启无线调试（`adb tcpip`）和无线配对（Android 11+）。Nexterm 直接与 adb server 通信，`adb.exe` 只用来启动 server 和配对：按设置的路径、PATH 和 Android SDK 目录查找，找不到时可一键下载官方 platform-tools。快速连接栏可输入 `adb`、`adb <序列号>` 或 `adb <IP>`。
+- **屏幕镜像**：侧边面板实时显示并操控设备屏幕（随包附带 [scrcpy](https://github.com/Genymobile/scrcpy) 服务端，WebCodecs 硬件解码）：点击和拖动、滚轮、键盘与中文输入，返回 / 主屏幕 / 最近任务 / 音量 / 电源键，旋转、关闭手机屏幕继续镜像、剪贴板双向同步、截图。**录屏**直接把视频流保存为 MP4，不重新编码。画质分高 / 中 / 低三档，面板落后时自动丢帧追上，不会越来越慢。
+- **Logcat 标签页**：像会话一样在中间工作区打开，按级别、`tag:`、`pid:`、`package:`（按 uid 匹配，进程重启后继续跟随）、关键字和正则筛选，改筛选条件不会丢日志。筛选框自动补全包名（前台和运行中的应用排在前面）、tag、进程和最近的查询，一键筛选前台应用；支持暂停、换行、多选复制和导出。
+- **文件、应用与进程**：文件浏览器直接浏览设备文件（上传 / 下载 / 预览 / 本地编辑自动回传）。应用面板可启动、强制停止、清除数据、卸载、停用、导出 APK、拖入 APK 安装；进程列表可按 CPU / 内存排序并结束进程。「服务器资源」面板显示 CPU、内存、存储和电池。
+- **远端主机上的设备**：设备插在远处的 Linux 机器上时，在该机器的 SSH 窗格上右键「这台主机上的 Android 设备」，即经这条 SSH 连接使用那台机器的 adb，上面的功能全部可用。服务器不允许端口转发时（例如 JumpServer 堡垒机）自动改用 `nc` 中转；远端需安装 `adb`。经 SSH 的屏幕镜像默认低画质（1 Mbps），适合移动网络。
 
 ### 窗口与输入
 
@@ -196,7 +204,7 @@ cd relay; npm test                                       # 中继与加密协议
 | 路径 | 内容 |
 | --- | --- |
 | `src/` | 前端（React + TypeScript），`utils/` 存放与 UI 解耦的纯逻辑与主要测试 |
-| `src-tauri/` | Rust 后端：连接管理、各协议与代理、RDP / VNC 远程桌面、端口转发、SFTP / SCP、会话导入、Shell 集成、完整回滚历史、服务器资源、MCP、远程访问、会话分享 |
+| `src-tauri/` | Rust 后端：连接管理、各协议与代理、RDP / VNC 远程桌面、端口转发、SFTP / SCP、ADB 与屏幕镜像、会话导入、Shell 集成、完整回滚历史、服务器资源、MCP、远程访问、会话分享 |
 | `relay/` | 远程访问自建中继、PWA 与会话分享页（Node.js） |
 | `plugins/` | Hello 插件模板和安装包、SDK 类型定义 |
 | `bench/` | 吞吐与内存基准测试脚本 |
@@ -211,4 +219,4 @@ cd relay; npm test                                       # 中继与加密协议
 
 ## 许可证
 
-[MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 双许可证任选其一。Windows 构建内置的 [VcXsrv](https://sourceforge.net/projects/vcxsrv/)（`src-tauri/resources/vcxsrv/`）为独立 GPL-2.0 程序，其余依赖遵循各自许可证。
+[MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 双许可证任选其一。Windows 构建内置的 [VcXsrv](https://sourceforge.net/projects/vcxsrv/)（`src-tauri/resources/vcxsrv/`）为独立 GPL-2.0 程序，随包附带的 [scrcpy](https://github.com/Genymobile/scrcpy) 服务端（`src-tauri/resources/scrcpy/`）为 Apache-2.0，其余依赖遵循各自许可证。

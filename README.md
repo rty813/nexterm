@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 <img src="src-tauri/icons/128x128.png" alt="" width="64" align="right" />
 
-**Nexterm** is a fast, modern Windows terminal client supporting SSH, local shells (PowerShell / CMD / WSL), Telnet, raw TCP, serial ports, and embedded RDP / VNC remote desktops—built with Rust, Tauri v2, React, and [xterm.js](https://xtermjs.org).
+**Nexterm** is a fast, modern Windows terminal client supporting SSH, local shells (PowerShell / CMD / WSL), Telnet, raw TCP, serial ports, Android devices (ADB), and embedded RDP / VNC remote desktops—built with Rust, Tauri v2, React, and [xterm.js](https://xtermjs.org).
 
 It keeps WindTerm's familiar workflow (session tree, nested split panes, quick commands, one-click import from WindTerm, Xshell, MobaXterm, SecureCRT and FinalShell) and adds several built-in capabilities:
 
@@ -39,6 +39,14 @@ Windows 10 / 11 only. Current version: `0.1.13`.
 - **Zero-Download Previews**: Preview code/text, JSON, Markdown, CSV/TSV tables, images (zoom/rotate), and PDFs directly.
 - **Transfer Queue**: Drag-and-drop folders/files, edit permissions (checkboxes or octal), pause / resume / retry parallel transfers with conflict rules, and track ZMODEM transfers in one place. SFTP keeps more requests in flight with a larger receive window, so over a 200 ms link uploads are about 4× and downloads about 3.5× faster.
 - **ZMODEM Filename Conflicts**: When the host runs `sz`, the transfer card shows where the files will be saved (the Downloads folder unless you changed it); change the folder there or accept. If a received file already exists locally, save it under another name, explicitly overwrite it, or cancel the transfer. Existing files are not silently replaced.
+
+### Android Devices (ADB)
+
+- **ADB Sessions**: Connect Android devices over USB or WLAN and land in the device shell (a real PTY with resize and exit codes). The **ADB devices** sidebar lists connected devices for one-click shell, screen mirror or Logcat; the session form can switch a device to wireless debugging (`adb tcpip`) or pair one wirelessly (Android 11+). Nexterm talks to the adb server directly and runs `adb.exe` only to start the server and to pair. It looks for `adb.exe` at the configured path, on PATH and in the Android SDK, and can download Google's platform-tools in one click. The quick-connect bar takes `adb`, `adb <serial>` or `adb <ip>`.
+- **Screen Mirror**: Watch and control the device screen in a side panel (bundled [scrcpy](https://github.com/Genymobile/scrcpy) server, hardware-decoded with WebCodecs): tap and drag, wheel, keyboard and IME input, Back / Home / Recents / volume / power, rotate, screen off while mirroring, two-way clipboard, screenshots. **Screen recording** saves the video stream straight to MP4 without re-encoding. Pick high, medium or low quality; when the panel falls behind it drops frames to catch up instead of lagging further.
+- **Logcat Tabs**: Opened in the workspace like a session, filtered by level, `tag:`, `pid:`, `package:` (matched by uid, so it follows process restarts), words and regexes; changing the filter never loses lines. The filter box completes package names (foreground and running apps first), tags, processes and recent queries, and one click filters the foreground app. Pause, wrap, multi-select copy and export.
+- **Files, Apps & Processes**: Browse device files in the file browser (upload / download / preview / local edit with auto-upload). The app panel launches, force-stops, clears, uninstalls, disables and exports APKs, and installs dropped APKs; the process list sorts by CPU / memory and kills processes. The **Server Resources** panel shows CPU, memory, storage and battery.
+- **Devices on a Remote Host**: When a device is plugged into a Linux machine somewhere else, right-click that machine's SSH pane and choose **Android devices on this host**: everything above then runs through that SSH connection and its adb server. Where the server refuses port forwarding (JumpServer bastions, for example), Nexterm relays through `nc` instead; the host needs `adb` installed. Mirroring over SSH starts at low quality (1 Mbps) for mobile links.
 
 ### Windows & Input
 
@@ -196,7 +204,7 @@ cd relay; npm test                                       # relay & E2EE protocol
 | Path | Contents |
 | --- | --- |
 | `src/` | Front end (React + TypeScript); `utils/` holds UI-independent logic and core unit tests |
-| `src-tauri/` | Rust backend: connections, protocols and proxies, RDP / VNC remote desktop, port forwarding, SFTP / SCP, session import, shell integration, full scrollback history, server resources, MCP, remote access, session sharing |
+| `src-tauri/` | Rust backend: connections, protocols and proxies, RDP / VNC remote desktop, port forwarding, SFTP / SCP, ADB and screen mirroring, session import, shell integration, full scrollback history, server resources, MCP, remote access, session sharing |
 | `relay/` | Self-hosted relay server, remote access PWA and session share page (Node.js) |
 | `plugins/` | Hello starter plugin and installable package, SDK type definitions |
 | `bench/` | Throughput and memory benchmark scripts |
@@ -211,4 +219,4 @@ Issues and PRs are welcome. Please run front-end and Rust tests before submittin
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE). The bundled [VcXsrv](https://sourceforge.net/projects/vcxsrv/) (`src-tauri/resources/vcxsrv/`) is a separate program under GPL-2.0; other dependencies keep their own licenses.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE). The bundled [VcXsrv](https://sourceforge.net/projects/vcxsrv/) (`src-tauri/resources/vcxsrv/`) is a separate program under GPL-2.0; the bundled [scrcpy](https://github.com/Genymobile/scrcpy) server (`src-tauri/resources/scrcpy/`) is Apache-2.0; other dependencies keep their own licenses.
