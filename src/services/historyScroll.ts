@@ -35,6 +35,8 @@ const SIG_LINES = 6;
 const MAX_SEG_ROWS = 30_000;
 const INFO_MS = 1000;
 const MIN_THUMB = 24;
+/** Jump target for the thumb at the end of the track: the very bottom, not a line. */
+const BOTTOM = Number.POSITIVE_INFINITY;
 /** A marks request returns after about this long with what it has; the next goes on. */
 const MARKS_STEP_MS = 150;
 /** Quiet output before `requestSync` lines up the numbers. */
@@ -149,8 +151,8 @@ export class HistoryScroll implements IDisposable {
   private frame = 0;
   private track: HTMLDivElement | null = null;
   private thumb: HTMLDivElement | null = null;
-  /** Thumb being dragged: pointer offset from its top. */
-  private drag: { offset: number } | null = null;
+  /** Thumb being dragged: pointer offset from its top, where it was pressed, whether it moved. */
+  private drag: { offset: number; startY: number; moved: boolean } | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private layers = new Map<string, LayerState>();
   private marksTimer = 0;
@@ -538,7 +540,7 @@ export class HistoryScroll implements IDisposable {
       if (this.pendingJump !== null && !this.disposed) {
         const l = this.pendingJump;
         this.pendingJump = null;
-        void this.run(() => this.jumpTo(l));
+        void this.run(() => this.jump(l));
       } else if (this.loads !== before) {
         // Something was loaded: the view may still be near an edge.
         this.check();
@@ -1033,6 +1035,9 @@ export class HistoryScroll implements IDisposable {
     const g = this.geometry();
     if (!g) return null;
     const frac = Math.min(1, Math.max(0, y / Math.max(1, g.track - g.thumb)));
+    // Thumb at the end of the track: the real bottom. A line number can't say that: the last
+    // line may wrap onto more rows than the view has, and jumpTo shows a line's first row.
+    if (y >= g.track - g.thumb) return BOTTOM;
     return g.first + Math.round(frac * Math.max(0, g.span - this.term.rows));
   }
 
@@ -1042,14 +1047,24 @@ export class HistoryScroll implements IDisposable {
       this.pendingJump = line;
       return;
     }
-    void this.run(() => this.jumpTo(line));
+    void this.run(() => this.jump(line));
+  }
+
+  /** A history line, or `BOTTOM`. */
+  private jump(line: number): Promise<void> {
+    if (line !== BOTTOM) return this.jumpTo(line);
+    if (this.term.buffer.active.type === "normal") {
+      this.term.scrollToBottom();
+      this.loads++;
+    }
+    return Promise.resolve();
   }
 
   private readonly onThumbDown = (e: MouseEvent): void => {
     if (e.button !== 0 || !this.thumb) return;
     e.preventDefault();
     e.stopPropagation();
-    this.drag = { offset: e.clientY - this.thumb.getBoundingClientRect().top };
+    this.drag = { offset: e.clientY - this.thumb.getBoundingClientRect().top, startY: e.clientY, moved: false };
     window.addEventListener("mousemove", this.onDragMove);
     window.addEventListener("mouseup", this.onDragEnd);
   };
@@ -1057,6 +1072,8 @@ export class HistoryScroll implements IDisposable {
   private readonly onDragMove = (e: MouseEvent): void => {
     const g = this.geometry();
     if (!this.drag || !this.track || !this.thumb || !g) return;
+    if (!this.drag.moved && e.clientY === this.drag.startY) return;
+    this.drag.moved = true;
     const y = Math.min(g.track - g.thumb, Math.max(0, e.clientY - this.track.getBoundingClientRect().top - this.drag.offset));
     this.thumb.style.top = `${y}px`;
     this.requestJump(this.lineAt(y));
@@ -1065,9 +1082,13 @@ export class HistoryScroll implements IDisposable {
   private readonly onDragEnd = (): void => {
     window.removeEventListener("mousemove", this.onDragMove);
     window.removeEventListener("mouseup", this.onDragEnd);
+    const moved = this.drag?.moved ?? false;
     const y = this.thumb ? parseFloat(this.thumb.style.top) || 0 : 0;
     this.drag = null;
-    this.requestJump(this.lineAt(y));
+    // A press and release without moving keeps the place (the thumb's pixel position is
+    // coarser than a line, so jumping to it would move the view).
+    if (moved) this.requestJump(this.lineAt(y));
+    else this.schedulePaint();
   };
 
   /** A click on the track: center the thumb there. */
