@@ -11,6 +11,7 @@
 //! the panel catches up. Nothing depends on timers in the webview.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -33,6 +34,7 @@ const MAX_UNACKED: u32 = 3;
 const FLAG_SESSION_BYTE: u8 = 0x80;
 const FLAG_CONFIG: u64 = 1 << 62;
 const FLAG_KEY_FRAME: u64 = 1 << 61;
+const PTS_MASK: u64 = FLAG_KEY_FRAME - 1;
 
 // ---------------------------------------------------------------------------------------
 // Control messages (scrcpy 3.x)
@@ -217,6 +219,95 @@ struct Mirror {
     control: mpsc::UnboundedSender<Vec<u8>>,
     acked: Arc<AtomicU32>,
     stop: Arc<Notify>,
+    video: Arc<Mutex<VideoState>>,
+}
+
+/// What the video task knows about the stream, shared with the recording commands.
+#[derive(Default)]
+struct VideoState {
+    /// Last config packet (SPS / PPS, Annex B) and the capture size it belongs to.
+    config: Option<Vec<u8>>,
+    size: (u32, u32),
+    recording: Option<Recording>,
+}
+
+/// A recording of every video packet (before flow control: the panel falling behind does
+/// not drop frames from the file). A new capture size (rotation) continues in a new file,
+/// `name (2).mp4` ..., since one MP4 track keeps one size.
+struct Recording {
+    base: PathBuf,
+    part: u32,
+    writer: Option<super::mp4::Mp4Writer>,
+    files: Vec<String>,
+    frames: u64,
+    duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordResult {
+    pub files: Vec<String>,
+    pub frames: u64,
+    pub duration_ms: u64,
+}
+
+impl Recording {
+    fn new(base: PathBuf) -> Self {
+        Self { base, part: 0, writer: None, files: Vec::new(), frames: 0, duration_ms: 0 }
+    }
+
+    /// A config packet: the first one opens the file; one for another size starts a new part.
+    fn on_config(&mut self, config: &[u8], size: (u32, u32)) -> Result<()> {
+        if self.writer.as_ref().is_some_and(|w| w.size() == size) {
+            return Ok(());
+        }
+        self.close_part();
+        self.part += 1;
+        let path = part_path(&self.base, self.part);
+        self.writer = Some(super::mp4::Mp4Writer::create(&path, size.0, size.1, config)?);
+        Ok(())
+    }
+
+    fn on_packet(&mut self, pts: u64, key: bool, data: &[u8], size: (u32, u32)) -> Result<()> {
+        match &mut self.writer {
+            Some(w) if w.size() == size => w.push(pts, key, data),
+            _ => Ok(()),
+        }
+    }
+
+    fn close_part(&mut self) {
+        if let Some(w) = self.writer.take() {
+            let path = w.path().display().to_string();
+            // A part without frames is removed by `finish`.
+            if let Ok(x) = w.finish() {
+                self.files.push(path);
+                self.frames += x.frames;
+                self.duration_ms += x.duration_ms;
+            }
+        }
+    }
+
+    fn finish(mut self) -> Result<RecordResult> {
+        self.close_part();
+        if self.files.is_empty() {
+            bail!("没有录到画面");
+        }
+        Ok(RecordResult { files: self.files, frames: self.frames, duration_ms: self.duration_ms })
+    }
+}
+
+/// File of part `n` (1: the chosen name; then `name (2).mp4` ..., never overwriting).
+fn part_path(base: &Path, n: u32) -> PathBuf {
+    if n <= 1 {
+        return base.to_path_buf();
+    }
+    let name = base.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let p = base.with_file_name(crate::transfer::numbered_name(&name, n));
+    if p.exists() {
+        crate::transfer::free_local_path(&p)
+    } else {
+        p
+    }
 }
 
 fn mirrors() -> &'static Mutex<HashMap<String, Mirror>> {
@@ -346,9 +437,10 @@ pub async fn start(
 
     let (control_tx, mut control_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let acked = Arc::new(AtomicU32::new(0));
+    let state = Arc::new(Mutex::new(VideoState { size: (width, height), ..Default::default() }));
     lock(mirrors()).insert(
         mirror_id.clone(),
-        Mirror { control: control_tx.clone(), acked: Arc::clone(&acked), stop: Arc::clone(&stop_n) },
+        Mirror { control: control_tx.clone(), acked: Arc::clone(&acked), stop: Arc::clone(&stop_n), video: Arc::clone(&state) },
     );
     if opts.screen_off {
         let _ = control_tx.send(encode(&MirrorInput::DisplayPower { on: false }));
@@ -423,6 +515,7 @@ pub async fn start(
                     r = video.read_exact(&mut h) => { r.context("视频流中断")?; }
                 }
                 if h[0] & FLAG_SESSION_BYTE != 0 {
+                    lock(&state).size = session_size(&h);
                     // New capture size (rotation, fold): a header-only message; the panel
                     // reconfigures its decoder, and the next config + keyframe follow.
                     channel.send(InvokeResponseBody::Raw(h.to_vec())).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -435,6 +528,16 @@ pub async fn start(
                 msg.resize(12 + size, 0);
                 video.read_exact(&mut msg[12..]).await.context("视频流中断")?;
                 let is_config = pts & FLAG_CONFIG != 0;
+                record(&state, &app, &id_v, |s, rec| {
+                    if is_config {
+                        rec.on_config(&msg[12..], s)
+                    } else {
+                        rec.on_packet(pts & PTS_MASK, pts & FLAG_KEY_FRAME != 0, &msg[12..], s)
+                    }
+                });
+                if is_config {
+                    lock(&state).config = Some(msg[12..].to_vec());
+                }
                 if is_config {
                     // SPS / PPS: always delivered (the decoder needs it), kept for resyncs.
                     config = Some(msg.clone());
@@ -472,6 +575,11 @@ pub async fn start(
         }
         .await;
         let message = result.err().map(|e| format!("{:#}", e));
+        // The stream ended while recording: the file is finished here.
+        let rec = lock(&state).recording.take();
+        if let Some(rec) = rec {
+            emit_recorded(&app, &id_v, rec.finish());
+        }
         let _ = app.emit("adb-mirror-ended", serde_json::json!({ "mirrorId": id_v, "message": message }));
         stop_v.notify_waiters();
         let mut m = lock(mirrors());
@@ -483,6 +591,27 @@ pub async fn start(
     Ok(MirrorInfo { device_name, width, height })
 }
 
+/// Feeds the recording (if any) one packet; a write error ends it and tells the panel.
+fn record(state: &Mutex<VideoState>, app: &tauri::AppHandle, mirror_id: &str, f: impl FnOnce((u32, u32), &mut Recording) -> Result<()>) {
+    let mut s = lock(state);
+    let size = s.size;
+    let Some(rec) = s.recording.as_mut() else { return };
+    if let Err(e) = f(size, rec) {
+        let rec = s.recording.take().unwrap();
+        drop(s);
+        let result = rec.finish();
+        emit_recorded(app, mirror_id, result.map_err(|_| e));
+    }
+}
+
+/// A recording ended on its own (stream ended, disk full ...).
+fn emit_recorded(app: &tauri::AppHandle, mirror_id: &str, result: Result<RecordResult>) {
+    let (result, message) = match result {
+        Ok(r) => (Some(r), None),
+        Err(e) => (None, Some(format!("{:#}", e))),
+    };
+    let _ = app.emit("adb-mirror-recorded", serde_json::json!({ "mirrorId": mirror_id, "result": result, "message": message }));
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
@@ -531,9 +660,36 @@ pub fn ack(mirror_id: &str, count: u32) {
     }
 }
 
+/// Start recording to `path` (MP4). Asks the encoder for a keyframe so the file starts now.
+pub fn record_start(mirror_id: &str, path: &str) -> Result<()> {
+    let m = lock(mirrors());
+    let mirror = m.get(mirror_id).context("屏幕镜像未运行")?;
+    let mut s = lock(&mirror.video);
+    if s.recording.is_some() {
+        bail!("正在录屏");
+    }
+    let mut rec = Recording::new(PathBuf::from(path));
+    if let Some(config) = s.config.clone() {
+        rec.on_config(&config, s.size)?;
+    }
+    s.recording = Some(rec);
+    let _ = mirror.control.send(vec![TYPE_RESET_VIDEO]);
+    Ok(())
+}
+
+pub fn record_stop(mirror_id: &str) -> Result<RecordResult> {
+    let video = lock(mirrors()).get(mirror_id).map(|m| Arc::clone(&m.video)).context("屏幕镜像未运行")?;
+    let rec = lock(&video).recording.take().context("没有在录屏")?;
+    rec.finish()
+}
+
 pub fn stop(mirror_id: &str) {
     if let Some(m) = lock(mirrors()).remove(mirror_id) {
         m.stop.notify_waiters();
+        // Not left half-written when the panel closes.
+        if let Some(rec) = lock(&m.video).recording.take() {
+            let _ = rec.finish();
+        }
     }
 }
 

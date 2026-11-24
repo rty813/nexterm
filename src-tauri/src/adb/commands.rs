@@ -240,6 +240,17 @@ pub fn adb_mirror_stop(mirror_id: String) {
     scrcpy::stop(&mirror_id);
 }
 
+/// Record the running mirror to an MP4 at `path` (the H.264 stream as is).
+#[tauri::command]
+pub fn adb_mirror_record_start(mirror_id: String, path: String) -> Result<(), String> {
+    scrcpy::record_start(&mirror_id, &path).map_err(err)
+}
+
+#[tauri::command]
+pub fn adb_mirror_record_stop(mirror_id: String) -> Result<scrcpy::RecordResult, String> {
+    scrcpy::record_stop(&mirror_id).map_err(err)
+}
+
 /// A PNG of the device screen (`screencap -p`), saved to `path`.
 #[tauri::command]
 pub async fn adb_screenshot(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>, path: String) -> Result<(), String> {

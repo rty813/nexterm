@@ -9,6 +9,7 @@ pub mod client;
 pub mod commands;
 pub mod locate;
 pub mod logcat;
+pub mod mp4;
 pub mod ops;
 pub mod scrcpy;
 pub mod shell;

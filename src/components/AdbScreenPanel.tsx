@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Camera,
+  CircleStop,
   ChevronLeft,
   Circle,
   ClipboardPaste,
@@ -11,13 +12,14 @@ import {
   RotateCw,
   Smartphone,
   Square,
+  Video,
   Volume1,
   Volume2,
   X,
 } from "lucide-react";
 import { adb, DEFAULT_MIRROR } from "../services/adb";
 import { backend } from "../services/backend";
-import type { MirrorInput } from "../types/domain";
+import type { MirrorInput, MirrorRecordResult } from "../types/domain";
 import { KEYCODE, avcCodecString, fitBox, joinBytes, keycodeFor, metaState, parseMirrorPacket, textFor, toDevice } from "../utils/adbScreen";
 
 interface Target {
@@ -52,6 +54,11 @@ export const AdbScreenPanel: React.FC<{
   const [deviceName, setDeviceName] = useState("");
   const [screenOff, setScreenOff] = useState(false);
   const [width, setWidth] = useState(360);
+  /** Recording since (ms), null when not recording. */
+  const [recording, setRecording] = useState<number | null>(null);
+  const recordingRef = useRef(recording);
+  recordingRef.current = recording;
+  const [, setTick] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const areaRef = useRef<HTMLDivElement>(null);
@@ -140,13 +147,29 @@ export const AdbScreenPanel: React.FC<{
     const ended = adb.onMirrorEnded((p) => {
       if (p.mirrorId === id && !disposed) setPhase(p.message ? { kind: "error", message: p.message } : { kind: "error", message: t("mirror.ended") });
     });
+    const recorded = adb.onMirrorRecorded((p) => {
+      if (p.mirrorId !== id) return;
+      setRecording(null);
+      reportRecording(p.result, p.message);
+    });
     const clip = adb.onMirrorClipboard((p) => {
       if (p.mirrorId === id) void backend.writeClipboard(p.text);
     });
 
     return () => {
       disposed = true;
-      adb.mirrorStop(id);
+      // Finish the file first (and say where it went), then stop.
+      if (recordingRef.current !== null) {
+        setRecording(null);
+        void adb
+          .mirrorRecordStop(id)
+          .then((r) => reportRecording(r, null))
+          .catch(() => undefined)
+          .finally(() => adb.mirrorStop(id));
+      } else {
+        adb.mirrorStop(id);
+      }
+      void recorded.then((f) => f());
       void ended.then((f) => f());
       void clip.then((f) => f());
       if (decoder.state !== "closed") decoder.close();
@@ -252,6 +275,48 @@ export const AdbScreenPanel: React.FC<{
       onToast(t("mirror.saved", { path }));
     } catch (e) {
       onToast(String(e));
+    }
+  };
+
+  const reportRecording = (r: MirrorRecordResult | null, message: string | null) => {
+    if (!r) {
+      if (message) onToast(t("mirror.recordFailed", { message }));
+      return;
+    }
+    onToast(
+      r.files.length > 1
+        ? t("mirror.recordParts", { count: r.files.length, path: r.files[0] })
+        : t("mirror.recordSaved", { path: r.files[0], duration: clock(r.durationMs) })
+    );
+  };
+
+  // Elapsed time on the button.
+  useEffect(() => {
+    if (recording === null) return;
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [recording]);
+
+  const toggleRecord = async () => {
+    const id = mirrorId.current;
+    if (recording !== null) {
+      setRecording(null);
+      try {
+        reportRecording(await adb.mirrorRecordStop(id), null);
+      } catch (e) {
+        onToast(t("mirror.recordFailed", { message: String(e) }));
+      }
+      return;
+    }
+    const name = `screenrecord-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.mp4`;
+    const path = await backend.pickSavePath(t("mirror.record"), name, [{ name: "MP4", extensions: ["mp4"] }]);
+    // The mirror may have restarted while the dialog was open.
+    if (!path || id !== mirrorId.current) return;
+    try {
+      await adb.mirrorRecordStart(id, path);
+      setRecording(Date.now());
+    } catch (e) {
+      onToast(t("mirror.recordFailed", { message: String(e) }));
     }
   };
 
@@ -365,10 +430,29 @@ export const AdbScreenPanel: React.FC<{
         <button type="button" className="btn-ghost btn-xs" title={t("mirror.screenshot")} onClick={() => void screenshot()}>
           <Camera size={14} />
         </button>
+        <button
+          type="button"
+          className={`btn-ghost btn-xs mirror-record ${recording !== null ? "recording" : ""}`}
+          title={t(recording !== null ? "mirror.stopRecord" : "mirror.record")}
+          disabled={phase.kind !== "running" && recording === null}
+          onClick={() => void toggleRecord()}
+        >
+          {recording !== null ? <CircleStop size={14} /> : <Video size={14} />}
+          {recording !== null && <span className="mirror-record-time">{clock(Date.now() - recording)}</span>}
+        </button>
       </div>
     </aside>
   );
 };
+
+/** 75000 -> "1:15". */
+function clock(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const mm = String(Math.floor((s % 3600) / 60));
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${mm.padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+}
 
 function targetOf(t: Target): { instanceId?: string; serial?: string } {
   return t.serial ? { serial: t.serial } : { instanceId: t.paneId };

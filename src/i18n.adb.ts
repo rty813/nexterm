@@ -113,6 +113,11 @@ const MIRROR_ZH = {
   pasteClipboard: "把电脑剪贴板粘贴到手机",
   screenshot: "截图",
   saved: "已保存 {{path}}",
+  record: "录屏（保存为 MP4）",
+  stopRecord: "停止录屏",
+  recordSaved: "录屏已保存（{{duration}}）：{{path}}",
+  recordParts: "录屏已保存为 {{count}} 个文件（屏幕旋转后另起一个文件）：{{path}} …",
+  recordFailed: "录屏失败：{{message}}",
 };
 
 const MIRROR_EN: typeof MIRROR_ZH = {
@@ -135,6 +140,11 @@ const MIRROR_EN: typeof MIRROR_ZH = {
   pasteClipboard: "Paste the PC clipboard on the phone",
   screenshot: "Screenshot",
   saved: "Saved {{path}}",
+  record: "Record screen (MP4)",
+  stopRecord: "Stop recording",
+  recordSaved: "Recording saved ({{duration}}): {{path}}",
+  recordParts: "Recording saved as {{count}} files (a rotation starts a new file): {{path}} …",
+  recordFailed: "Recording failed: {{message}}",
 };
 
 const LOGCAT_ZH = {

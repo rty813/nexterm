@@ -1001,6 +1001,13 @@ export interface MirrorInfo {
   height: number;
 }
 
+/** A finished screen recording (Rust `adb::scrcpy::RecordResult`); a rotation starts a new file. */
+export interface MirrorRecordResult {
+  files: string[];
+  frames: number;
+  durationMs: number;
+}
+
 /** Input for the screen mirror (Rust `adb::scrcpy::MirrorInput`). */
 export type MirrorInput =
   | { type: "key"; keycode: number; down: boolean; meta?: number; repeat?: number }

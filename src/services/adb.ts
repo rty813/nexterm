@@ -11,6 +11,7 @@ import type {
   AdbStatus,
   LogEntry,
   MirrorInfo,
+  MirrorRecordResult,
   MirrorInput,
   SessionConfig,
 } from "../types/domain";
@@ -157,6 +158,20 @@ export const adb = {
   mirrorStop(mirrorId: string): void {
     if (!isTauriRuntime()) return;
     void invoke("adb_mirror_stop", { mirrorId }).catch(() => undefined);
+  },
+  /** Record the running mirror to an MP4 at `path`. */
+  async mirrorRecordStart(mirrorId: string, path: string): Promise<void> {
+    need();
+    await invoke("adb_mirror_record_start", { mirrorId, path });
+  },
+  async mirrorRecordStop(mirrorId: string): Promise<MirrorRecordResult> {
+    need();
+    return invoke<MirrorRecordResult>("adb_mirror_record_stop", { mirrorId });
+  },
+  /** A recording ended on its own (mirror ended, write error). */
+  onMirrorRecorded(handler: (p: { mirrorId: string; result: MirrorRecordResult | null; message: string | null }) => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return Promise.resolve(() => {});
+    return listen<{ mirrorId: string; result: MirrorRecordResult | null; message: string | null }>("adb-mirror-recorded", (e) => handler(e.payload));
   },
   onMirrorEnded(handler: (p: { mirrorId: string; message: string | null }) => void): Promise<UnlistenFn> {
     if (!isTauriRuntime()) return Promise.resolve(() => {});

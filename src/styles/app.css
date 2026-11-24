@@ -6211,6 +6211,16 @@ html.ctxmenu-host #root {
 .mirror-buttons .btn-ghost.active {
   color: var(--accent);
 }
+.mirror-buttons .mirror-record.recording {
+  color: var(--danger);
+  gap: 4px;
+  width: auto;
+  padding: 0 6px;
+}
+.mirror-record-time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .mirror-sep {
   width: 1px;
   height: 16px;

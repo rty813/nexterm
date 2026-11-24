@@ -2073,6 +2073,8 @@ pub fn run() {
             adb::commands::adb_mirror_input,
             adb::commands::adb_mirror_ack,
             adb::commands::adb_mirror_stop,
+            adb::commands::adb_mirror_record_start,
+            adb::commands::adb_mirror_record_stop,
             adb::commands::adb_screenshot,
             subscribe_output,
             unsubscribe_output,
