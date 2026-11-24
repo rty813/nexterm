@@ -1,4 +1,4 @@
-import type { SessionConfig } from "../types/domain";
+import type { QuickCommand, SessionConfig } from "../types/domain";
 
 export type DockedViewLocation = "sidebar" | "panel" | "tab";
 export type ViewLocation = DockedViewLocation | "settings" | "dialog";
@@ -26,6 +26,12 @@ export function statusLabelPrefix(declared: string, current: string): string {
   const prefix = declared.match(/^[^:：\n]+(?:：\s*|:\s+)/)?.[0];
   return prefix && current.startsWith(prefix) && current.slice(prefix.length).trim() ? prefix : "";
 }
+/**
+ * A quick command a plugin adds to the quick bar: either `text` sent to the active terminal (line
+ * breaks as Enter, like the user's own quick commands) or `command`, one of the plugin's commands.
+ */
+export interface PluginQuickCommand { id: string; label: string; group?: string; text?: string; command?: string; enter?: boolean; escapes?: boolean; icon?: string; tooltip?: string }
+export const QUICK_COMMAND_LIMITS = {count: 200, text: 4096} as const;
 export interface PluginSessionSource { id: string; title: string; refreshCommand?: string; settingsView?: string }
 export interface PluginSessionItem { id: string; label: string; description?: string; group?: string }
 export interface PluginSessionCatalog { state: "loading" | "ready" | "signedOut" | "error"; items: PluginSessionItem[]; message?: string }
@@ -44,6 +50,7 @@ export interface PluginManifest {
     toolbar?: PluginItem[];
     menus?: { command: string; title: string; selectionOnly?: boolean }[];
     sessionSources?: PluginSessionSource[];
+    quickCommands?: PluginQuickCommand[];
   };
 }
 export interface PluginPackage { manifest: PluginManifest; files: Record<string, string> }
@@ -81,12 +88,12 @@ export function parsePackage(value: unknown): PluginPackage {
   if (JSON.stringify(value).length > 2 * 1024 * 1024) throw new Error("Plugin package exceeds 2 MiB");
   if (!isRecord(manifest.contributes)) return fail();
   const contributes = manifest.contributes;
-  if (Object.keys(contributes).some(name => !["commands", "views", "statusBar", "toolbar", "menus", "sessionSources"].includes(name))) return fail();
+  if (Object.keys(contributes).some(name => !["commands", "views", "statusBar", "toolbar", "menus", "sessionSources", "quickCommands"].includes(name))) return fail();
   const ids = new Set<string>();
-  for (const kind of ["commands", "views", "statusBar", "toolbar", "menus", "sessionSources"]) {
+  for (const kind of ["commands", "views", "statusBar", "toolbar", "menus", "sessionSources", "quickCommands"]) {
     const list = contributes[kind];
     if (list === undefined) continue;
-    if (!Array.isArray(list) || list.length > 32) return fail();
+    if (!Array.isArray(list) || list.length > (kind === "quickCommands" ? QUICK_COMMAND_LIMITS.count : 32)) return fail();
     for (const item of list) {
       if (!isRecord(item)) return fail();
       if (kind !== "menus") { if (!identifier(item.id) || ids.has(item.id)) return fail(); ids.add(item.id); }
@@ -94,15 +101,38 @@ export function parsePackage(value: unknown): PluginPackage {
       if (kind === "views" && (!text(item.title) || !["sidebar", "panel", "tab", "settings", "dialog"].includes(String(item.location)) || typeof item.file !== "string" || !names.includes(item.file) || (item.size !== undefined && (!isModalLocation(item.location as ViewLocation) || !validViewSize(item.size))))) return fail();
       if (["statusBar", "toolbar"].includes(kind) && (!text(item.text) || !identifier(item.command) || (item.tooltip !== undefined && !text(item.tooltip)))) return fail();
       if (kind === "menus" && (!text(item.title) || !identifier(item.command) || (item.selectionOnly !== undefined && typeof item.selectionOnly !== "boolean"))) return fail();
+      if (kind === "quickCommands" && !validQuickCommand(item)) return fail();
       if (kind === "sessionSources" && (!text(item.title) || (item.refreshCommand !== undefined && !identifier(item.refreshCommand)) || (item.settingsView !== undefined && !identifier(item.settingsView)))) return fail();
     }
   }
   const commands = new Set((contributes.commands as PluginCommand[] | undefined)?.map(command => command.id));
   for (const item of [...(contributes.statusBar as PluginItem[] ?? []), ...(contributes.toolbar as PluginItem[] ?? []), ...(contributes.menus as {command: string}[] ?? [])]) if (!commands.has(item.command)) return fail();
+  for (const item of contributes.quickCommands as PluginQuickCommand[] ?? []) if (item.command !== undefined && !commands.has(item.command)) return fail();
   for (const source of contributes.sessionSources as PluginSessionSource[] ?? []) {
     if (manifest.permissions.sessions !== "open" || (source.refreshCommand && !commands.has(source.refreshCommand)) || (source.settingsView && !(contributes.views as PluginView[] | undefined)?.some(view => view.id === source.settingsView && view.location === "settings"))) return fail();
   }
   return value as unknown as PluginPackage;
+}
+
+const QUICK_KEYS = ["id", "label", "group", "text", "command", "enter", "escapes", "icon", "tooltip"];
+/** "shape-color" as quick commands store it; unknown shapes and colors fall back when shown. */
+const quickIcon = (value: unknown) => typeof value === "string" && /^[a-z]{1,20}(?:-(?:[a-z]{1,30}|#[0-9a-fA-F]{3,8}))?$/.test(value);
+function validQuickCommand(item: Record<string, unknown>): boolean {
+  if (Object.keys(item).some(key => !QUICK_KEYS.includes(key)) || !boundedText(item.label, 100) || (item.group !== undefined && !boundedText(item.group, 100)) || (item.tooltip !== undefined && !boundedText(item.tooltip, 500)) || (item.icon !== undefined && !quickIcon(item.icon))) return false;
+  // Exactly one of: text for the terminal, or a declared plugin command.
+  if ((item.text === undefined) === (item.command === undefined)) return false;
+  if (item.command !== undefined) return identifier(item.command) && item.enter === undefined && item.escapes === undefined;
+  return typeof item.text === "string" && item.text.length > 0 && item.text.length <= QUICK_COMMAND_LIMITS.text && !item.text.includes("\0") &&
+    (item.enter === undefined || typeof item.enter === "boolean") && (item.escapes === undefined || typeof item.escapes === "boolean");
+}
+
+/** A plugin's quick command as the quick bar shows it: read-only, not saved with the user's own. */
+export interface ContributedQuickCommand extends QuickCommand { pluginId: string; pluginName: string; contributionId: string; pluginCommand?: string; tooltip?: string }
+export const isContributedQuick = (value: QuickCommand): value is ContributedQuickCommand => "pluginId" in value;
+export function contributedQuickCommand(pluginId: string, pluginName: string, item: PluginQuickCommand): ContributedQuickCommand {
+  const base = {id: `plugin:${pluginId}:${item.id}`, label: item.label, group: item.group ?? pluginName, pluginId, pluginName, contributionId: item.id, ...(item.icon ? {icon: item.icon} : {}), ...(item.tooltip ? {tooltip: item.tooltip} : {})};
+  if (item.command !== undefined) return {...base, kind: "action", command: "", appendNewline: false, pluginCommand: item.command};
+  return {...base, kind: "text", command: item.text!.replace(/\r\n|\n/g, "\r"), appendNewline: item.enter ?? true, ...(item.escapes ? {escapes: true} : {})};
 }
 
 const boundedText = (value: unknown, limit: number): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= limit && !/[\x00-\x1f\x7f]/.test(value);

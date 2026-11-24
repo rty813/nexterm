@@ -4598,6 +4598,10 @@ html.ctxmenu-host #root {
   border-color: var(--accent-line);
   background: var(--accent-soft);
 }
+/* Added by a plugin: read-only, so set apart from the user's own. */
+.quick-chip.plugin {
+  border-style: dashed;
+}
 .quick-chip:disabled {
   opacity: 0.45;
   cursor: not-allowed;

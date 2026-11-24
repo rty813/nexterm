@@ -3,9 +3,10 @@ import helloPackage from "../../plugins/hello.nexterm-plugin?raw";
 import helloManifest from "../../plugins/hello/manifest.json?raw";
 import helloMain from "../../plugins/hello/main.js?raw";
 import helloView from "../../plugins/hello/view.html?raw";
-import { parsePackage, viewSize, sessionCatalog, sessionChoices, sessionSourceKey, statusLabelPrefix, temporarySsh } from "../plugins/model";
+import { contributedQuickCommand, isContributedQuick, QUICK_COMMAND_LIMITS, parsePackage, viewSize, sessionCatalog, sessionChoices, sessionSourceKey, statusLabelPrefix, temporarySsh } from "../plugins/model";
 import { snapshotWorkspace } from "../utils/workspaceSnapshot";
 import { draggedDialogSize } from "../utils/pluginDialogSize";
+import { quickPayload } from "../utils/quickCommands";
 
 const manifest = () => ({apiVersion: 1, id: "test.plugin", name: "Test", version: "1.0.0", main: "main.js", permissions: {network: ["https://example.com"]}, contributes: {commands: [{id: "show", title: "Show"}], views: [{id: "view", title: "View", location: "tab", file: "view.html"}]}});
 const bundle = () => ({manifest: manifest(), files: {"main.js": "", "view.html": "<h1>test</h1>"}});
@@ -130,5 +131,46 @@ describe("plugin dialog size", () => {
     expect(draggedDialogSize({width: 760, height: 560}, 50, 20, viewport)).toEqual({width: 860, height: 600});
     expect(draggedDialogSize({width: 760, height: 560}, 2000, 2000, viewport)).toEqual({width: 1560, height: 860});
     expect(draggedDialogSize({width: 760, height: 560}, -2000, -2000, viewport)).toEqual({width: 320, height: 200});
+  });
+});
+
+describe("plugin quick commands", () => {
+  const withQuick = (quickCommands: unknown[]) => {const value = bundle(); Object.assign(value.manifest.contributes, {quickCommands}); return value;};
+  it("accepts terminal text or a declared command", () => {
+    const value = parsePackage(withQuick([
+      {id: "logs", label: "Tail logs", group: "Ops", text: "tail -f /var/log/syslog", icon: "terminal-dodgerblue", tooltip: "Follow syslog"},
+      {id: "multi", label: "Two lines", text: "cd /tmp\nls", enter: false, escapes: true},
+      {id: "open", label: "Open", command: "show"},
+    ]));
+    expect(value.manifest.contributes.quickCommands).toHaveLength(3);
+  });
+  it.each([
+    [{id: "a", label: "A"}],
+    [{id: "a", label: "A", text: "ls", command: "show"}],
+    [{id: "a", label: "A", command: "missing"}],
+    [{id: "a", label: "A", command: "show", enter: true}],
+    [{id: "a", label: "A", text: ""}],
+    [{id: "a", label: "A", text: "x".repeat(QUICK_COMMAND_LIMITS.text + 1)}],
+    [{id: "a", label: "A", text: "ls\0"}],
+    [{id: "a", label: "A\n", text: "ls"}],
+    [{id: "a", label: "A", text: "ls", enter: "yes"}],
+    [{id: "a", label: "A", text: "ls", icon: "url(x)"}],
+    [{id: "a", label: "A", text: "ls", shortcut: "Alt+1"}],
+    [{id: "show", label: "Clashes with a command id", text: "ls"}],
+  ])("rejects %j", item => expect(() => parsePackage(withQuick([item]))).toThrow());
+  it("allows up to the quick command limit", () => {
+    const many = (count: number) => Array.from({length: count}, (_, index) => ({id: `q${index}`, label: `Q${index}`, text: "ls"}));
+    expect(parsePackage(withQuick(many(QUICK_COMMAND_LIMITS.count))).manifest.contributes.quickCommands).toHaveLength(QUICK_COMMAND_LIMITS.count);
+    expect(() => parsePackage(withQuick(many(QUICK_COMMAND_LIMITS.count + 1)))).toThrow();
+  });
+  it("shows them as namespaced, read-only quick commands that press Enter by default", () => {
+    const text = contributedQuickCommand("test.plugin", "Test", {id: "logs", label: "Logs", text: "cd /tmp\r\nls"});
+    expect(text).toMatchObject({id: "plugin:test.plugin:logs", group: "Test", kind: "text", command: "cd /tmp\rls", appendNewline: true, contributionId: "logs"});
+    expect(quickPayload(text)).toBe("cd /tmp\rls\r");
+    expect(quickPayload(contributedQuickCommand("p", "P", {id: "raw", label: "Raw", text: "q", enter: false}))).toBe("q");
+    const command = contributedQuickCommand("test.plugin", "Test", {id: "open", label: "Open", group: "Tools", command: "show"});
+    expect(command).toMatchObject({kind: "action", pluginCommand: "show", group: "Tools"});
+    expect(isContributedQuick(command)).toBe(true);
+    expect(isContributedQuick({id: "mine", label: "Mine", group: "", command: "ls", appendNewline: true})).toBe(false);
   });
 });

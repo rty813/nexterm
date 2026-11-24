@@ -66,10 +66,27 @@ node scripts/pack-plugin.mjs ../my-counter
 | `contributes.statusBar` / `toolbar` | `{id, text, tooltip?, command}`；点击执行已声明命令。 |
 | `contributes.menus` | `{title, command, selectionOnly?}`；注册终端右键菜单；只有 `selectionOnly: true` 才在用户执行此命令时交付当前选区（最多 16 KiB）。 |
 | `contributes.sessionSources` | `{id, title, refreshCommand?, settingsView?}`；向原有会话栏提供动态会话，需要 `sessions: "open"`。刷新命令必须已声明，设置视图必须位于 `settings`。 |
+| `contributes.quickCommands` | `{id, label, group?, text?, command?, enter?, escapes?, icon?, tooltip?}`；向快捷命令栏添加命令，见下文。 |
 
-同一插件内的贡献 ID 必须唯一。每种贡献最多 32 个，每次运行的固定及按需授权 origin 合计最多 16 个。未知权限和未知扩展位置会拒绝安装。用户可隐藏视图入口，但仍可从命令打开它。主标签页可切回原生终端，切换不会断开终端。
+同一插件内的贡献 ID 必须唯一。每种贡献最多 32 个（快捷命令最多 200 个），每次运行的固定及按需授权 origin 合计最多 16 个。未知权限和未知扩展位置会拒绝安装。用户可隐藏视图入口，但仍可从命令打开它。主标签页可切回原生终端，切换不会断开终端。
 
 网络授权表示用户允许插件通过宿主访问某个 HTTPS 目标，不代表已登录该服务。协议、域名和端口都参与匹配；例如 `https://example.com:8443` 与 `https://example.com` 是两个不同的目标。固定地址写入 `permissions.network`；地址由用户输入时声明 `networkRequest: true`，运行时先请求授权。SSH 连接使用独立的会话权限。
+
+## 快捷命令
+
+插件可以在清单里声明快捷命令，启用插件后出现在快捷命令栏、命令面板和终端自动补全中，停用、卸载或插件出错时随之消失。不需要额外权限：命令只在用户点击时执行。
+
+```json
+"quickCommands": [
+  {"id": "tail-syslog", "label": "查看系统日志", "group": "运维", "text": "tail -f /var/log/syslog", "icon": "terminal-dodgerblue"},
+  {"id": "deploy", "label": "部署", "command": "deploy", "tooltip": "打开部署向导"}
+]
+```
+
+- `text` 与 `command` 二选一。`text` 发送到当前终端（最长 4096 字符，不能含 NUL），换行按回车发送；`enter` 控制末尾是否再按回车，默认 `true`；`escapes: true` 时解析 `\n`、`\e`、`\xHH` 等转义，与 WindTerm 导入的命令相同。`command` 执行本插件已声明的命令，不能带 `enter` / `escapes`。
+- `label`、`group` 最长 100 字符，`tooltip` 最长 500 字符，均不能含控制字符。`group` 省略时用插件名作为分组。`icon` 是 `形状-颜色`（如 `tag-coral`、`server-#4caf50`），未知形状或颜色按默认显示。快捷命令不能设置快捷键，需要快捷键请用 `contributes.commands` 的 `shortcut`。
+- 插件的快捷命令只读：不出现在「快捷命令」管理对话框里，不能编辑，也不写入用户的快捷命令文件或配置同步。用户可在快捷命令上右键隐藏，或在插件管理中逐项隐藏 / 恢复。
+- 与其他插件贡献一样只在主窗口出现；弹出的终端窗口不显示插件的快捷命令。
 
 ## 后台与页面通信
 

@@ -412,6 +412,8 @@ export const resources = {
         defaultGroup: "自定义",
         importBtn: "从 WindTerm 导入",
         importTip: "导入本机 WindTerm 的快捷命令 (quickbar.config)",
+        fromPlugin: "来自插件：{{name}}",
+        hidePluginCommand: "隐藏此命令（可在插件管理中恢复）",
         empty: "暂无快捷命令，可点击右侧「从 WindTerm 导入」",
       },
       sessionModal: {
@@ -1058,6 +1060,8 @@ export const resources = {
         defaultGroup: "Custom",
         importBtn: "Import from WindTerm",
         importTip: "Import WindTerm quick commands (quickbar.config)",
+        fromPlugin: "From plugin: {{name}}",
+        hidePluginCommand: "Hide this command (restore it in Plugins)",
         empty: "No quick commands yet. Use \"Import from WindTerm\".",
       },
       sessionModal: {

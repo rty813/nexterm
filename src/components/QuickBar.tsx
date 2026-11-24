@@ -6,6 +6,7 @@ import { commandsOf, quickBarHeight, quickBarRowsAfterDrag, quickGroups } from "
 import { useContextMenu } from "./ContextMenu";
 import { QuickIcon } from "./QuickIcon";
 import type { QuickManagerTarget } from "./QuickCommandManager";
+import { isContributedQuick, type ContributedQuickCommand } from "../plugins/model";
 
 interface QuickBarProps {
   commands: QuickCommand[];
@@ -17,6 +18,8 @@ interface QuickBarProps {
   onExecute: (cmd: QuickCommand) => void;
   /** Open the Quick Commands dialog (on a command, or adding one). */
   onManage: (target?: QuickManagerTarget) => void;
+  /** Hide a plugin's quick command (it comes back from the plugin's entry in plugin management). */
+  onHidePluginCommand: (cmd: ContributedQuickCommand) => void;
 }
 
 /**
@@ -69,7 +72,7 @@ const ScrollStrip: React.FC<{ className: string; vertical?: boolean; children: R
   );
 };
 
-export const QuickBar: React.FC<QuickBarProps> = ({ commands, bar, hasActivePane, rows, onRowsChange, onExecute, onManage }) => {
+export const QuickBar: React.FC<QuickBarProps> = ({ commands, bar, hasActivePane, rows, onRowsChange, onExecute, onManage, onHidePluginCommand }) => {
   const { t } = useTranslation();
   const openMenu = useContextMenu();
   const fallback = t("quickbar.defaultGroup");
@@ -116,22 +119,34 @@ export const QuickBar: React.FC<QuickBarProps> = ({ commands, bar, hasActivePane
 
   const chip = (qc: QuickCommand) => {
     const isAction = qc.kind === "action";
-    const preview = isAction ? t(`actions.${qc.action ?? ""}`, qc.action ?? "") : qc.command.replace(/\r/g, "\n").trim();
+    const plugin = isContributedQuick(qc) ? qc : undefined;
+    const text = isAction ? (plugin ? "" : t(`actions.${qc.action ?? ""}`, qc.action ?? "")) : qc.command.replace(/\r/g, "\n").trim();
+    const preview = plugin ? [plugin.tooltip ?? text, t("quickbar.fromPlugin", { name: plugin.pluginName })].filter(Boolean).join("\n") : text;
     return (
       <button
         key={qc.id}
         type="button"
-        className="quick-chip"
+        className={`quick-chip ${plugin ? "plugin" : ""}`}
         disabled={!isAction && !hasActivePane}
         onMouseDown={keepFocus}
         onClick={() => onExecute(qc)}
         onContextMenu={(e) =>
-          openMenu(e, [
-            { label: t("quickManager.editThis"), onClick: () => onManage({ id: qc.id }) },
-            { label: t("quickManager.addInGroup"), onClick: () => onManage({ create: true, group: qc.group || fallback }) },
-            { type: "separator" },
-            { label: t("quickManager.title"), onClick: () => onManage() },
-          ])
+          openMenu(
+            e,
+            plugin
+              ? [
+                  { label: t("quickbar.fromPlugin", { name: plugin.pluginName }), disabled: true },
+                  { label: t("quickbar.hidePluginCommand"), onClick: () => onHidePluginCommand(plugin) },
+                  { type: "separator" },
+                  { label: t("quickManager.title"), onClick: () => onManage() },
+                ]
+              : [
+                  { label: t("quickManager.editThis"), onClick: () => onManage({ id: qc.id }) },
+                  { label: t("quickManager.addInGroup"), onClick: () => onManage({ create: true, group: qc.group || fallback }) },
+                  { type: "separator" },
+                  { label: t("quickManager.title"), onClick: () => onManage() },
+                ]
+          )
         }
         title={`${preview}${qc.shortcut ? `\n${qc.shortcut}` : ""}`}
       >

@@ -245,6 +245,26 @@ describe("generic plugin session sources", () => {
   });
 });
 
+describe("plugin quick commands", () => {
+  const quick = (id = "test.plugin"): PluginPackage => {
+    const value = bundle(id);
+    value.manifest.contributes.quickCommands = [{id: "logs", label: "Logs", text: "tail -f log"}, {id: "open", label: "Open", command: "show"}];
+    return value;
+  };
+  it("lists quick commands of running plugins only, without the hidden ones", async () => {
+    platform.install(quick());
+    expect(platform.quickCommands()).toEqual([]);
+    await platform.start(platform.entries[0]);
+    expect(platform.quickCommands().map(item => item.id)).toEqual(["plugin:test.plugin:logs", "plugin:test.plugin:open"]);
+    expect(platform.quickCommands()).toBe(platform.quickCommands());
+    platform.hide("test.plugin", "logs");
+    expect(platform.quickCommands().map(item => item.contributionId)).toEqual(["open"]);
+    expect(saved).toEqual([expect.objectContaining({hidden: ["logs"]})]);
+    platform.stop("test.plugin");
+    expect(platform.quickCommands()).toEqual([]);
+  });
+});
+
 describe("plugin lifecycle", () => {
   it("revokes native permissions, closes channels and removes only the stopped plugin's views", async () => {
     const runtime = await activate();

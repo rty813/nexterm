@@ -107,6 +107,7 @@ import { UpdateProgressCard } from "./components/UpdateProgressCard";
 import { ReleaseNotes } from "./components/ReleaseNotes";
 import { PluginActivity, PluginBadges, PluginHost, PluginToolbar, PluginViews, usePluginPlatform } from "./components/StatusPlugins";
 import { plugins } from "./plugins/platform";
+import { isContributedQuick } from "./plugins/model";
 import { pluginStores } from "./plugins/storeService";
 import { PluginUpdateNotice } from "./components/PluginStore";
 
@@ -157,8 +158,11 @@ export const App: React.FC = () => {
   const { t, i18n } = useTranslation();
   const [sessions, setSessions] = useState<SessionConfig[]>([]);
   const [quickCommands, setQuickCommands] = useState<QuickCommand[]>([]);
-  const quickCommandsRef = useRef(quickCommands);
-  quickCommandsRef.current = quickCommands;
+  // Plugins add read-only quick commands after the user's own (re-rendered through usePluginPlatform below).
+  const pluginQuickCommands = plugins.quickCommands();
+  const allQuickCommands = useMemo(() => [...quickCommands, ...pluginQuickCommands], [quickCommands, pluginQuickCommands]);
+  const quickCommandsRef = useRef(allQuickCommands);
+  quickCommandsRef.current = allQuickCommands;
   /** The Quick Commands dialog, and what it opens on. */
   const [quickManager, setQuickManager] = useState<QuickManagerTarget | null>(null);
   /** ADB side panels (screen mirror, apps / processes): the pane each was opened on. */
@@ -192,7 +196,7 @@ export const App: React.FC = () => {
   const { sidebarOpen, sidebarWidth, senderOpen, historyOpen, filesOpen, monitorOpen, portForwardOpen, tmuxOpen } = ui;
   // With no quick commands the bar stays out of the way, unless asked for (to add one).
   const [quickBarAsked, setQuickBarAsked] = useState(false);
-  const quickBarOpen = ui.quickBarOpen && (quickCommands.length > 0 || quickBarAsked);
+  const quickBarOpen = ui.quickBarOpen && (allQuickCommands.length > 0 || quickBarAsked);
   const toggleQuickBar = () => {
     const shown = quickBarOpen;
     setQuickBarOpen(!shown);
@@ -2359,7 +2363,7 @@ export const App: React.FC = () => {
     onAdbTool: openAdbTool,
     onPaneSettings: setSettingsPaneId,
     isSavedSession: (id) => sessionsRef.current.some((session) => session.id === id),
-    quickCommands,
+    quickCommands: allQuickCommands,
     onQuickConnect: (target) => {
       const parsed = parseQuickConnectInput(target);
       if (parsed) openSessionInNewTab(parsed);
@@ -2714,6 +2718,10 @@ export const App: React.FC = () => {
 
   /** Run a quick command: send its text to the active terminal, or run its app action. */
   const runQuickCommand = (qc: QuickCommand) => {
+    if (isContributedQuick(qc) && qc.pluginCommand) {
+      plugins.run(qc.pluginId, qc.pluginCommand);
+      return;
+    }
     if (qc.kind === "action") {
       if (qc.action) runActionRef.current(qc.action);
       return;
@@ -2936,8 +2944,9 @@ export const App: React.FC = () => {
 
           {!focusMode && quickBarOpen && (
             <QuickBar
-              commands={quickCommands}
+              commands={allQuickCommands}
               hasActivePane={Boolean(activeLeaf)}
+              onHidePluginCommand={(qc) => plugins.hide(qc.pluginId, qc.contributionId)}
               bar={settings.quickBar ?? {}}
               rows={ui.quickBarRows}
               onRowsChange={setQuickBarRows}
@@ -3192,9 +3201,9 @@ export const App: React.FC = () => {
         <CommandPalette
           actions={[
             ...plugins.commands().map(command => ({id: `plugin:${command.pluginId}:${command.id}`, label: `${command.pluginName}: ${command.title}`, shortcut: command.shortcut})),
-            ...quickCommands.map((q) => ({
+            ...allQuickCommands.map((q) => ({
               id: `quick:${q.id}`,
-              label: `${t("quickbar.badge")}: ${q.label}`,
+              label: `${t("quickbar.badge")}: ${isContributedQuick(q) ? `${q.pluginName} · ` : ""}${q.label}`,
               shortcut: q.shortcut,
             })),
             ...ACTIONS.filter((a) => a.id !== "view.commandPalette").map((a) => ({

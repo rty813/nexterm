@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { backend, isTauriRuntime } from "../services/backend";
 import i18n from "../i18n";
-import { httpsOrigin, isModalLocation, isRecord, parsePackage, pluginSource, sessionCatalog, sessionChoices, sessionSourceKey, temporarySsh, type DockedViewLocation, type PluginSessionOrigin, type InstalledPlugin, type PluginSource, type PluginPackage, type PluginView, type PluginSessionCatalog, type PluginSessionChoice } from "./model";
+import { contributedQuickCommand, httpsOrigin, isModalLocation, type ContributedQuickCommand, isRecord, parsePackage, pluginSource, sessionCatalog, sessionChoices, sessionSourceKey, temporarySsh, type DockedViewLocation, type PluginSessionOrigin, type InstalledPlugin, type PluginSource, type PluginPackage, type PluginView, type PluginSessionCatalog, type PluginSessionChoice } from "./model";
 import type { SessionConfig } from "../types/domain";
 
 /**
@@ -198,6 +198,15 @@ export class PluginPlatform {
   }
   failures = new Map<string, string>();
   commands() { return this.entries.filter(entry => this.runtimes.has(entry.bundle.manifest.id)).flatMap(entry => (entry.bundle.manifest.contributes.commands ?? []).map(command => ({...command, pluginId: entry.bundle.manifest.id, pluginName: entry.bundle.manifest.name}))); }
+  private quickCache?: {version: number; list: ContributedQuickCommand[]};
+  /** Quick commands of running plugins that the user has not hidden (the same list until something changes). */
+  quickCommands(): ContributedQuickCommand[] {
+    if (this.quickCache?.version !== this.version) this.quickCache = {version: this.version, list: this.entries.filter(entry => this.runtimes.has(entry.bundle.manifest.id)).flatMap(entry => {
+      const manifest = entry.bundle.manifest;
+      return (manifest.contributes.quickCommands ?? []).filter(item => !entry.hidden.includes(item.id)).map(item => contributedQuickCommand(manifest.id, manifest.name, item));
+    })};
+    return this.quickCache.list;
+  }
   run(id: string, command: string, value?: unknown) { void this.command(id, command, value).catch(() => {this.lastError = i18n.t("plugin.commandFailed"); this.emit();}); }
   open(id: string, viewId: string) {
     const runtime = this.runtimes.get(id);
