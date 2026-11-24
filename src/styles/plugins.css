@@ -82,8 +82,11 @@
 @keyframes plugin-session-spin { to { transform: rotate(360deg); } }
 .plugin-account-dialog { width: 420px; height: fit-content; overflow-y: auto; }
 .plugin-account-form { padding: 16px; display: grid; gap: 20px; min-width: 0; }
-.plugin-account-form label { display: grid; gap: 8px; min-width: 0; }
-.plugin-account-form select { width: 100%; min-width: 0; }
+.plugin-account-list { display: grid; gap: 6px; max-height: 50vh; overflow-y: auto; min-width: 0; }
+.plugin-account-choice { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; padding: 8px 12px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--bg-hover); color: var(--fg-strong); font: inherit; text-align: left; cursor: pointer; }
+.plugin-account-choice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-account-choice svg { flex-shrink: 0; color: var(--fg-muted); }
+.plugin-account-choice:hover, .plugin-account-choice:focus-visible { background: var(--bg-active); border-color: var(--accent-line); outline: none; }
 .plugin-account-form .plugin-actions { justify-content: flex-end; }
 .plugin-manager-heading h4 { font-size: 13px; color: var(--fg-strong); }
 .plugin-manager-tabs { display: flex; gap: 2px; margin-right: auto; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 6px; }

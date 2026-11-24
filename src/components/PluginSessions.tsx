@@ -74,7 +74,6 @@ export function PluginAccountDialog() {
   const prompt = plugins.accountPrompt!;
   const { t } = useTranslation();
   const dialog = useRef<HTMLDialogElement>(null);
-  const [choice, setChoice] = useState(prompt.choices[0].id);
   const titleId = useId();
   useLayoutEffect(() => {
     const element = dialog.current;
@@ -84,6 +83,6 @@ export function PluginAccountDialog() {
   }, []);
   return createPortal(<dialog ref={dialog} className="plugin-settings-dialog plugin-account-dialog" aria-labelledby={titleId} onCancel={event => {event.preventDefault(); plugins.chooseSessionAccount(undefined);}}>
     <div className="modal-header"><div className="plugin-settings-dialog-heading"><h3 id={titleId}>{t("plugin.chooseAccount")}</h3><p>{prompt.title}</p></div><button type="button" className="icon-btn" title={t("plugin.cancel")} aria-label={t("plugin.cancelAccount")} onClick={() => plugins.chooseSessionAccount(undefined)}><X size={16} /></button></div>
-    <form className="plugin-account-form" onSubmit={event => {event.preventDefault(); plugins.chooseSessionAccount(choice);}}><label>{t("plugin.account")}<select className="text-input" autoFocus value={choice} onChange={event => setChoice(event.target.value)}>{prompt.choices.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><div className="plugin-actions"><button type="button" className="btn-secondary" onClick={() => plugins.chooseSessionAccount(undefined)}>{t("plugin.cancel")}</button><button type="submit" className="btn-primary"><Play size={13} />{t("plugin.connect")}</button></div></form>
+    <div className="plugin-account-form"><div className="plugin-account-list" role="group" aria-label={t("plugin.account")}>{prompt.choices.map((item, index) => <button key={item.id} type="button" className="plugin-account-choice" autoFocus={index === 0} title={item.label} onClick={() => plugins.chooseSessionAccount(item.id)}><span>{item.label}</span><Play size={12} /></button>)}</div><div className="plugin-actions"><button type="button" className="btn-secondary" onClick={() => plugins.chooseSessionAccount(undefined)}>{t("plugin.cancel")}</button></div></div>
   </dialog>, document.body);
 }
