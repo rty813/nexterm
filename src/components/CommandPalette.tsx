@@ -14,6 +14,18 @@ export interface PaletteTab {
   detail: string;
 }
 
+/** A session listed by a plugin's session source (e.g. a bastion host). */
+export interface PalettePluginSession {
+  pluginId: string;
+  sourceId: string;
+  itemId: string;
+  label: string;
+  /** Source title, group and description, shown dimmed. */
+  detail: string;
+  /** Searched besides the label. */
+  keywords: string[];
+}
+
 export interface PaletteAction {
   id: string;
   label: string;
@@ -23,12 +35,15 @@ export interface PaletteAction {
 interface CommandPaletteProps {
   actions: PaletteAction[];
   sessions: SessionConfig[];
+  /** Sessions from plugin session sources; listed only while searching. */
+  pluginSessions: PalettePluginSession[];
   /** Saved session ids, most recently used first. */
   recentSessionIds: string[];
   tabs: PaletteTab[];
   quickHistory: string[];
   onRunAction: (id: string) => void;
   onOpenSession: (session: SessionConfig) => void;
+  onOpenPluginSession: (session: PalettePluginSession) => void;
   onFocusTab: (paneId: string) => void;
   onOpenShell: (protocol: ProtocolType) => void;
   onQuickConnect: (raw: string) => void;
@@ -60,11 +75,13 @@ const LIMIT: Record<Section, number> = { connect: 1, tabs: 8, sessions: 8, shell
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
   actions,
   sessions,
+  pluginSessions,
   recentSessionIds,
   tabs,
   quickHistory,
   onRunAction,
   onOpenSession,
+  onOpenPluginSession,
   onFocusTab,
   onOpenShell,
   onQuickConnect,
@@ -113,7 +130,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         const boost = recentRank.has(s.id) ? 1 - recentRank.get(s.id)! / 100 : 0;
         push("sessions", { key: `s-${s.id}`, label: s.label, detail, icon: <ProtocolBadge protocol={s.protocol} size={14} />, run: done(() => onOpenSession(s)) }, [s.label, s.host, s.group, s.username], boost);
       }
-      if (!q) {
+      if (q) {
+        for (const p of pluginSessions) {
+          push("sessions", { key: `ps-${p.pluginId}:${p.sourceId}:${p.itemId}`, label: p.label, detail: p.detail, icon: <ProtocolBadge protocol="ssh" size={14} />, run: done(() => onOpenPluginSession(p)) }, [p.label, ...p.keywords]);
+        }
+      } else {
         for (const raw of quickHistory.slice(0, 5)) {
           out.push({ key: `qh-${raw}`, section: "sessions", label: raw, detail: t("palette.recentQuick"), icon: <History size={14} />, score: -1, run: done(() => onQuickConnect(raw)) });
         }
@@ -134,7 +155,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (q) list.sort((a, b) => b.score - a.score);
       return list.slice(0, q || sec !== "actions" ? LIMIT[sec] : LIMIT.actions);
     });
-  }, [query, actions, sessions, recentSessionIds, tabs, quickHistory, t, onClose, onQuickConnect, onFocusTab, onOpenSession, onOpenShell, onRunAction]);
+  }, [query, actions, sessions, pluginSessions, recentSessionIds, tabs, quickHistory, t, onClose, onQuickConnect, onFocusTab, onOpenSession, onOpenPluginSession, onOpenShell, onRunAction]);
 
   useEffect(() => setIndex(0), [query]);
   useEffect(() => {

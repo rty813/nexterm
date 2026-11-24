@@ -97,7 +97,7 @@ import { downloadDir as downloadDirPath } from "@tauri-apps/api/path";
 import { HighlightDialog, newHighlightRule } from "./components/HighlightEditor";
 import { sessionTargetSummary } from "./utils/sessionSummary";
 import { usePersistentUiState } from "./hooks/usePersistentUiState";
-import { CommandPalette, type PaletteTab } from "./components/CommandPalette";
+import { CommandPalette, type PalettePluginSession, type PaletteTab } from "./components/CommandPalette";
 import { ProtocolBadge } from "./components/ProtocolBadge";
 import { buildSessionTree, type SessionTreeNode } from "./utils/sessionTree";
 import { ACTIONS, DEFAULT_TOOLBAR_HIDDEN, TOOLBAR_LAYOUT_VERSION } from "./utils/actions";
@@ -3204,6 +3204,16 @@ export const App: React.FC = () => {
             })),
           ]}
           sessions={sessions}
+          pluginSessions={plugins.sessionSources().filter((source) => source.catalog.state === "ready").flatMap((source) =>
+            source.catalog.items.map((item): PalettePluginSession => ({
+              pluginId: source.pluginId,
+              sourceId: source.id,
+              itemId: item.id,
+              label: item.label,
+              detail: [source.title, item.group, item.description].filter(Boolean).join("  "),
+              keywords: [source.title, item.group ?? "", item.description ?? ""],
+            }))
+          )}
           recentSessionIds={recentSessionIds}
           tabs={allLeaves(ws.root).map(
             (l): PaletteTab => ({
@@ -3219,6 +3229,7 @@ export const App: React.FC = () => {
             else void runActionRef.current(id);
           }}
           onOpenSession={(s) => openSessionInNewTab(s)}
+          onOpenPluginSession={(p) => void plugins.connectSource(p.pluginId, p.sourceId, p.itemId)}
           onFocusTab={(paneId) => {
             activatePane(paneId);
             requestAnimationFrame(() => paneApis.current.get(paneId)?.focus());
