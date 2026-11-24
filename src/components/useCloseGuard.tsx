@@ -6,9 +6,11 @@ import { TriangleAlert } from "lucide-react";
  * Closing a form dialog (backdrop click, X, Cancel, Escape) with unsaved edits asks
  * first, inside the dialog, instead of dropping the edits.
  *
+ * `enabled` is false while another dialog is open on top: Escape belongs to that one.
+ *
  * `prompt` goes right under the dialog header; `requestClose` replaces `onClose`.
  */
-export function useCloseGuard(dirty: boolean, onClose: () => void) {
+export function useCloseGuard(dirty: boolean, onClose: () => void, enabled = true) {
   const { t } = useTranslation();
   const [asking, setAsking] = useState(false);
   const dirtyRef = useRef(dirty);
@@ -20,6 +22,7 @@ export function useCloseGuard(dirty: boolean, onClose: () => void) {
   }, [onClose]);
 
   useEffect(() => {
+    if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       e.preventDefault();
@@ -33,7 +36,7 @@ export function useCloseGuard(dirty: boolean, onClose: () => void) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, enabled]);
 
   const prompt = asking ? (
     <div className="close-guard" role="alertdialog">

@@ -138,7 +138,8 @@
 
 - **服务器资源**：Linux 服务器的 SSH 会话可以在「服务器资源」面板（从「更多」或命令面板打开，也可以加到工具栏）查看 CPU、内存和交换分区、负载、各网卡收发速率、磁盘使用和运行时间。使用会话已有的连接，不需要再次登录；其它系统显示“不支持”。
 - **无缝迁移**：支持从 **WindTerm** 导入会话、快捷命令与配色，从 `~/.ssh/config` 导入主机，从 **Xshell**（自动找到 `Sessions` 目录，也可以选 `.xsh` 或导出的 `.xts` 文件）、**MobaXterm**（`MobaXterm.ini` 或导出的 `.mxtsessions`）、**SecureCRT**（自动找到配置文件夹下的 `Sessions` 目录，也可以选“导出设置”生成的 XML）和 **FinalShell**（自动找到 `conn` 目录，也可以选单个 `*_connect_config.json`）导入会话，入口在「会话管理器」里。文件夹对应会话分组；SSH、Telnet、串口和本地 Shell 会话会被导入，MobaXterm 的 RDP / VNC 书签和 SecureCRT 的 Raw 会话（作为 TCP）也会导入，其它类型（FTP 等）跳过并计数。WindTerm 的 SSH 用户名和密码可勾选导入，需要原配置中的 `user.config` 和 `terminal/user.sessions`。WindTerm 主密码仅用于本次导入。Xshell、MobaXterm、SecureCRT 和 FinalShell 的密码不导入。
-- **本机会话存储**：会话文件以及保存的同步、远程访问和代理设置使用当前 Windows 账户的 DPAPI 加密。新版启动时迁移旧文件及 Nexterm 管理的备份。换电脑或 Windows 账户时，请使用带密码的配置导出。当前账户打不开的本机文件（从别的电脑复制来、用户配置被重置等）会改名保留为 `<文件名>.unreadable-<时间>`，Nexterm 用能读取的部分启动并给出提示，之后从导出文件恢复即可。以前复制到别处的文件不会改变；旧版 Nexterm 不能读取新格式。
+- **凭据管理器**：保存一次用户名和密码 / 私钥，供多个 SSH、RDP、VNC 会话和跳板机共用，修改后下次连接生效；从会话栏的钥匙按钮或命令面板打开，随“会话”类别导出和同步。
+- **本机会话存储**：会话、凭据文件以及保存的同步、远程访问和代理设置使用当前 Windows 账户的 DPAPI 加密。新版启动时迁移旧文件及 Nexterm 管理的备份。换电脑或 Windows 账户时，请使用带密码的配置导出。当前账户打不开的本机文件（从别的电脑复制来、用户配置被重置等）会改名保留为 `<文件名>.unreadable-<时间>`，Nexterm 用能读取的部分启动并给出提示，之后从导出文件恢复即可。以前复制到别处的文件不会改变；旧版 Nexterm 不能读取新格式。
 - **个性化**：内置 20 套主题（含 Dracula、One Dark / Light、Nord、Solarized、Gruvbox、Tokyo Night、Catppuccin、Rosé Pine、Monokai、GitHub、Synthwave），在「设置 → 主题」里用卡片挑选，也可以基于任意主题新建、编辑、删除自定义主题（界面、终端和 ANSI 16 色）。终端可以设置背景图（PNG、JPG、GIF、WebP、BMP），最大 5 MB，能调强度、模糊和填充方式，会随“设置”一起同步到其它电脑。快捷键与工具栏可自定义；支持简体中文与英文界面。设置对话框可以搜索选项（`Ctrl+F`），中文或英文名称都能搜到。
 - **应用内更新**：启动时自动检查 GitHub 上是否有新版本（可跳过该版本）。点「立即更新」后在后台下载，右下角显示进度，核对大小和 SHA-256 后重启进入新版本；安装版、MSI 和便携版 `nexterm.exe` 都支持。可在「设置 → 常规」中关闭检查或手动检查。
 - **网络代理**：Nexterm 自身的网络请求（检查和下载更新、配置同步、插件）默认走系统代理（Windows 代理设置，或 `HTTPS_PROXY` 等环境变量）。可在「设置 → 常规」中改为直连或自定义 `http://`、`https://`、`socks5://` 代理，并测试连接。终端连接仍使用各会话自己的代理设置。

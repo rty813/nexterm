@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
+use crate::credentials::Credential;
 use crate::importer::parse_windterm_quickbar;
 use crate::local_secrets::{self, Kind};
 use crate::models::{
@@ -33,6 +34,10 @@ impl Storage {
         self.base_dir.join("sessions.json")
     }
 
+    fn credentials_path(&self) -> PathBuf {
+        self.base_dir.join("credentials.json")
+    }
+
     fn quick_commands_path(&self) -> PathBuf {
         self.base_dir.join("quick_commands.json")
     }
@@ -47,6 +52,10 @@ impl Storage {
 
     pub fn load_snapshot(&mut self) -> Result<AppStateSnapshot> {
         let mut sessions = self.read_sessions()?.unwrap_or_else(default_sessions);
+        // A credentials file this account cannot open is reported with this snapshot.
+        if let Err(e) = self.load_credentials() {
+            eprintln!("credentials.json: {e:#}");
+        }
         if !self.backups_checked {
             local_secrets::migrate_backups(&self.base_dir);
             self.backups_checked = true;
@@ -138,6 +147,29 @@ impl Storage {
         let path = self.sessions_path();
         Kind::Sessions.read(&path, false)?;
         local_secrets::write_atomic(&path, &Kind::Sessions.protect(serde_json::to_value(sessions)?)?)
+    }
+
+    /// Saved logins; a file that cannot be opened is set aside, as for sessions.
+    pub fn load_credentials(&self) -> Result<Vec<Credential>> {
+        let path = self.credentials_path();
+        let read = Kind::Credentials.read(&path, true).and_then(|value| {
+            value.map(serde_json::from_value).transpose().map_err(|_| anyhow::anyhow!(local_secrets::INVALID))
+        });
+        match read {
+            Ok(list) => Ok(list.unwrap_or_default()),
+            Err(e) if local_secrets::recoverable(&e) => {
+                let kept = local_secrets::set_aside(&path, false)?;
+                self.notice("credentials", &kept);
+                Ok(Vec::new())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn save_credentials(&self, list: &[Credential]) -> Result<()> {
+        let path = self.credentials_path();
+        Kind::Credentials.read(&path, false)?;
+        local_secrets::write_atomic(&path, &Kind::Credentials.protect(serde_json::to_value(list)?)?)
     }
 
     pub fn load_quick_commands(&self) -> Result<Vec<QuickCommand>> {
@@ -392,6 +424,26 @@ mod tests {
         assert!(snap.settings.extra.get("sync").is_none());
         assert_eq!(snap.notices[0].file, "settings");
         assert!(fs::read_to_string(&snap.notices[0].kept).unwrap().contains("YWJj"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn credentials_are_encrypted_and_set_aside_when_unreadable() {
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().into()).unwrap();
+        assert!(storage.load_credentials().unwrap().is_empty());
+        let list: Vec<Credential> = serde_json::from_value(json!([
+            {"id": "a", "name": "ops-name", "username": "ops-user", "authType": "password", "password": "ops-secret"}
+        ])).unwrap();
+        storage.save_credentials(&list).unwrap();
+        let disk = fs::read_to_string(storage.credentials_path()).unwrap();
+        assert!(!disk.contains("ops-"));
+        assert_eq!(storage.load_credentials().unwrap()[0].password.as_deref(), Some("ops-secret"));
+        fs::write(storage.credentials_path(), "not json").unwrap();
+        assert!(storage.load_credentials().unwrap().is_empty());
+        assert_eq!(storage.notices.lock().unwrap()[0].file, "credentials");
+        storage.save_credentials(&list).unwrap();
     }
 
     #[test]

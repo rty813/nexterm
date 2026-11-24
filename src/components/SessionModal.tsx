@@ -7,6 +7,10 @@ import { ProtocolBadge } from "./ProtocolBadge";
 import { GroupInput } from "./GroupInput";
 import { AdbSessionFields } from "./AdbSessionFields";
 import { useCloseGuard } from "./useCloseGuard";
+import { CredentialManager } from "./CredentialManager";
+import { CredentialPicker } from "./CredentialPicker";
+import { useCredentials } from "../services/credentials";
+import { resolveLogin } from "../utils/credentials";
 import {
   DEFAULT_DESKTOP,
   type AdbConfig,
@@ -149,6 +153,24 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     initial?.jumpHost?.privateKeyPath ?? ""
   );
 
+  // Saved credentials, instead of a login stored in the session.
+  const { list: credentials, loaded: credentialsLoaded } = useCredentials();
+  const [credentialsOpen, setCredentialsOpen] = useState(false);
+  const [credentialId, setCredentialId] = useState(initial?.credentialId ?? "");
+  const [jumpCredentialId, setJumpCredentialId] = useState(initial?.jumpHost?.credentialId ?? "");
+  const login = resolveLogin(protocol, credentialId, { username, authType }, credentials);
+  const jumpLogin = resolveLogin("ssh", jumpCredentialId, { username: jumpUser, authType: jumpAuth }, credentials);
+  const picker = (forJump: boolean) => (
+    <CredentialPicker
+      protocol={forJump ? "ssh" : protocol}
+      list={credentials}
+      loaded={credentialsLoaded}
+      value={forJump ? jumpCredentialId : credentialId}
+      onChange={forJump ? setJumpCredentialId : setCredentialId}
+      onManage={() => setCredentialsOpen(true)}
+    />
+  );
+
   const pickKeyFile = async (forJump: boolean) => {
     const picked = await backend.pickFile(t("sessionModal.selectKeyTitle"));
     if (picked) {
@@ -159,8 +181,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const fallbackLabel = (): string =>
     protocol === "ssh"
-      ? username
-        ? `${username}@${host}`
+      ? login.username
+        ? `${login.username}@${host}`
         : host
       : protocol === "serial"
       ? `${host} (${serialCfg.baudRate})`
@@ -181,11 +203,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
             enabled: true,
             host: jumpHost.trim(),
             port: Number(jumpPort) || 22,
-            username: jumpUser.trim(),
-            authType: jumpAuth,
-            password: jumpPassword || undefined,
-            privateKeyPath: jumpKeyPath.trim() || undefined,
-            passphrase: initial?.jumpHost?.passphrase ?? undefined,
+            username: jumpLogin.username.trim(),
+            authType: jumpLogin.authType,
+            password: jumpLogin.credentialId ? undefined : jumpPassword || undefined,
+            privateKeyPath: jumpLogin.credentialId ? undefined : jumpKeyPath.trim() || undefined,
+            passphrase: jumpLogin.credentialId ? undefined : initial?.jumpHost?.passphrase ?? undefined,
+            credentialId: jumpLogin.credentialId,
           }
         : null;
 
@@ -196,11 +219,13 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       protocol,
       host: host.trim(),
       port: protocol === "serial" || (protocol === "adb" && adbCfg.connect !== "wlan") ? 0 : protocol === "adb" ? Number(port) || 5555 : Number(port) || DEFAULT_PORTS[protocol] || 0,
-      username: username.trim(),
-      authType: protocol === "ssh" ? authType : "none",
-      password: password || (initial?.password === "" ? "" : undefined),
-      privateKeyPath: privateKeyPath.trim() || undefined,
-      passphrase: passphrase || undefined,
+      username: login.username.trim(),
+      authType: protocol === "ssh" ? login.authType : "none",
+      // A credential replaces the session's own secrets.
+      password: login.credentialId ? undefined : password || (initial?.password === "" ? "" : undefined),
+      privateKeyPath: login.credentialId ? undefined : privateKeyPath.trim() || undefined,
+      passphrase: login.credentialId ? undefined : passphrase || undefined,
+      credentialId: login.credentialId,
       jumpHost: jumpCfg,
       term: term.trim() || "xterm-256color",
       keepAliveSecs: Number(keepAliveSecs) || 0,
@@ -226,7 +251,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [error, setError] = useState("");
   const { requestClose, prompt } = useCloseGuard(currentJson !== initialJson.current || rememberPassword, () => {
     if (!saving) onClose();
-  });
+  }, !credentialsOpen);
 
   const applyToPane = async (saveProfile: boolean) => {
     if (!pane || saving) return;
@@ -258,6 +283,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   };
 
   return (
+    <>
     <div className="modal-backdrop" onMouseDown={saving ? undefined : requestClose}>
       <div className="modal-panel modal-lg session-form" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -393,26 +419,28 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
             {protocol === "ssh" && (
               <>
+                {picker(false)}
                 <div className="form-grid-2">
                   <label className="field">
                     <span>{t("sessionModal.username")}</span>
                     <input
                       type="text"
                       className="text-input"
-                      value={username}
+                      value={login.username}
                       onChange={(e) => setUsername(e.target.value)}
+                      disabled={login.usernameLocked}
                       required
                     />
                   </label>
                   <label className="field">
                     <span>{t("sessionModal.authType")}</span>
-                    <select className="text-input" value={authType} onChange={(e) => setAuthType(e.target.value as AuthType)}>
+                    <select className="text-input" value={login.authType} disabled={Boolean(login.credentialId)} onChange={(e) => setAuthType(e.target.value as AuthType)}>
                       <option value="password">{t("sessionModal.authPwd")}</option>
                       <option value="privatekey">{t("sessionModal.authKey")}</option>
                     </select>
                   </label>
                 </div>
-                {authType === "password" ? (
+                {login.credentialId ? null : authType === "password" ? (
                   <label className="field">
                     <span>{t("sessionModal.pwdLabel")}</span>
                     <input type="password" className="text-input" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -450,10 +478,17 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
             {isDesktop && (
               <>
-                <div className={protocol === "rdp" ? "form-grid-3" : "form-grid-2"}>
+                {picker(false)}
+                <div className={protocol === "rdp" && !login.credentialId ? "form-grid-3" : "form-grid-2"}>
                   <label className="field" title={protocol === "vnc" ? t("desktop.vncUserTip") : undefined}>
                     <span>{protocol === "vnc" ? t("desktop.vncUser") : t("sessionModal.username")}</span>
-                    <input type="text" className="text-input" value={username} onChange={(e) => setUsername(e.target.value)} />
+                    <input
+                      type="text"
+                      className="text-input"
+                      value={login.username}
+                      disabled={login.usernameLocked}
+                      onChange={(e) => setUsername(e.target.value)}
+                    />
                   </label>
                   {protocol === "rdp" && (
                     <label className="field">
@@ -467,10 +502,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                       />
                     </label>
                   )}
-                  <label className="field">
-                    <span>{t("sessionModal.pwdLabel")}</span>
-                    <input type="password" className="text-input" value={password} onChange={(e) => setPassword(e.target.value)} />
-                  </label>
+                  {!login.credentialId && (
+                    <label className="field">
+                      <span>{t("sessionModal.pwdLabel")}</span>
+                      <input type="password" className="text-input" value={password} onChange={(e) => setPassword(e.target.value)} />
+                    </label>
+                  )}
                 </div>
                 <div className="form-grid-3">
                   <label className="field">
@@ -714,20 +751,21 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                             <input type="number" className="text-input" value={jumpPort} onChange={(e) => setJumpPort(Number(e.target.value))} />
                           </label>
                         </div>
+                        {picker(true)}
                         <div className="form-grid-2">
                           <label className="field">
                             <span>{t("sessionModal.jumpUser")}</span>
-                            <input type="text" className="text-input" value={jumpUser} onChange={(e) => setJumpUser(e.target.value)} />
+                            <input type="text" className="text-input" value={jumpLogin.username} disabled={jumpLogin.usernameLocked} onChange={(e) => setJumpUser(e.target.value)} />
                           </label>
                           <label className="field">
                             <span>{t("sessionModal.jumpAuth")}</span>
-                            <select className="text-input" value={jumpAuth} onChange={(e) => setJumpAuth(e.target.value as AuthType)}>
+                            <select className="text-input" value={jumpLogin.authType} disabled={Boolean(jumpLogin.credentialId)} onChange={(e) => setJumpAuth(e.target.value as AuthType)}>
                               <option value="password">{t("sessionModal.authPwd")}</option>
                               <option value="privatekey">{t("sessionModal.authKey")}</option>
                             </select>
                           </label>
                         </div>
-                        {jumpAuth === "password" ? (
+                        {jumpLogin.credentialId ? null : jumpAuth === "password" ? (
                           <label className="field">
                             <span>{t("sessionModal.jumpPwd")}</span>
                             <input type="password" className="text-input" value={jumpPassword} onChange={(e) => setJumpPassword(e.target.value)} />
@@ -824,7 +862,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
           {pane ? (
             <>
               <p className="adv-hint">{t("sessionForm.reconnectHint")}</p>
-              {pane.canRememberPassword && protocol === "ssh" && authType === "password" && !password && (
+              {pane.canRememberPassword && protocol === "ssh" && !login.credentialId && authType === "password" && !password && (
                 <label className="checkbox-row">
                   <input type="checkbox" checked={rememberPassword} onChange={(e) => setRememberPassword(e.target.checked)} />
                   {t("pane.rememberPwd")}
@@ -864,5 +902,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         </form>
       </div>
     </div>
+    {/* A sibling, not a child: its form and backdrop must not act on this one. */}
+    {credentialsOpen && <CredentialManager onClose={() => setCredentialsOpen(false)} />}
+    </>
   );
 };

@@ -20,6 +20,8 @@ import type {
   McpClient,
   McpScreenSnapshot,
   QuickCommand,
+  CredentialInput,
+  CredentialSummary,
   SessionConfig,
   TunnelConfig,
   TerminalStatePayload,
@@ -515,6 +517,26 @@ export const backend = {
   async saveSessions(sessions: SessionConfig[]): Promise<void> {
     if (!isTauriRuntime()) return;
     await invoke("save_sessions", { sessions });
+  },
+
+  async listCredentials(): Promise<CredentialSummary[]> {
+    if (!isTauriRuntime()) return [];
+    return invoke<CredentialSummary[]>("list_credentials");
+  },
+
+  /** Returns the credential's id. */
+  async saveCredential(credential: CredentialInput): Promise<string> {
+    return invoke<string>("save_credential", { credential });
+  },
+
+  async deleteCredential(id: string): Promise<void> {
+    await invoke("delete_credential", { id });
+  },
+
+  /** Any window saved or deleted a credential. */
+  async onCredentialsChanged(handler: () => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => {};
+    return listen("credentials-changed", () => handler());
   },
 
   async saveQuickCommands(commands: QuickCommand[]): Promise<void> {

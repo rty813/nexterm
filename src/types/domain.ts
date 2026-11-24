@@ -71,6 +71,33 @@ export interface JumpHostConfig {
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
+  /** Login from the credential manager instead of the fields above. */
+  credentialId?: string;
+}
+
+/** A credential as the backend shows it: no secrets (Rust `credentials.rs`). */
+export interface CredentialSummary {
+  id: string;
+  name: string;
+  /** "": the session's own user name is used. */
+  username: string;
+  authType: AuthType;
+  privateKeyPath?: string | null;
+  hasPassword: boolean;
+  hasPassphrase: boolean;
+  /** Sessions using it (themselves or their jump host). */
+  usedBy: number;
+}
+
+/** A secret left out keeps the saved one; "" clears it. */
+export interface CredentialInput {
+  id?: string;
+  name: string;
+  username: string;
+  authType: AuthType;
+  password?: string;
+  privateKeyPath?: string;
+  passphrase?: string;
 }
 
 export interface SessionConfig {
@@ -86,6 +113,8 @@ export interface SessionConfig {
   credentialHandoff?: boolean;
   privateKeyPath?: string;
   passphrase?: string;
+  /** Login from the credential manager, filled in by the backend when connecting. */
+  credentialId?: string;
   jumpHost?: JumpHostConfig | null;
   /** ADB device and view (shell terminal or logcat tab). */
   adb?: AdbConfig | null;
@@ -722,8 +751,8 @@ export interface AppStateSnapshot {
 
 /** A local data file this Windows account could not open (or a damaged one), kept as `kept`. */
 export interface StorageNotice {
-  /** "sessions": the list started empty; "settings": the parts that could not be opened were reset. */
-  file: "sessions" | "settings";
+  /** "sessions" / "credentials": the list started empty; "settings": the parts that could not be opened were reset. */
+  file: "sessions" | "credentials" | "settings";
   kept: string;
 }
 

@@ -1,5 +1,5 @@
-//! Local data files protected with Windows user-scoped DPAPI: the whole `sessions.json`,
-//! and the `sync`, `remote` and `httpProxy` parts of `settings.json`. A protected part is
+//! Local data files protected with Windows user-scoped DPAPI: the whole `sessions.json`
+//! and `credentials.json`, and the `sync`, `remote` and `httpProxy` parts of `settings.json`. A protected part is
 //! stored as `{"format": "nexterm-dpapi-v1", "ciphertext": "<base64>"}`.
 //!
 //! Errors carry a code the frontend translates: [`UNREADABLE`] (this Windows account cannot
@@ -20,6 +20,7 @@ pub const UNREADABLE: &str = "localDataUnreadable";
 pub const INVALID: &str = "localDataInvalid";
 
 const SESSIONS_PURPOSE: &[u8] = b"Nexterm/sessions/v1";
+const CREDENTIALS_PURPOSE: &[u8] = b"Nexterm/credentials/v1";
 /// Settings keys kept encrypted, with the DPAPI entropy of each.
 const SETTINGS_SLOTS: &[(&str, &[u8])] = &[
     ("sync", b"Nexterm/settings.sync/v1"),
@@ -80,17 +81,18 @@ fn unseal(slot: &Value, purpose: &[u8]) -> Result<Value> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) enum Kind { Sessions, Settings }
+pub(crate) enum Kind { Sessions, Credentials, Settings }
 
 impl Kind {
     pub fn named(name: &str) -> Option<Self> {
-        match name { "sessions" => Some(Self::Sessions), "settings" => Some(Self::Settings), _ => None }
+        match name { "sessions" => Some(Self::Sessions), "credentials" => Some(Self::Credentials), "settings" => Some(Self::Settings), _ => None }
     }
 
     /// The protected parts of a file: (name, DPAPI entropy, value). Null settings are left out.
     fn slots(self, value: &mut Value) -> Result<Vec<(&'static str, &'static [u8], &mut Value)>> {
         match self {
             Self::Sessions => Ok(vec![("", SESSIONS_PURPOSE, value)]),
+            Self::Credentials => Ok(vec![("", CREDENTIALS_PURPOSE, value)]),
             Self::Settings => Ok(value.as_object_mut().context(INVALID)?.iter_mut().filter_map(|(key, slot)| {
                 let (name, purpose) = SETTINGS_SLOTS.iter().find(|(name, _)| name == key)?;
                 (!slot.is_null()).then_some((*name, *purpose, slot))
@@ -101,6 +103,7 @@ impl Kind {
     fn validate(self, slot: &Value) -> Result<()> {
         match self {
             Self::Sessions => { serde_json::from_value::<Vec<crate::models::SessionConfig>>(slot.clone()).map_err(|_| anyhow!(INVALID))?; }
+            Self::Credentials => { serde_json::from_value::<Vec<crate::credentials::Credential>>(slot.clone()).map_err(|_| anyhow!(INVALID))?; }
             Self::Settings => ensure!(slot.is_object(), INVALID),
         }
         Ok(())

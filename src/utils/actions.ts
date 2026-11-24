@@ -15,6 +15,7 @@ export const ACTIONS: ActionDef[] = [
   { id: "view.quickCommands", group: "view", defaultKey: "" },
   { id: "view.focusMode", group: "view", defaultKey: "F11" },
   { id: "view.sessionManager", group: "view", defaultKey: "" },
+  { id: "view.credentials", group: "view", defaultKey: "" },
   { id: "view.settings", group: "view", defaultKey: "Ctrl+," },
   { id: "view.portForward", group: "view", defaultKey: "Ctrl+Shift+P" },
   { id: "view.sender", group: "view", defaultKey: "Alt+S" },

@@ -245,7 +245,7 @@ fn summary(s: &SessionConfig) -> Value {
         "authType": v["authType"],
         "privateKeyPath": s.private_key_path,
         "startupCommand": s.startup_command,
-        "hasPassword": s.password.as_deref().is_some_and(|p| !p.is_empty()),
+        "hasPassword": s.credential_id.is_some() || s.password.as_deref().is_some_and(|p| !p.is_empty()),
         "editable": PHONE_PROTOCOLS.contains(&v["protocol"].as_str().unwrap_or("")),
     })
 }
@@ -312,6 +312,13 @@ fn merge_session(existing: Option<&SessionConfig>, form: &Value) -> Result<Sessi
         v["password"] = json!(password);
     } else if form["clearPassword"].as_bool() == Some(true) {
         v["password"] = Value::Null;
+    }
+    // A login edited on the phone replaces the credential the session used.
+    if let Some(s) = existing {
+        let old_auth = serde_json::to_value(&s.auth_type).unwrap_or_default();
+        if !password.is_empty() || form["clearPassword"].as_bool() == Some(true) || username != s.username || old_auth != auth {
+            v["credentialId"] = Value::Null;
+        }
     }
     serde_json::from_value(v).map_err(|e| e.to_string())
 }
@@ -454,6 +461,21 @@ mod tests {
         assert_eq!(m.extra.get("tabColor"), Some(&json!("#f00")));
         let cleared = merge_session(Some(&s), &json!({ "protocol": "ssh", "host": "h", "clearPassword": true })).unwrap();
         assert_eq!(cleared.password, None);
+    }
+
+    #[test]
+    fn a_login_edited_on_the_phone_replaces_the_credential() {
+        let s = SessionConfig { credential_id: Some("c".into()), password: None, ..saved() };
+        assert_eq!(summary(&s)["hasPassword"], json!(true));
+        let edit = |extra: Value| {
+            let mut form = json!({ "protocol": "ssh", "host": "h", "username": "root", "authType": "password", "password": "" });
+            form.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            merge_session(Some(&s), &form).unwrap().credential_id
+        };
+        assert_eq!(edit(json!({})).as_deref(), Some("c"));
+        assert_eq!(edit(json!({ "password": "typed" })), None);
+        assert_eq!(edit(json!({ "username": "other" })), None);
+        assert_eq!(edit(json!({ "clearPassword": true })), None);
     }
 
     #[test]

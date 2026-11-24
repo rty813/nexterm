@@ -9,6 +9,7 @@ import {
   Edit2,
   Folder,
   History,
+  KeyRound,
   LayoutList,
   Play,
   Plus,
@@ -63,6 +64,7 @@ interface SessionSidebarProps {
   onDuplicateSession: (session: SessionConfig) => void;
   onDeleteSession: (session: SessionConfig) => void;
   onOpenManager: () => void;
+  onOpenCredentials: () => void;
   sortMode: SessionSortMode;
   usage: SessionUsage;
   onChangeSort: (mode: SessionSortMode) => void;
@@ -93,6 +95,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onDuplicateSession,
   onDeleteSession,
   onOpenManager,
+  onOpenCredentials,
   sortMode,
   usage,
   onChangeSort,
@@ -277,6 +280,14 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
           title={t("sidebar.manager")}
         >
           <LayoutList size={13} />
+        </button>
+        <button
+          type="button"
+          className="icon-btn-xs"
+          onClick={onOpenCredentials}
+          title={t("credentials.title")}
+        >
+          <KeyRound size={13} />
         </button>
         <button
           type="button"

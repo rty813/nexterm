@@ -54,6 +54,9 @@ pub struct JumpHostConfig {
     pub private_key_path: Option<String>,
     #[serde(default)]
     pub passphrase: Option<String>,
+    /// Login from the credential manager (`credentials.rs`), instead of the fields above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -78,6 +81,9 @@ pub struct SessionConfig {
     pub private_key_path: Option<String>,
     #[serde(default)]
     pub passphrase: Option<String>,
+    /// Login from the credential manager (`credentials.rs`), filled in when connecting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
     #[serde(default)]
     pub jump_host: Option<JumpHostConfig>,
     #[serde(default = "default_term")]
@@ -474,7 +480,7 @@ pub struct AppStateSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageNotice {
-    /// "sessions" (the list started empty) or "settings" (the parts that could not be
+    /// "sessions" / "credentials" (the list started empty) or "settings" (the parts that could not be
     /// opened, such as the sync configuration, were reset).
     pub file: String,
     pub kept: String,

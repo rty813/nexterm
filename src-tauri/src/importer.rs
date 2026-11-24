@@ -251,6 +251,7 @@ fn parse_windterm_sessions_with_login(
             password,
             private_key_path: private_key,
             passphrase,
+            credential_id: None,
             jump_host: None,
             term,
             keep_alive_secs,
@@ -539,6 +540,7 @@ pub fn parse_openssh_config(raw: &str) -> Vec<SessionConfig> {
                     password: None,
                     private_key_path: b.identity_file.clone(),
                     passphrase: None,
+                    credential_id: None,
                 })
             });
 

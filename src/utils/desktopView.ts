@@ -130,12 +130,12 @@ export function requestedSize(cssW: number, cssH: number, dpr: number): { width:
  * fail; without NLA the remote computer shows its own sign-in screen instead. null = nothing.
  */
 export function missingDesktopCredentials(
-  session: Pick<SessionConfig, "protocol" | "username" | "password" | "desktop" | "credentialHandoff">
+  session: Pick<SessionConfig, "protocol" | "username" | "password" | "desktop" | "credentialHandoff" | "credentialId">
 ): { user: boolean; password: boolean } | null {
   if (session.protocol !== "rdp") return null;
   if (!{ ...DEFAULT_DESKTOP, ...(session.desktop ?? {}) }.nla) return null;
   const user = !session.username.trim();
-  // A plugin hands its password over at connect time (`credentialHandoff`).
-  const password = !session.password && !session.credentialHandoff;
+  // A plugin hands its password over at connect time (`credentialHandoff`); a saved credential has one.
+  const password = !session.password && !session.credentialHandoff && !session.credentialId;
   return user || password ? { user, password } : null;
 }

@@ -422,7 +422,7 @@ const CFG_SYNC_ZH = {
     credentials: "插件凭据",
   },
   catHint: {
-    sessions: "会话列表，包括保存的密码和端口转发",
+    sessions: "会话列表和凭据管理器，包括保存的密码和端口转发",
     quickCommands: "快速命令栏",
     themes: "自定义和导入的配色方案",
     settings: "外观、终端背景图片、快捷键、工具栏等（不含本机路径和同步配置）",
@@ -569,7 +569,7 @@ const CFG_SYNC_EN: typeof CFG_SYNC_ZH = {
     credentials: "Plugin credentials",
   },
   catHint: {
-    sessions: "Session list, including saved passwords and port forwards",
+    sessions: "Session list and credential manager, including saved passwords and port forwards",
     quickCommands: "Quick command bar",
     themes: "Custom and imported color schemes",
     settings: "Appearance, terminal background image, shortcuts, toolbar ... (not local paths or the sync target)",

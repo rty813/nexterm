@@ -59,8 +59,9 @@ import { QuickCommandManager, type QuickManagerTarget } from "./components/Quick
 import { quickPayload } from "./utils/quickCommands";
 import { syncTargets } from "./utils/syncInput";
 import { SessionModal } from "./components/SessionModal";
-import { applyPaneSessionEdits, findSavedLogin, paneFormSession, hasSavedPassword, rememberPaneLogin, savePaneProfile } from "./utils/paneSession";
+import { applyPaneSessionEdits, findSavedLogin, loginPatch, paneFormSession, hasSavedLogin, hasSavedPassword, rememberPaneLogin, savePaneProfile } from "./utils/paneSession";
 import { SessionManager } from "./components/SessionManager";
+import { CredentialManager } from "./components/CredentialManager";
 import { ImportModal } from "./components/ImportModal";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { LockOverlay } from "./components/LockOverlay";
@@ -337,7 +338,7 @@ export const App: React.FC = () => {
       setInitialSnapshot(snap);
       // Local files this Windows account could not open were set aside: say so once.
       const notes = (snap.notices ?? []).map((n) =>
-        t(n.file === "sessions" ? "localData.sessionsSetAside" : "localData.settingsSetAside", { kept: n.kept }));
+        t(`localData.${n.file}SetAside`, { kept: n.kept }));
       if (notes.length) setToast(notes.join(" "));
     }).catch((err) => {
       console.error("load initial state", err);
@@ -803,10 +804,7 @@ export const App: React.FC = () => {
   const handleReconnectPane = useCallback((paneId: string, creds?: ReconnectCredentials) => {
     const current = findLeaf(wsRef.current.root, paneId)?.session;
     if (!current) return;
-    const credentials = {
-      ...(creds?.username !== undefined ? { username: creds.username } : {}),
-      ...(creds?.password !== undefined ? { password: creds.password } : {}),
-    };
+    const credentials = loginPatch(creds);
 
     setWs((prev) => ({
       ...prev,
@@ -1571,6 +1569,9 @@ export const App: React.FC = () => {
       case "view.sessionManager":
         openSessionManager();
         return true;
+      case "view.credentials":
+        setCredentialsOpen(true);
+        return true;
       case "view.portForward":
         setPortForwardOpen((v) => !v);
         return true;
@@ -2106,7 +2107,7 @@ export const App: React.FC = () => {
     const pane = openSessionInNewTab(session);
     // Same rule as the pane's own login prompt: no connection until the user types these.
     const needsLogin =
-      session.protocol === "ssh" && (!session.username.trim() || (session.authType === "password" && !hasSavedPassword(session)));
+      session.protocol === "ssh" && (!session.username.trim() || (session.authType === "password" && !hasSavedLogin(session)));
     void backend.mcpOpenRespond(req.requestId, { accept: true, pane, needsLogin, title: session.label });
   };
 
@@ -2635,6 +2636,7 @@ export const App: React.FC = () => {
   };
 
   const [managerOpen, setManagerOpen] = useState(false);
+  const [credentialsOpen, setCredentialsOpen] = useState(false);
   const openSessionManager = () => setManagerOpen(true);
   const closePalette = useCallback((ran: boolean) => {
     setPaletteOpen(false);
@@ -2903,6 +2905,7 @@ export const App: React.FC = () => {
                 onDuplicateSession={handleDuplicateSession}
                 onDeleteSession={handleDeleteSession}
                 onOpenManager={openSessionManager}
+                onOpenCredentials={() => setCredentialsOpen(true)}
               />
             </div>
             <div
@@ -3167,6 +3170,8 @@ export const App: React.FC = () => {
           onUnlock={() => setLocked(false)}
         />
       )}
+
+      {credentialsOpen && <CredentialManager onClose={() => setCredentialsOpen(false)} />}
 
       {managerOpen && (
         <SessionManager

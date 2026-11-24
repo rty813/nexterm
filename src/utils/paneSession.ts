@@ -5,6 +5,19 @@ export function hasSavedPassword(session: Pick<SessionConfig, "password">): bool
   return typeof session.password === "string";
 }
 
+/** Nothing to ask before connecting with a password: one is saved, or a credential provides it. */
+export function hasSavedLogin(session: Pick<SessionConfig, "password" | "credentialId">): boolean {
+  return Boolean(session.credentialId) || hasSavedPassword(session);
+}
+
+/** What a login form changes in the session: a typed password replaces its credential. */
+export function loginPatch(creds?: { username?: string; password?: string }): Partial<Pick<SessionConfig, "username" | "password" | "credentialId">> {
+  return {
+    ...(creds?.username !== undefined ? { username: creds.username } : {}),
+    ...(creds?.password !== undefined ? { password: creds.password, credentialId: undefined } : {}),
+  };
+}
+
 export function withoutSessionSecrets(session: SessionConfig): SessionConfig {
   const { password, passphrase, credentialHandoff, ...config } = session;
   if (config.jumpHost) config.jumpHost = { ...config.jumpHost, password: undefined, passphrase: undefined };
@@ -59,7 +72,7 @@ export function savePaneProfile(sessions: SessionConfig[], live: SessionConfig, 
  * gets one, otherwise the password would be gone after a restart. Plugin handoff sessions
  * belong to the plugin and are never turned into profiles.
  */
-export function rememberPaneLogin(sessions: SessionConfig[], live: SessionConfig, credentials: Pick<SessionConfig, "password"> & { username?: string }): SessionConfig[] {
+export function rememberPaneLogin(sessions: SessionConfig[], live: SessionConfig, credentials: Partial<Pick<SessionConfig, "username" | "password" | "credentialId">>): SessionConfig[] {
   if (sessions.some((session) => session.id === live.id)) {
     return sessions.map((session) => session.id === live.id ? { ...session, ...credentials } : session);
   }
@@ -76,7 +89,7 @@ export function findSavedLogin(sessions: SessionConfig[], parsed: SessionConfig)
   if (parsed.protocol !== "ssh" || parsed.authType !== "password") return undefined;
   const host = parsed.host.toLowerCase();
   const matches = sessions.filter((session) =>
-    session.protocol === "ssh" && session.authType === "password" && hasSavedPassword(session)
+    session.protocol === "ssh" && session.authType === "password" && hasSavedLogin(session)
     && session.host.toLowerCase() === host && session.port === parsed.port
     && (!parsed.username || session.username === parsed.username));
   return parsed.username || matches.length === 1 ? matches[0] : undefined;

@@ -6,6 +6,7 @@ pub mod app_paths;
 pub mod background;
 pub mod charset;
 pub mod commands;
+pub mod credentials;
 pub mod desktop;
 pub mod fonts;
 mod plugin_http;
@@ -94,6 +95,28 @@ impl AppContext {
             .ok()
             .and_then(|s| s.load_settings().ok())
             .unwrap_or_default()
+    }
+
+    /// Fill in the saved logins the session refers to, right before connecting. A failure is
+    /// also shown in the pane.
+    fn apply_credentials(
+        &self,
+        instance_id: &str,
+        session: &mut SessionConfig,
+        sink: &dyn crate::manager::TerminalSink,
+    ) -> Result<(), String> {
+        if !credentials::needed(session) {
+            return Ok(());
+        }
+        let list = match self.storage.lock() {
+            Ok(storage) => storage.load_credentials().map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        let result = list.and_then(|list| credentials::apply(session, &list));
+        if let Err(e) = &result {
+            sink.emit_state(instance_id, "error", Some(e.clone()));
+        }
+        result
     }
 }
 
@@ -523,8 +546,10 @@ async fn connect_terminal(
     if let Some(password) = plugin_http::take_ssh_password(window.label(), &session.id, &session.host, session.port, &session.username) {
         session.password = Some(password);
         session.auth_type = crate::models::AuthType::Password;
+        session.credential_id = None;
     }
     let sink = Arc::new(TauriSink { app });
+    ctx.apply_credentials(&instance_id, &mut session, sink.as_ref())?;
     // Before connecting, so the first output is recorded; a reconnect keeps the pane's history.
     crate::history::ensure(&instance_id, cols, rows);
     let auto_log = session.auto_log;
@@ -1566,8 +1591,10 @@ fn desktop_connect(
 ) -> Result<(), String> {
     if let Some(password) = plugin_http::take_ssh_password(window.label(), &session.id, &session.host, session.port, &session.username) {
         session.password = Some(password);
+        session.credential_id = None;
     }
     let sink: Arc<dyn crate::manager::TerminalSink> = Arc::new(TauriSink { app });
+    ctx.apply_credentials(&instance_id, &mut session, sink.as_ref())?;
     ctx.desktops
         .connect(instance_id, session, width, height, scale, channel, sink)
         .map_err(|e| format!("{:#}", e))
@@ -2009,6 +2036,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             close_main_window,
             set_window_background,
+            credentials::list_credentials,
+            credentials::save_credential,
+            credentials::delete_credential,
             plugin_http::plugin_grant,
             plugin_http::plugin_allow_origin,
             plugin_http::plugin_revoke,

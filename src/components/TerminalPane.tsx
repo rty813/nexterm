@@ -112,7 +112,7 @@ function translateInput(data: string, o: TerminalOptions): string {
   return out;
 }
 import { sessionTargetSummary } from "../utils/sessionSummary";
-import { hasSavedPassword } from "../utils/paneSession";
+import { hasSavedLogin } from "../utils/paneSession";
 
 /** Workspace-level state and actions every pane needs (menus, logging, sync input). */
 export interface PaneExtras {
@@ -341,8 +341,10 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const adbTools = leaf.session.protocol === "adb" && leaf.status === "connected" && Boolean(extras.onAdbTool);
   const needsUsername = isSsh && !leaf.session.username.trim();
   const usesPassword = isSsh && leaf.session.authType === "password";
+  /** The login form asks for a password (not when only the user name of a saved credential is missing). */
+  const asksPassword = usesPassword && !(needsUsername && leaf.session.credentialId);
   const needsInitialPassword =
-    needsUsername || (usesPassword && !hasSavedPassword(leaf.session) && !leaf.session.credentialHandoff);
+    needsUsername || (usesPassword && !hasSavedLogin(leaf.session) && !leaf.session.credentialHandoff);
 
   const [awaitingPassword, setAwaitingPassword] =
     useState<boolean>(needsInitialPassword);
@@ -1191,16 +1193,16 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
     setAwaitingPassword(false);
     onReconnectPane(leaf.paneId, {
       username: usernameInput.trim() || undefined,
-      password: usesPassword ? passwordInput : undefined,
+      password: asksPassword ? passwordInput : undefined,
       remember: rememberPwd,
     });
   };
 
   // Phones see the login form as part of the tab and can answer it (remote.rs `login`).
   useEffect(() => {
-    const auth = awaitingPassword ? { user: needsUsername, password: usesPassword, username: leaf.session.username } : null;
+    const auth = awaitingPassword ? { user: needsUsername, password: asksPassword, username: leaf.session.username } : null;
     extrasRef.current.onAuthPrompt(leaf.paneId, auth);
-  }, [awaitingPassword, needsUsername, usesPassword, leaf.session.username, leaf.paneId]);
+  }, [awaitingPassword, needsUsername, asksPassword, leaf.session.username, leaf.paneId]);
   useEffect(() => () => extrasRef.current.onAuthPrompt(leaf.paneId, null), [leaf.paneId]);
 
   /** A phone answered the login form, or asked to reconnect a failed pane. */
@@ -1212,7 +1214,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       setPasswordInput("");
       onReconnectPane(leaf.paneId, {
         username: username || undefined,
-        password: usesPassword ? p.password ?? "" : undefined,
+        password: asksPassword ? p.password ?? "" : undefined,
         // The phone's box is ticked by default: it may update a profile, not create one.
         remember: p.remember && extrasRef.current.isSavedSession(leaf.session.id),
       });
@@ -1952,7 +1954,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
                 required
               />
             )}
-            {usesPassword && (
+            {asksPassword && (
               <input
                 type="password"
                 autoFocus={!needsUsername}
@@ -1969,7 +1971,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
                   checked={rememberPwd}
                   onChange={(e) => setRememberPwd(e.target.checked)}
                 />
-                <span>{usesPassword ? t("pane.rememberPwd") : t("pane.rememberUser")}</span>
+                <span>{asksPassword ? t("pane.rememberPwd") : t("pane.rememberUser")}</span>
               </label>
               <button type="submit" className="btn-primary btn-sm">
                 {t("pane.connectNow")}

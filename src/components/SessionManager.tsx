@@ -392,7 +392,9 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
                 <td className="muted">{s.protocol.toUpperCase()}</td>
                 <td className="mono">{sessionTargetSummary(s)}</td>
                 <td className="muted">
-                  {s.protocol === "ssh"
+                  {s.credentialId
+                    ? t("manager.authCredential")
+                    : s.protocol === "ssh"
                     ? s.authType === "privatekey"
                       ? t("manager.authKey")
                       : hasSavedPassword(s)

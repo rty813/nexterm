@@ -40,7 +40,8 @@ const PBKDF2_ITERATIONS: u32 = 210_000;
 
 /// Category -> data files (without `.json`) it covers.
 pub const CATEGORIES: &[(&str, &[&str])] = &[
-    ("sessions", &["sessions"]),
+    // Sessions refer to logins of the credential manager (`credentials.rs`) by id: both travel together.
+    ("sessions", &["sessions", "credentials"]),
     ("quickCommands", &["quick_commands"]),
     ("themes", &["custom_themes"]),
     // The terminal background image travels with the settings that name it.
@@ -324,7 +325,7 @@ pub fn seal(data: &Map<String, Value>, password: &str) -> Result<Vec<u8>, String
 }
 
 fn require_export_password(data: &Map<String, Value>, password: &str) -> Result<(), String> {
-    if password.is_empty() && ["sessions", CREDENTIALS_FILE].iter().any(|key|
+    if password.is_empty() && ["sessions", "credentials", CREDENTIALS_FILE].iter().any(|key|
         data.get(*key).is_some_and(|v| v.as_array().is_none_or(|items| !items.is_empty()))) {
         return Err("exportPasswordRequired".into());
     }
@@ -477,6 +478,7 @@ fn validate(file: &str, value: &Value) -> Result<(), String> {
     let bad = |e: serde_json::Error| format!("{}: {}", file, e);
     match file {
         "sessions" => serde_json::from_value::<Vec<SessionConfig>>(value.clone()).map(|_| ()).map_err(bad),
+        "credentials" => serde_json::from_value::<Vec<crate::credentials::Credential>>(value.clone()).map(|_| ()).map_err(bad),
         "quick_commands" => serde_json::from_value::<Vec<QuickCommand>>(value.clone()).map(|_| ()).map_err(bad),
         "custom_themes" => serde_json::from_value::<Vec<ImportedTheme>>(value.clone()).map(|_| ()).map_err(bad),
         "settings" => serde_json::from_value::<AppSettings>(value.clone()).map(|_| ()).map_err(bad),
@@ -556,7 +558,7 @@ pub fn apply(base: &Path, data: &Map<String, Value>, categories: &[String], mode
                 Err(e) if local_secrets::recoverable(&e) => {
                     unreadable.push(path.clone());
                     match kind {
-                        Kind::Sessions => None,
+                        Kind::Sessions | Kind::Credentials => None,
                         Kind::Settings => kind.read_salvaged(&path).map_err(|e| e.to_string())?,
                     }
                 }
@@ -1848,6 +1850,38 @@ mod tests {
         let wrong = SyncConfig { password: "nope".into(), ..cfg.clone() };
         assert_eq!(run(&store_b, &wrong, SyncAction::Pull).await.unwrap_err(), code::BAD_PASSWORD);
         for d in [shared, a, b] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn credentials_travel_with_sessions() {
+        let (a, b) = (tmp_dir("cred-a"), tmp_dir("cred-b"));
+        let cred = |id: &str| json!({"id": id, "name": id, "username": "u", "authType": "password", "password": "cred-secret"});
+        write_json(&a.join("sessions.json"), &json!([session("a1")])).unwrap();
+        write_json(&a.join("credentials.json"), &json!([cred("one")])).unwrap();
+        write_json(&b.join("credentials.json"), &json!([cred("two")])).unwrap();
+        let categories = vec!["sessions".to_string()];
+        let data = collect(&a, &categories).unwrap();
+        assert_eq!(data["credentials"][0]["password"], json!("cred-secret"));
+        // Credentials alone also need an export password.
+        let only: Map<String, Value> = [("credentials".to_string(), data["credentials"].clone())].into_iter().collect();
+        assert!(seal(&only, "").is_err());
+
+        assert_eq!(apply(&b, &data, &categories, ImportMode::Merge).unwrap(), categories);
+        assert!(!fs::read_to_string(b.join("credentials.json")).unwrap().contains("cred-secret"));
+        let ids = |base: &Path| -> Vec<String> {
+            let list = Kind::Credentials.read(&base.join("credentials.json"), false).unwrap().unwrap();
+            list.as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_string()).collect()
+        };
+        assert_eq!(ids(&b), ["two", "one"]);
+        apply(&b, &data, &categories, ImportMode::Replace).unwrap();
+        assert_eq!(ids(&b), ["one"]);
+        // A bundle made before credentials existed leaves the local ones alone.
+        let old: Map<String, Value> = [("sessions".to_string(), json!([]))].into_iter().collect();
+        apply(&b, &old, &categories, ImportMode::Replace).unwrap();
+        assert_eq!(ids(&b), ["one"]);
+        for d in [a, b] {
             let _ = fs::remove_dir_all(d);
         }
     }

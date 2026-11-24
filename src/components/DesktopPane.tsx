@@ -63,6 +63,8 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
   // ---- credentials: NLA signs in before the session exists, so ask before connecting.
   const isRdp = leaf.session.protocol === "rdp";
   const [authOpen, setAuthOpen] = useState(() => missingDesktopCredentials(leaf.session) !== null);
+  /** Only the user name is missing: the password comes from a saved credential. */
+  const asksPassword = !(leaf.session.credentialId && !leaf.session.username.trim());
   const [userInput, setUserInput] = useState(leaf.session.username);
   const [passwordInput, setPasswordInput] = useState("");
   const [remember, setRemember] = useState(true);
@@ -70,10 +72,10 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
   authOpenRef.current = authOpen;
   const submitAuth = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userInput.trim() || (isRdp && desktop.nla && !passwordInput)) return;
+    if (!userInput.trim() || (asksPassword && isRdp && desktop.nla && !passwordInput)) return;
     setAuthOpen(false);
     setPasswordInput("");
-    onReconnectPane(paneId, { username: userInput.trim(), password: passwordInput, remember });
+    onReconnectPane(paneId, { username: userInput.trim(), password: asksPassword ? passwordInput : undefined, remember });
   };
 
   const dpr = window.devicePixelRatio || 1;
@@ -358,20 +360,22 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
               onChange={(e) => setUserInput(e.target.value)}
               required
             />
-            <input
-              type="password"
-              className="text-input"
-              autoFocus={Boolean(userInput.trim())}
-              placeholder={t("desktop.passwordPlaceholder")}
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              required={desktop.nla}
-            />
+            {asksPassword && (
+              <input
+                type="password"
+                className="text-input"
+                autoFocus={Boolean(userInput.trim())}
+                placeholder={t("desktop.passwordPlaceholder")}
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                required={desktop.nla}
+              />
+            )}
             <p className="adv-hint">{t("desktop.authHint")}</p>
             <div className="pane-auth-footer">
               <label className="checkbox-row">
                 <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-                <span>{t("pane.rememberPwd")}</span>
+                <span>{t(asksPassword ? "pane.rememberPwd" : "pane.rememberUser")}</span>
               </label>
               <button type="submit" className="btn-primary btn-sm">
                 {t("pane.connectNow")}
