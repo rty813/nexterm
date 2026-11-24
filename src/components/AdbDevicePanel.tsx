@@ -44,7 +44,7 @@ export const AdbDevicePanel: React.FC<{
     setError("");
     try {
       if (which === "apps") setApps(await adb.apps({ instanceId: current.paneId }, true));
-      else setProcs(await adb.processes(current.paneId));
+      else setProcs(await adb.processes({ instanceId: current.paneId }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -66,7 +66,7 @@ export const AdbDevicePanel: React.FC<{
   useEffect(() => {
     if (tab !== "processes" || !current) return;
     const id = window.setInterval(() => {
-      if (!document.hidden) void adb.processes(current.paneId).then(setProcs, () => undefined);
+      if (!document.hidden) void adb.processes({ instanceId: current.paneId }).then(setProcs, () => undefined);
     }, 3000);
     return () => window.clearInterval(id);
   }, [tab, current?.paneId]);

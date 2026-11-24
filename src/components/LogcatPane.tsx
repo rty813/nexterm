@@ -6,6 +6,8 @@ import { backend } from "../services/backend";
 import { DEFAULT_LOGCAT, type LogEntry, type LogcatPrefs, type TerminalLeafNode } from "../types/domain";
 import { LEVELS, LogBuffer, formatEntry, makeFilter, parseQuery, type Level, type PackageUids } from "../utils/logcatFilter";
 import { adbSerialOf } from "../utils/adbSession";
+import { packageOfProcess } from "../utils/logcatSuggest";
+import { LogcatQueryInput } from "./LogcatQueryInput";
 import { useContextMenu } from "./ContextMenu";
 import type { PaneApi, PaneExtras } from "./TerminalPane";
 
@@ -48,6 +50,8 @@ export const LogcatPane: React.FC<LogcatPaneProps> = ({ leaf, visible, isActive,
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
   const held = useRef<LogEntry[]>([]);
+  /** Tags seen so far and how often (completion). */
+  const tagCounts = useRef(new Map<string, number>());
   const frame = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -63,6 +67,8 @@ export const LogcatPane: React.FC<LogcatPaneProps> = ({ leaf, visible, isActive,
 
   // ---- stream (again on reconnect or when the buffers change)
   const onBatch = useCallback((batch: LogEntry[]) => {
+    const tags = tagCounts.current;
+    for (const e of batch) if (e.tag) tags.set(e.tag, (tags.get(e.tag) ?? 0) + 1);
     if (pausedRef.current) {
       held.current.push(...batch);
       return;
@@ -94,25 +100,57 @@ export const LogcatPane: React.FC<LogcatPaneProps> = ({ leaf, visible, isActive,
     }
   }, [paused]);
 
-  // Package -> uid map, for `package:` filters (loaded when such a term appears).
+  // ---- device data for `package:` filters and completion. A logcat tab has no shell of
+  // its own: the device is asked by serial.
   const q = useMemo(() => parseQuery(query), [query]);
-  const needsPackages = q.packages.length > 0;
-  useEffect(() => {
-    if (!needsPackages || leaf.status !== "connected" || uids.size) return;
-    // A logcat tab has no shell of its own: ask the device by serial.
-    void (async () => {
-      try {
-        let serial = adbSerialOf(leaf.session);
-        if (!serial) serial = (await adb.devices()).find((d) => d.state === "device")?.serial ?? "";
-        if (!serial) return;
-        const apps = await adb.apps({ serial }, false);
-        setUids(new Map(apps.filter((a) => a.uid !== null).map((a) => [a.package, a.uid as number])));
-      } catch {
-        /* the package filter then matches nothing */
-      }
-    })();
+  const [device, setDevice] = useState<{ packages: string[]; running: Set<string>; foreground: string | null; processes: { pid: number; name: string }[] }>(
+    { packages: [], running: new Set(), foreground: null, processes: [] }
+  );
+  const loadedAt = useRef({ apps: 0, live: 0 });
+  const serialOf = async () => {
+    const s = adbSerialOf(leaf.session);
+    return s || ((await adb.devices()).find((d) => d.state === "device")?.serial ?? "");
+  };
+  /** Apps (with uids) once; processes and the foreground app again after 10 s. */
+  const loadDevice = useCallback(async () => {
+    if (leaf.status !== "connected") return;
+    const now = Date.now();
+    const needApps = !loadedAt.current.apps;
+    const needLive = now - loadedAt.current.live > 10_000;
+    if (!needApps && !needLive) return;
+    if (needApps) loadedAt.current.apps = now;
+    if (needLive) loadedAt.current.live = now;
+    try {
+      const serial = await serialOf();
+      if (!serial) return;
+      const [apps, procs, fg] = await Promise.all([
+        needApps ? adb.apps({ serial }, false).catch(() => null) : Promise.resolve(null),
+        needLive ? adb.processes({ serial }).catch(() => null) : Promise.resolve(null),
+        needLive ? adb.foreground({ serial }).catch(() => null) : Promise.resolve(undefined),
+      ]);
+      if (apps) setUids(new Map(apps.filter((a) => a.uid !== null).map((a) => [a.package, a.uid as number])));
+      setDevice((d) => ({
+        packages: apps ? apps.map((a) => a.package) : d.packages,
+        running: procs ? new Set(procs.map((p) => packageOfProcess(p.name)).filter((p): p is string => Boolean(p))) : d.running,
+        processes: procs ? procs.map((p) => ({ pid: p.pid, name: p.name })) : d.processes,
+        foreground: fg === undefined ? d.foreground : fg,
+      }));
+    } catch {
+      loadedAt.current = { apps: 0, live: 0 };
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsPackages, leaf.status, uids.size]);
+  }, [leaf.status]);
+  // A saved `package:` filter needs the uids as soon as the tab connects.
+  useEffect(() => {
+    if (q.packages.length && !uids.size) void loadDevice();
+  }, [q.packages.length, uids.size, loadDevice]);
+
+  const suggestContext = useMemo(
+    () => ({ ...device, tags: tagCounts.current }),
+    // Tags grow with the log: refresh the snapshot with each repaint.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [device, version]
+  );
 
   // ---- filtered view
   const filter = useMemo(() => makeFilter(q, level, uids), [q, level, uids]);
@@ -262,13 +300,23 @@ export const LogcatPane: React.FC<LogcatPaneProps> = ({ leaf, visible, isActive,
             </option>
           ))}
         </select>
-        <input
-          className={`text-input logcat-query ${q.errors.length ? "invalid" : ""}`}
-          placeholder={t("logcat.queryPlaceholder")}
-          title={t("logcat.queryHelp")}
+        <LogcatQueryInput
           value={query}
-          spellCheck={false}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={setQuery}
+          invalid={q.errors.length > 0}
+          context={suggestContext}
+          onWantDevice={() => void loadDevice()}
+          onForeground={async () => {
+            try {
+              const pkg = await adb.foreground({ serial: await serialOf() });
+              if (!pkg) extras.onToast(t("logcat.noForeground"));
+              else void loadDevice();
+              return pkg;
+            } catch (e) {
+              extras.onToast(String(e));
+              return null;
+            }
+          }}
         />
         <details className="logcat-buffers">
           <summary title={t("logcat.buffers")}>{buffers.join(", ") || t("logcat.defaultBuffers")}</summary>

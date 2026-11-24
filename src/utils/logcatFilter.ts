@@ -47,6 +47,8 @@ export function parseQuery(q: string): LogQuery {
     const colon = term.indexOf(":");
     const key = colon > 0 ? term.slice(0, colon).toLowerCase() : "";
     const value = colon > 0 ? term.slice(colon + 1) : term;
+    // A key still being typed ("tag:", "package:", "tag:="): no condition yet.
+    if (["tag", "pid", "package", "pkg", "level", "re"].includes(key) && (value === "" || value === "=")) continue;
     if (key === "tag" && value) {
       const exact = value.startsWith("=");
       out.tags.push({ value: (exact ? value.slice(1) : value).toLowerCase(), exact, not });

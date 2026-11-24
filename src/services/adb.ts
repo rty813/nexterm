@@ -100,9 +100,14 @@ export const adb = {
     need();
     return invoke<string[]>("adb_export_apk", { instanceId, package: pkg, dir });
   },
-  async processes(instanceId: string): Promise<AdbProcessInfo[]> {
+  async processes(target: AdbTarget): Promise<AdbProcessInfo[]> {
     need();
-    return invoke<AdbProcessInfo[]>("adb_processes", { instanceId });
+    return invoke<AdbProcessInfo[]>("adb_processes", { instanceId: target.instanceId ?? null, serial: target.serial ?? null });
+  },
+  /** Package of the app in the foreground, or null. */
+  async foreground(target: AdbTarget): Promise<string | null> {
+    need();
+    return invoke<string | null>("adb_foreground", { instanceId: target.instanceId ?? null, serial: target.serial ?? null });
   },
   async kill(instanceId: string, pids: number[], signal = 15): Promise<void> {
     need();

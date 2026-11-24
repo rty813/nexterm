@@ -155,8 +155,14 @@ pub async fn adb_export_apk(ctx: State<'_, AppContext>, instance_id: String, pac
 }
 
 #[tauri::command]
-pub async fn adb_processes(ctx: State<'_, AppContext>, instance_id: String) -> Result<Vec<ops::ProcessInfo>, String> {
-    let d = device_of(&ctx, Some(&instance_id), None).await?;
+pub async fn adb_foreground(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>) -> Result<Option<String>, String> {
+    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref()).await?;
+    ops::foreground(&d).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn adb_processes(ctx: State<'_, AppContext>, instance_id: Option<String>, serial: Option<String>) -> Result<Vec<ops::ProcessInfo>, String> {
+    let d = device_of(&ctx, instance_id.as_deref(), serial.as_deref()).await?;
     ops::processes(&d).await.map_err(err)
 }
 

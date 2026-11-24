@@ -161,6 +161,12 @@ const LOGCAT_ZH = {
   connecting: "正在连接设备…",
   disconnected: "设备已断开",
   waiting: "等待日志…",
+  foregroundTag: "前台",
+  foreground: "只看前台应用（替换已有的 package: 条件）",
+  noForeground: "没有找到前台应用",
+  running: "运行中",
+  recent: "最近",
+  suggestHint: "↑↓ 选择 · Tab / Enter 补全 · Esc 关闭 · Ctrl+Space 打开",
 };
 
 const LOGCAT_EN: typeof LOGCAT_ZH = {
@@ -187,6 +193,12 @@ const LOGCAT_EN: typeof LOGCAT_ZH = {
   connecting: "Connecting to the device…",
   disconnected: "Device disconnected",
   waiting: "Waiting for log lines…",
+  foregroundTag: "foreground",
+  foreground: "Only the foreground app (replaces existing package: terms)",
+  noForeground: "No foreground app found",
+  running: "running",
+  recent: "recent",
+  suggestHint: "↑↓ choose · Tab / Enter complete · Esc close · Ctrl+Space open",
 };
 
 const PANEL_ZH = {

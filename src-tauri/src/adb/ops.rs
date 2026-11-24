@@ -251,6 +251,31 @@ pub async fn processes(device: &AdbDevice) -> Result<Vec<ProcessInfo>> {
     Ok(parse_ps(&out))
 }
 
+/// The foreground app's package from `dumpsys activity activities`:
+/// `  topResumedActivity=ActivityRecord{1a2b u0 com.android.chrome/.Main t42}` (Android 10+)
+/// or `  mResumedActivity: ActivityRecord{... u0 com.foo/.Main t7}` (older).
+pub fn parse_foreground(text: &str) -> Option<String> {
+    for key in ["topResumedActivity", "mResumedActivity", "ResumedActivity"] {
+        for line in text.lines().filter(|l| l.contains(key)) {
+            let pkg = line
+                .split_whitespace()
+                .find_map(|w| w.split_once('/').map(|(p, _)| p))
+                .filter(|p| valid_package(p) && p.contains('.'));
+            if let Some(p) = pkg {
+                return Some(p.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub async fn foreground(device: &AdbDevice) -> Result<Option<String>> {
+    let out = device
+        .exec_output("dumpsys activity activities 2>/dev/null | grep -E 'topResumedActivity|mResumedActivity' | head -n 3")
+        .await?;
+    Ok(parse_foreground(&out))
+}
+
 pub async fn kill(device: &AdbDevice, pids: &[u32], signal: u8) -> Result<()> {
     if pids.is_empty() {
         return Ok(());
@@ -359,6 +384,15 @@ mod tests {
         assert_eq!(ps[0].rss, 788);
         assert_eq!(ps[0].state, "S");
         assert_eq!(ps[0].name, "/init");
+    }
+
+    #[test]
+    fn foreground_app() {
+        let new = "  topResumedActivity=ActivityRecord{1a2b3c u0 com.android.chrome/com.google.android.apps.chrome.Main t42}\n";
+        assert_eq!(parse_foreground(new).as_deref(), Some("com.android.chrome"));
+        let old = "    mResumedActivity: ActivityRecord{42 u0 com.example.app/.MainActivity t7}\n";
+        assert_eq!(parse_foreground(old).as_deref(), Some("com.example.app"));
+        assert_eq!(parse_foreground("mResumedActivity: null"), None);
     }
 
     #[test]

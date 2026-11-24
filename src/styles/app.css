@@ -5957,10 +5957,78 @@ html.ctxmenu-host #root {
 .logcat-level {
   width: 96px;
 }
+.logcat-query-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 160px;
+  display: flex;
+  align-items: center;
+}
 .logcat-query {
   flex: 1;
-  min-width: 120px;
+  min-width: 0;
+  padding-right: 26px;
   font-family: var(--font-mono);
+}
+.logcat-foreground {
+  position: absolute;
+  right: 2px;
+}
+.logcat-suggest {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 320px;
+  overflow: auto;
+  padding: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-pop);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.logcat-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  color: var(--fg-primary);
+}
+.logcat-suggest-item.active {
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+}
+.logcat-suggest-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.logcat-suggest-item.kind-key .logcat-suggest-label { color: #c792ea; }
+.logcat-suggest-item.kind-recent .logcat-suggest-label { color: var(--fg-muted); }
+.logcat-suggest-detail {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.logcat-suggest-hint {
+  padding: 4px 8px 2px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 3px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--fg-muted);
 }
 .logcat-query.invalid {
   border-color: var(--danger);

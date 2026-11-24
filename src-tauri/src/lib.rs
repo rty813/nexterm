@@ -2064,6 +2064,7 @@ pub fn run() {
             adb::commands::adb_install,
             adb::commands::adb_export_apk,
             adb::commands::adb_processes,
+            adb::commands::adb_foreground,
             adb::commands::adb_kill,
             adb::commands::adb_logcat_start,
             adb::commands::adb_logcat_stop,

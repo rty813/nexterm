@@ -26,6 +26,11 @@ describe("logcat filter", () => {
     expect(q.errors).toEqual([]);
   });
 
+  it("ignores keys still being typed", () => {
+    const q = parseQuery("tag: -package: tag:= level:");
+    expect([q.tags, q.packages, q.words, q.level]).toEqual([[], [], [], null]);
+  });
+
   it("reports bad regexes", () => {
     expect(parseQuery("/(/").errors).toEqual(["/(/"]);
   });
