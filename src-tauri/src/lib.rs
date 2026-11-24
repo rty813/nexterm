@@ -72,7 +72,7 @@ use crate::manager::{resolve_host_key, ConnectionManager, HostKeyDecision, Injec
 use crate::models::{
     AppSettings, AppStateSnapshot, DiscoveryCandidate, ImportResult, QuickCommand, SessionConfig, TunnelConfig,
 };
-use crate::session_log::{expand_log_file_name, LogNameVars, LogOptions, SessionLog};
+use crate::session_log::{expand_log_file_name, LogMode, LogNameVars, LogOptions, Rotation, SessionLog};
 use crate::storage::Storage;
 
 pub struct AppContext {
@@ -178,11 +178,15 @@ fn extra_str(settings: &AppSettings, key: &str) -> String {
 fn log_options(settings: &AppSettings) -> LogOptions {
     let max_mb = settings.extra.get("logMaxSizeMb").and_then(|v| v.as_f64()).unwrap_or(0.0).max(0.0);
     let pattern = extra_str(settings, "logLinePattern");
+    let max_bytes = (max_mb * 1024.0 * 1024.0) as u64;
     LogOptions {
+        // "text" (older settings) maps to the transcript.
+        mode: if extra_str(settings, "logType") == "raw" { LogMode::Raw } else { LogMode::Transcript },
         timestamp: settings.log_timestamp,
         line_pattern: if pattern.trim().is_empty() { crate::session_log::default_line_pattern() } else { pattern },
-        max_bytes: (max_mb * 1024.0 * 1024.0) as u64,
-        raw: extra_str(settings, "logType") == "raw",
+        rotation: Rotation::parse(&extra_str(settings, "logRotation"), max_bytes),
+        max_bytes,
+        binary_payload: extra_bool(settings, "logBinaryPayload", false),
     }
 }
 
@@ -203,7 +207,12 @@ fn xserver_config(settings: &AppSettings) -> crate::xserver::XServerConfig {
 }
 
 fn open_session_log(settings: &AppSettings, vars: &LogNameVars) -> anyhow::Result<SessionLog> {
-    let name = expand_log_file_name(&settings.log_file_pattern, vars);
+    // The old default (one flat folder) moves to a folder per session.
+    let pattern = match settings.log_file_pattern.trim() {
+        "" | crate::models::OLD_DEFAULT_LOG_PATTERN => crate::models::default_log_pattern(),
+        p => p.to_string(),
+    };
+    let name = expand_log_file_name(&pattern, vars);
     SessionLog::create(&log_dir(settings), &name, log_options(settings))
 }
 

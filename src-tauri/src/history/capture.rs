@@ -21,9 +21,9 @@ const SLICE: usize = 2048;
 const CLEAR_SCROLLBACK: &[u8] = b"\x1b[3J";
 const RESET: &[u8] = b"\x1bc";
 
-struct Size {
-    cols: usize,
-    rows: usize,
+pub(crate) struct Size {
+    pub cols: usize,
+    pub rows: usize,
 }
 
 impl Dimensions for Size {
@@ -246,12 +246,12 @@ fn blank(cell: &Cell) -> bool {
         && !cell.flags.intersects(Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT)
 }
 
-fn row_blank(row: &Row<Cell>, cols: usize) -> bool {
+pub(crate) fn row_blank(row: &Row<Cell>, cols: usize) -> bool {
     (0..cols).all(|c| blank(&row[Column(c)]))
 }
 
 /// FNV-1a over the row's characters and attributes; 0 for a blank row.
-fn row_hash(row: &Row<Cell>, cols: usize) -> u64 {
+pub(crate) fn row_hash(row: &Row<Cell>, cols: usize) -> u64 {
     if row_blank(row, cols) {
         return 0;
     }
@@ -275,7 +275,7 @@ fn color_key(c: Color) -> u64 {
 
 /// Append one grid row to the open logical line; a row not ending in an automatic wrap
 /// finishes the line and hands it to `out`.
-fn take_row(row: &Row<Cell>, cols: usize, ts: i64, b: &mut LineBuilder, out: &mut impl FnMut(LineRef)) {
+pub(crate) fn take_row(row: &Row<Cell>, cols: usize, ts: i64, b: &mut LineBuilder, out: &mut impl FnMut(LineRef)) {
     let wrapped = row[Column(cols - 1)].flags.contains(Flags::WRAPLINE);
     if !b.active {
         b.start(ts);

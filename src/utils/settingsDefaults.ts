@@ -82,6 +82,16 @@ export function modemOf(s: AppSettings): ModemSettings {
   return { ...DEFAULT_MODEM, ...(s.modem ?? {}) };
 }
 
+/** Log file name: one folder per session. Mirrors `models::default_log_pattern`. */
+export const DEFAULT_LOG_FILE_PATTERN = "%n/%n_%Y-%m-%d_%H-%M-%S.log";
+/** The default before the folder per session. */
+export const OLD_LOG_FILE_PATTERN = "%n_%Y-%m-%d_%H-%M-%S.log";
+
+/** Session log rotation; older settings only have logMaxSizeMb (> 0 meant split by size). Mirrors `Rotation::parse`. */
+export function logRotationOf(s: AppSettings): NonNullable<AppSettings["logRotation"]> {
+  return s.logRotation ?? ((s.logMaxSizeMb ?? 0) > 0 ? "size" : "session");
+}
+
 export const DEFAULT_SFTP: SftpSettings = {
   concurrency: 3,
   conflict: "ask",

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { FolderOpen, Monitor, Play, Square } from "lucide-react";
 import type { AppSettings, ClipboardPermission, MouseSettings, SessionConfig, TabMouseAction } from "../types/domain";
 import { backend, type XServerStatus } from "../services/backend";
-import { autoCompleteOf, historyOf, modemOf, mouseOf, sftpOf, xserverOf } from "../utils/settingsDefaults";
+import { autoCompleteOf, historyOf, logRotationOf, modemOf, mouseOf, sftpOf, xserverOf } from "../utils/settingsDefaults";
 import { commandHistory } from "../utils/commandHistory";
 import { confirmAsk } from "../utils/confirm";
 import { StorageLocationSettings } from "./StorageLocation";
@@ -285,6 +285,8 @@ export const LogTransferSettings: React.FC<Props> = ({ draft, onChange }) => {
   const setModem = (patch: Partial<typeof modem>) => set({ modem: { ...modem, ...patch } });
   const sftp = sftpOf(draft);
   const setSftp = (patch: Partial<typeof sftp>) => set({ sftp: { ...sftp, ...patch } });
+  const raw = draft.logType === "raw";
+  const rotation = logRotationOf(draft);
 
   return (
     <div className="settings-general">
@@ -321,20 +323,33 @@ export const LogTransferSettings: React.FC<Props> = ({ draft, onChange }) => {
       <div className="form-grid-3">
         <label className="field">
           <span>{t("lg.type")}</span>
-          <select className="text-input" value={draft.logType ?? "text"} onChange={(e) => set({ logType: e.target.value as "text" | "raw" })}>
-            <option value="text">{t("lg.typeText")}</option>
+          <select className="text-input" value={raw ? "raw" : "transcript"} onChange={(e) => set({ logType: e.target.value as "transcript" | "raw" })}>
+            <option value="transcript">{t("lg.typeText")}</option>
             <option value="raw">{t("lg.typeRaw")}</option>
           </select>
         </label>
-        <Num label={t("lg.maxSize")} value={draft.logMaxSizeMb ?? 0} min={0} max={10240} onChange={(v) => set({ logMaxSizeMb: v })} />
-        <Check checked={draft.logTimestamp !== false} disabled={draft.logType === "raw"} onChange={(v) => set({ logTimestamp: v })} label={t("settingsModal.logTimestamp")} />
+        <label className="field">
+          <span>{t("lg.rotation")}</span>
+          <select className="text-input" value={rotation} onChange={(e) => set({ logRotation: e.target.value as typeof rotation })}>
+            <option value="session">{t("lg.rotSession")}</option>
+            <option value="daily">{t("lg.rotDaily")}</option>
+            <option value="hourly">{t("lg.rotHourly")}</option>
+            <option value="size">{t("lg.rotSize")}</option>
+          </select>
+        </label>
+        <Num label={t("lg.maxSize")} value={draft.logMaxSizeMb ?? 0} min={0} max={10240} disabled={rotation !== "size"} onChange={(v) => set({ logMaxSizeMb: v })} />
       </div>
+      <div className="form-grid-2">
+        <Check checked={draft.logTimestamp !== false} disabled={raw} onChange={(v) => set({ logTimestamp: v })} label={t("settingsModal.logTimestamp")} />
+        <Check checked={draft.logBinaryPayload === true} disabled={!raw} onChange={(v) => set({ logBinaryPayload: v })} label={t("lg.binary")} />
+      </div>
+      <p className="adv-hint">{raw ? t("lg.binaryHint") : t("lg.inputHint")}</p>
       <label className="field">
         <span>{t("lg.linePattern")}</span>
         <input
           type="text"
           className="text-input mono"
-          disabled={draft.logType === "raw" || draft.logTimestamp === false}
+          disabled={raw || draft.logTimestamp === false}
           placeholder="[%Y-%m-%d %H:%M:%S] %v"
           value={draft.logLinePattern ?? ""}
           onChange={(e) => set({ logLinePattern: e.target.value })}

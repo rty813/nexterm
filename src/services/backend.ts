@@ -41,6 +41,7 @@ import type {
   UpdateProgress,
 } from "../types/domain";
 import type { HistoryInfo, HistoryPage } from "../utils/historyView";
+import { DEFAULT_LOG_FILE_PATTERN } from "../utils/settingsDefaults";
 
 /** One step of a full-history search (history/mod.rs SearchResult). */
 /** A search or highlight rule for the full history (history/search.rs QuerySpec). */
@@ -460,7 +461,7 @@ const fallbackState: AppStateSnapshot = {
     syntaxHighlight: true,
     closeToTray: true,
     logDir: null,
-    logFilePattern: "%n_%Y-%m-%d_%H-%M-%S.log",
+    logFilePattern: DEFAULT_LOG_FILE_PATTERN,
     logTimestamp: true,
     themeId: "dige-black",
     fontFamily: "'Cascadia Mono', Consolas, 'Roboto Mono', 'Microsoft YaHei UI', monospace",

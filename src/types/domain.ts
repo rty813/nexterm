@@ -265,6 +265,8 @@ export interface SerialConfig {
   parity: "none" | "odd" | "even";
   stopBits: number;
   flowControl: "none" | "software" | "hardware";
+  /** Show typed characters locally (devices that do not echo). */
+  localEcho?: boolean;
 }
 
 export interface QuickCommand {
@@ -486,10 +488,15 @@ export interface AppSettings {
   remoteClipboardWrite?: ClipboardPermission;
   remoteClipboardRead?: ClipboardPermission;
 
-  /** Session log: split size in MB (0 = never), line template, plain text or raw output. */
+  /** Session log: split size in MB (0 = never), line template, transcript or raw output. */
   logMaxSizeMb?: number;
   logLinePattern?: string;
-  logType?: "text" | "raw";
+  /** "text" is the older name of "transcript". */
+  logType?: "transcript" | "text" | "raw";
+  /** When to start a new file; unset: "size" if logMaxSizeMb > 0, else "session". */
+  logRotation?: "session" | "daily" | "hourly" | "size";
+  /** Raw: keep ZModem / X / YMODEM transfer bytes (default off). */
+  logBinaryPayload?: boolean;
 
   /** X/Y/ZModem upload commands and packet sizes (xmodem.uploadCommand ...). */
   modem?: ModemSettings;

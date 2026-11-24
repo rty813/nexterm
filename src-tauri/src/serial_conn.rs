@@ -136,3 +136,49 @@ fn flow_control(cfg: &SerialConfig) -> FlowControl {
         _ => FlowControl::None,
     }
 }
+
+/// What "local echo" shows for typed bytes: printable text as is, Enter as a new line,
+/// Backspace erases the last cell; escape sequences (arrow keys ...) and other controls
+/// are left out.
+pub fn local_echo(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + 4);
+    let mut esc = 0u8; // 0 ground, 1 after ESC, 2 in CSI / SS3
+    let mut prev = 0u8;
+    for &b in data {
+        match esc {
+            1 => {
+                esc = if b == b'[' || b == b'O' { 2 } else { 0 };
+                continue;
+            }
+            2 => {
+                if (0x40..=0x7e).contains(&b) {
+                    esc = 0;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        match b {
+            0x1b => esc = 1,
+            b'\r' => out.extend_from_slice(b"\r\n"),
+            b'\n' if prev != b'\r' => out.extend_from_slice(b"\r\n"),
+            b'\n' => {}
+            0x08 | 0x7f => out.extend_from_slice(b"\x08 \x08"),
+            b'\t' => out.push(b),
+            0x00..=0x1f => {}
+            _ => out.push(b),
+        }
+        prev = b;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_local_echo() {
+        assert_eq!(super::local_echo(b"AT\r"), b"AT\r\n");
+        assert_eq!(super::local_echo(b"ab\x7f\x1b[Dc\r\n"), b"ab\x08 \x08c\r\n");
+        assert_eq!(super::local_echo("中\n".as_bytes()), "中\r\n".as_bytes());
+    }
+}

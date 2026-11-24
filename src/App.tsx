@@ -85,7 +85,7 @@ import { HistoryPanel } from "./components/HistoryPanel";
 import { TmuxPanel, type TmuxTarget } from "./components/TmuxPanel";
 import { commandHistory, historyKeyOf } from "./utils/commandHistory";
 import { autoSyncInterval, syncErrorKey, syncReady } from "./utils/configSync";
-import { historyOf, modemOf, remoteOf, sftpOf, syncOf } from "./utils/settingsDefaults";
+import { DEFAULT_LOG_FILE_PATTERN, OLD_LOG_FILE_PATTERN, historyOf, modemOf, remoteOf, sftpOf, syncOf } from "./utils/settingsDefaults";
 import { hostKeyOf } from "./utils/sftpBookmarks";
 import type { AiControl, AiControlMode, AiControlRequest, AiOpenRequest, McpClient, SenderItem, UpdateInfo, UpdateProgress } from "./types/domain";
 import { AiRequestDialog } from "./components/AiRequestDialog";
@@ -143,7 +143,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   syntaxHighlight: true,
   closeToTray: true,
   logDir: null,
-  logFilePattern: "%n_%Y-%m-%d_%H-%M-%S.log",
+  logFilePattern: DEFAULT_LOG_FILE_PATTERN,
   logTimestamp: true,
   copyOnSelect: false,
   rightClickAction: "menu",
@@ -329,6 +329,12 @@ export const App: React.FC = () => {
           scrollbackMigrated: true,
           scrollback: cur.scrollback === 50000 && cur.fullHistory !== false ? 10000 : cur.scrollback,
         };
+        snap = { ...snap, settings: migrated };
+        void backend.saveSettings(migrated);
+      }
+      // Session logs go into a folder per session: the old flat default moves along.
+      if (snap.settings.logFilePattern === OLD_LOG_FILE_PATTERN && currentWindowLabel() === "main") {
+        const migrated = { ...snap.settings, logFilePattern: DEFAULT_LOG_FILE_PATTERN };
         snap = { ...snap, settings: migrated };
         void backend.saveSettings(migrated);
       }

@@ -136,6 +136,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     "lg.type",
     "lg.linePattern",
     "lg.maxSize",
+    "lg.rotation",
+    "lg.binary",
     "settingsModal.zmodemDir",
     "modem.section",
     "modem.zCmd",

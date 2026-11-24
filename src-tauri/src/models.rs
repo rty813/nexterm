@@ -313,6 +313,9 @@ pub struct SerialConfig {
     /// "none" | "software" | "hardware"
     #[serde(default = "default_none")]
     pub flow_control: String,
+    /// Show typed characters locally, for devices that do not echo.
+    #[serde(default)]
+    pub local_echo: bool,
 }
 
 impl Default for SerialConfig {
@@ -323,6 +326,7 @@ impl Default for SerialConfig {
             parity: default_none(),
             stop_bits: default_stop_bits(),
             flow_control: default_none(),
+            local_echo: false,
         }
     }
 }
@@ -434,8 +438,11 @@ pub struct AppSettings {
 }
 
 pub fn default_log_pattern() -> String {
-    "%n_%Y-%m-%d_%H-%M-%S.log".to_string()
+    "%n/%n_%Y-%m-%d_%H-%M-%S.log".to_string()
 }
+
+/// The default before logs went into a folder per session.
+pub const OLD_DEFAULT_LOG_PATTERN: &str = "%n_%Y-%m-%d_%H-%M-%S.log";
 
 fn default_true() -> bool {
     true

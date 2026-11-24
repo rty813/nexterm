@@ -254,6 +254,10 @@ struct ScopedSink {
     binary: Option<Mutex<HexDump>>,
     /// Pane width, for the hex dump's bytes per row.
     cols: AtomicU16,
+    rows: AtomicU16,
+    /// Serial "local echo": typed text is shown in the pane (and logged) as it is sent.
+    local_echo: bool,
+    instance_id: String,
     /// Last time anything was sent to the remote (keys, paste, agent, anti-idle).
     last_input: Mutex<Instant>,
 }
@@ -352,6 +356,16 @@ impl ScopedSink {
         }
         lock(&self.tracker).feed(screen, Instant::now());
         self.inner.emit_output(instance_id, screen);
+    }
+
+    /// Bytes of a ZModem / X / YMODEM transfer: kept only by raw logs that include payloads.
+    fn log_transfer(&self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        if let Some(file) = lock(&self.log).as_mut() {
+            file.write_transfer(data);
+        }
     }
 
     fn transfer_busy(&self) -> bool {
@@ -460,6 +474,7 @@ impl ScopedSink {
                 *z = ZState::Pending { direction, buffered: data[offset..].to_vec() };
                 drop(z);
                 self.emit_terminal(instance_id, &data[..offset]);
+                self.log_transfer(&data[offset..]);
                 self.inner.emit_event(
                     "zmodem-request",
                     serde_json::json!({
@@ -472,9 +487,13 @@ impl ScopedSink {
                 if buffered.len() < 4 * 1024 * 1024 {
                     buffered.extend_from_slice(data);
                 }
+                drop(z);
+                self.log_transfer(data);
             }
             ZState::Active { tx, .. } => {
                 let _ = tx.send(data.to_vec());
+                drop(z);
+                self.log_transfer(data);
             }
         }
     }
@@ -573,6 +592,10 @@ impl ConnectionManager {
             history: crate::history::get(&instance_id),
             binary: binary.then(|| Mutex::new(HexDump::default())),
             cols: AtomicU16::new(cols),
+            rows: AtomicU16::new(rows),
+            local_echo: config.protocol == ProtocolType::Serial
+                && config.serial.as_ref().is_some_and(|s| s.local_echo),
+            instance_id: instance_id.clone(),
             last_input: Mutex::new(Instant::now()),
         });
         let anti_idle = AntiIdle::from_config(&config);
@@ -691,6 +714,10 @@ impl ConnectionManager {
     pub fn resize(&self, instance_id: &str, cols: u16, rows: u16) -> Result<()> {
         if let Some(entry) = lock(&self.sessions).get(instance_id) {
             entry.sink.cols.store(cols, Ordering::Relaxed);
+            entry.sink.rows.store(rows, Ordering::Relaxed);
+            if let Some(file) = lock(&entry.log).as_mut() {
+                file.resize(cols, rows);
+            }
             entry.control.send_resize(cols, rows);
         }
         if let Some(history) = crate::history::get(instance_id) {
@@ -1059,7 +1086,7 @@ impl ConnectionManager {
     }
 
     /// Start logging a pane's output; returns the log file path.
-    pub fn start_log(&self, instance_id: &str, log: SessionLog) -> Result<String> {
+    pub fn start_log(&self, instance_id: &str, mut log: SessionLog) -> Result<String> {
         let map = self
             .sessions
             .lock()
@@ -1068,6 +1095,7 @@ impl ConnectionManager {
             .get(instance_id)
             .ok_or_else(|| anyhow::anyhow!("该窗格没有活动的连接"))?;
         let path = log.path().to_string_lossy().to_string();
+        log.resize(entry.sink.cols.load(Ordering::Relaxed), entry.sink.rows.load(Ordering::Relaxed));
         if let Ok(mut guard) = entry.log.lock() {
             *guard = Some(log);
         }
@@ -1138,6 +1166,10 @@ fn send_input(sink: &ScopedSink, control: &RuntimeControl, data: &[u8]) {
     if sink.binary.is_some() {
         control.send_write(data);
         return;
+    }
+    if sink.local_echo {
+        let echo = crate::serial_conn::local_echo(data);
+        sink.emit_text(&sink.instance_id, &echo, &echo);
     }
     let encoded = lock(&sink.codec).encode(data);
     control.send_write(&encoded);

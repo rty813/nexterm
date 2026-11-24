@@ -114,6 +114,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     parity: initial?.serial?.parity ?? "none",
     stopBits: initial?.serial?.stopBits ?? 1,
     flowControl: initial?.serial?.flowControl ?? "none",
+    localEcho: initial?.serial?.localEcho ?? false,
   });
   const [dataType, setDataType] = useState<DataType>(initial?.dataType === "binary" ? "binary" : "text");
   const [autoLog, setAutoLog] = useState<boolean>(initial?.autoLog ?? false);
@@ -723,6 +724,14 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                         <option value="software">XON/XOFF</option>
                         <option value="hardware">RTS/CTS</option>
                       </select>
+                    </label>
+                    <label className="checkbox-row" title={t("sessionModal.localEchoTip")}>
+                      <input
+                        type="checkbox"
+                        checked={serialCfg.localEcho === true}
+                        onChange={(e) => setSerialCfg({ ...serialCfg, localEcho: e.target.checked })}
+                      />
+                      <span>{t("sessionModal.localEcho")}</span>
                     </label>
                   </div>
                 )}
