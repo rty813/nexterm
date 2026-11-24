@@ -745,6 +745,32 @@ pub fn discover_import_sources() -> Vec<DiscoveryCandidate> {
         }
     }
 
+    // SecureCRT session folders (%APPDATA%VanDykeConfigSessions).
+    for dir in crate::importer_securecrt::sessions_dirs() {
+        let count = crate::importer_securecrt::count_sessions(&dir);
+        if count > 0 {
+            candidates.push(DiscoveryCandidate {
+                source_type: "securecrt".to_string(),
+                label: "SecureCRT 会话".to_string(),
+                path: dir.to_string_lossy().to_string(),
+                item_count: count,
+            });
+        }
+    }
+
+    // FinalShell conn folders.
+    for dir in crate::importer_finalshell::conn_dirs() {
+        let count = crate::importer_finalshell::count_connections(&dir);
+        if count > 0 {
+            candidates.push(DiscoveryCandidate {
+                source_type: "finalshell".to_string(),
+                label: "FinalShell 连接".to_string(),
+                path: dir.to_string_lossy().to_string(),
+                item_count: count,
+            });
+        }
+    }
+
     // 3. Check sibling/parent WindTerm 2.7.0 installation if running inside workspace
     if let Ok(cwd) = std::env::current_dir() {
         for ancestor in cwd.ancestors().take(4) {
@@ -939,6 +965,30 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: r.skipped,
                 passwords_skipped: 0,
                 keys_missing: 0,
+            })
+        }
+        "securecrt" => {
+            let r = crate::importer_securecrt::import_path(path)?;
+            Ok(ImportResult {
+                summary: format!("已从 SecureCRT 导入 {} 个会话", r.sessions.len()),
+                sessions: r.sessions,
+                themes: Vec::new(),
+                quick_commands: Vec::new(),
+                skipped: r.skipped,
+                passwords_skipped: r.passwords_skipped,
+                keys_missing: r.keys_missing,
+            })
+        }
+        "finalshell" => {
+            let r = crate::importer_finalshell::import_path(path)?;
+            Ok(ImportResult {
+                summary: format!("已从 FinalShell 导入 {} 个会话", r.sessions.len()),
+                sessions: r.sessions,
+                themes: Vec::new(),
+                quick_commands: Vec::new(),
+                skipped: r.skipped,
+                passwords_skipped: r.passwords_skipped,
+                keys_missing: r.keys_missing,
             })
         }
         _ => anyhow::bail!("不支持的导入源类型: {}", source_type),

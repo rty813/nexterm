@@ -585,12 +585,6 @@ textarea {
   display: flex;
 }
 
-.sidebar-footer {
-  padding: 8px;
-  border-top: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-
 /* Protocol Badges */
 .proto-badge {
   display: inline-flex;
@@ -1543,80 +1537,174 @@ input[type="radio"] {
   color: var(--fg-muted);
   line-height: 1.5;
 }
-.candidate-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* Import dialog: one card per program (WindTerm / Xshell / ...) in a grid, with the
+   sources found on this PC and the file / folder pickers. */
+.modal-panel.modal-lg.import-modal {
+  width: 820px;
+  max-width: calc(100vw - 48px);
 }
-.candidate-row {
-  padding: 8px 10px;
-  border-radius: var(--r-md);
-  background: var(--bg-app);
-  border: 1px solid var(--border-subtle);
+.import-grid-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+}
+.import-grid-head .adv-hint {
+  margin: 0;
+}
+.import-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 10px;
 }
-.candidate-info {
+.import-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: var(--r-lg);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.import-card:hover {
+  border-color: var(--border-strong);
+}
+.import-card.is-detected {
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-app));
+}
+.import-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.import-app-icon {
+  flex-shrink: 0;
+  object-fit: contain;
+}
+.import-app-icon.is-tile {
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+.import-card-title {
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
-.candidate-info strong {
+.import-card-title strong {
   color: var(--fg-strong);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  font-size: 13.5px;
 }
-/* Import dialog: one row per program (WindTerm / Xshell / ...) with its file pickers. */
-.import-sources {
-  display: grid;
-  grid-template-columns: 92px 1fr;
-  align-items: center;
-  gap: 8px 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--bg-app);
+.import-card-title span {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--fg-muted);
 }
-.import-source-name {
-  font-weight: 600;
-  color: var(--fg-strong);
-}
-.import-source-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.import-discovered-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.import-source-tag {
-  padding: 0 6px;
-  border-radius: var(--r-xs);
+.import-card-badge {
+  align-self: flex-start;
+  flex-shrink: 0;
+  padding: 0 7px;
+  border-radius: 999px;
   font-size: 10.5px;
   font-weight: 600;
-  line-height: 17px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  line-height: 18px;
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
 }
-.candidate-path {
+.import-found {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.import-found li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+}
+.import-found-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.import-found-kind {
+  color: var(--fg-strong);
+  font-size: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.import-found-kind em {
+  font-style: normal;
   font-size: 11px;
+  color: var(--fg-muted);
+}
+.import-found-path {
+  font-size: 10.5px;
   color: var(--fg-muted);
   font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.candidate-right {
+.import-card-option {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.import-card-option .adv-hint {
+  margin: 0;
+}
+.import-card-actions {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.import-pick {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  gap: 5px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: var(--r-sm);
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease), color 0.12s var(--ease);
+}
+.import-pick span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-pick:hover:not(:disabled) {
+  border-style: solid;
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+}
+.import-pick:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .alert-success {

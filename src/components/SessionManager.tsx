@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   Copy,
+  Download,
   Edit2,
   FolderInput,
   Play,
@@ -36,11 +37,13 @@ interface SessionManagerProps {
   onChange: (next: SessionConfig[]) => void;
   /** Open sessions as new tabs; the manager closes. */
   onConnect: (list: SessionConfig[]) => void;
+  /** Open the import dialog (other programs' sessions) over the manager. */
+  onImport: () => void;
   onClose: () => void;
 }
 
 /** Bulk session management, as a dialog over the workspace (like Settings). */
-export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChange, onConnect, onClose }) => {
+export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChange, onConnect, onImport, onClose }) => {
   const { t } = useTranslation();
   const openMenu = useContextMenu();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -248,6 +251,9 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
       <div className="manager-toolbar">
         <button type="button" className="btn-primary btn-sm" onClick={() => setEditing({ open: true, session: null })}>
           <Plus size={13} /> {t("sidebar.newBtn")}
+        </button>
+        <button type="button" className="btn-secondary btn-sm" onClick={onImport} title={t("workspace.importFooter")}>
+          <Download size={13} /> {t("sidebar.importBtn")}
         </button>
         <button
           type="button"

@@ -2902,7 +2902,6 @@ export const App: React.FC = () => {
                 onAdbMirror={openSerialMirror}
                 onDuplicateSession={handleDuplicateSession}
                 onDeleteSession={handleDeleteSession}
-                onOpenImport={() => setImportModalOpen(true)}
                 onOpenManager={openSessionManager}
               />
             </div>
@@ -3132,13 +3131,6 @@ export const App: React.FC = () => {
         />
       )}
 
-      {importModalOpen && (
-        <ImportModal
-          onClose={() => setImportModalOpen(false)}
-          onImported={handleImported}
-        />
-      )}
-
       {settingsModalOpen && (
         <SettingsModal
           settings={settings}
@@ -3184,7 +3176,15 @@ export const App: React.FC = () => {
             setManagerOpen(false);
             list.forEach((s) => openSessionInNewTab(s));
           }}
+          onImport={() => setImportModalOpen(true)}
           onClose={() => setManagerOpen(false)}
+        />
+      )}
+
+      {importModalOpen && (
+        <ImportModal
+          onClose={() => setImportModalOpen(false)}
+          onImported={handleImported}
         />
       )}
 

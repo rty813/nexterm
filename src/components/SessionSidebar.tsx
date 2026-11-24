@@ -6,7 +6,6 @@ import {
   ChevronRight,
   Columns2,
   Copy,
-  Download,
   Edit2,
   Folder,
   History,
@@ -63,7 +62,6 @@ interface SessionSidebarProps {
   onAdbMirror?: (serial: string, label: string) => void;
   onDuplicateSession: (session: SessionConfig) => void;
   onDeleteSession: (session: SessionConfig) => void;
-  onOpenImport: () => void;
   onOpenManager: () => void;
   sortMode: SessionSortMode;
   usage: SessionUsage;
@@ -94,7 +92,6 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onAdbMirror,
   onDuplicateSession,
   onDeleteSession,
-  onOpenImport,
   onOpenManager,
   sortMode,
   usage,
@@ -363,15 +360,6 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         <PluginSessionSources filter={filter} selectedId={selectedSessionId} onSelect={onSelectSession} openState={openState} onFocus={onFocusPluginSession} />
       </div>
 
-      <div className="sidebar-footer">
-        <button
-          type="button"
-          className="btn-secondary btn-block"
-          onClick={onOpenImport}
-        >
-          <Download size={13} /> {t("sidebar.importBtn")}
-        </button>
-      </div>
     </aside>
   );
 };
