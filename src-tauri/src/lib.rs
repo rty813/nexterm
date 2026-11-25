@@ -301,6 +301,7 @@ fn apply_settings_effects(ctx: &AppContext, settings: &AppSettings) {
     ctx.ask_before_quit
         .store(extra_bool(&settings, "askBeforeCloseWindow", true), Ordering::Relaxed);
     crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
+    crate::mcp::set_auto_allow(extra_bool(&settings, "mcpAutoAllow", false));
     crate::http_proxy::configure(crate::http_proxy::from_settings(settings.extra.get("httpProxy")));
     crate::adb::locate::configure(&extra_str(&settings, "adbPath"));
     let (history_on, history_limits) = history_config(settings);
@@ -1896,6 +1897,7 @@ pub fn run() {
                 let _ = win.set_focus();
             }
             crate::shell_integration::set_enabled(extra_bool(&settings, "shellIntegration", true));
+            crate::mcp::set_auto_allow(extra_bool(&settings, "mcpAutoAllow", false));
             crate::http_proxy::configure(crate::http_proxy::from_settings(settings.extra.get("httpProxy")));
             crate::adb::locate::configure(&extra_str(&settings, "adbPath"));
             let (history_on, history_limits) = history_config(&settings);

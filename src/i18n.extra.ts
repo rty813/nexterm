@@ -823,6 +823,9 @@ export const extraResources = {
       shellIntegration: "自动加载 Shell 集成（SSH 和 WSL 的 bash / zsh / fish、本地 PowerShell，对新连接生效）",
       shellIntegrationTip:
         "连接后自动加载脚本，让 shell 报告命令开始、结束和当前主机。自动加载不修改 Shell 启动配置；右键“安装 Shell 集成”会写入当前用户的启动配置，后续新会话自动生效。",
+      mcpAutoAllow: "MCP 控制无需确认（agent 申请控制窗格时自动允许）",
+      mcpAutoAllowTip:
+        "开启后，Claude Code / Codex 等通过 MCP 申请控制终端时不再弹窗，直接获得控制权。用户手动暂停的窗格仍会询问。agent 可以在窗格里执行任意命令，请只在信任的环境中开启。",
       running: "正在运行",
       runningFor: "已运行 {{d}}",
     },
@@ -1340,6 +1343,9 @@ export const extraResources = {
       shellIntegration: "Load shell integration automatically (SSH and WSL bash / zsh / fish, local PowerShell; new connections)",
       shellIntegrationTip:
         "Loads a script on connect so the shell reports command start, end and its host. Automatic loading leaves shell startup files unchanged. The context menu's Install shell integration saves a loader in the current user's startup configuration for future sessions.",
+      mcpAutoAllow: "Allow MCP control without asking (agents get a pane as soon as they request it)",
+      mcpAutoAllowTip:
+        "When on, agents such as Claude Code or Codex that request control of a terminal through MCP get it without a confirmation dialog. A pane you paused by hand still asks. An agent can run any command in the pane, so turn this on only in environments you trust.",
       running: "Running",
       runningFor: "for {{d}}",
     },

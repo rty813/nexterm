@@ -523,6 +523,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             />
             <span>{t("tabbar.shellIntegration")}</span>
           </label>
+          <label className="checkbox-row" title={t("tabbar.mcpAutoAllowTip")}>
+            <input
+              type="checkbox"
+              checked={draft.mcpAutoAllow === true}
+              onChange={(e) => setDraft({ ...draft, mcpAutoAllow: e.target.checked })}
+            />
+            <span>{t("tabbar.mcpAutoAllow")}</span>
+          </label>
           <label className="checkbox-row">
             <input
               type="checkbox"

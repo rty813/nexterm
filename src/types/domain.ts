@@ -428,6 +428,8 @@ export interface AppSettings {
   tabCommand?: boolean;
   /** Load shell integration (OSC 133 / 633 / 7) into SSH and WSL bash / zsh / fish and local PowerShell (default on; read by the backend from settings.extra). */
   shellIntegration?: boolean;
+  /** MCP agents get request_control without a confirmation dialog. */
+  mcpAutoAllow?: boolean;
   /** Keep every pane's whole output in the backend and scroll back through all of it (default on; read by the backend from settings.extra). */
   fullHistory?: boolean;
   /** Compressed history kept in memory per pane, in MB (default 32); older parts go to encrypted temp files. */

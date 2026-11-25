@@ -149,6 +149,13 @@ fn registry() -> &'static Mutex<Registry> {
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 
+/// settings.extra.mcpAutoAllow: request_control is granted without asking the user.
+static AUTO_ALLOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_auto_allow(on: bool) {
+    AUTO_ALLOW.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn emit_control(id: &str, view: Option<ControlView>) {
     if let Some(app) = APP.get() {
         let _ = app.emit("mcp-control", json!({ "instanceId": id, "control": view }));
@@ -976,11 +983,18 @@ fn request_control(
 ) -> Result<String, String> {
     let rt = conns.pane_runtime(pane).ok_or("该窗格没有活动的连接（用 list_panes 查看可用窗格）")?;
     let now = Instant::now();
+    let auto_allow = AUTO_ALLOW.load(std::sync::atomic::Ordering::Relaxed);
     let (request_id, announce) = {
         let mut r = lock(registry());
         let mode = r.controls.get(pane).map(|c| c.mode);
         if mode == Some(ControlMode::Active) {
             return Ok("你已经在控制这个窗格，可以直接操作。".into());
+        }
+        // "Allow without asking" is on. A pane the user paused by hand still asks.
+        if auto_allow && mode != Some(ControlMode::Paused) {
+            drop(r);
+            set_control(pane, Some(ControlMode::Active), &rt.label);
+            return Ok(format!("已自动授权（设置中开启了“MCP 控制无需确认”），你现在控制窗格「{}」。完成后请用 release_control 归还。", rt.label));
         }
         match r.pending.get(pane) {
             Some(p) if p.rejected_at.is_none() => (p.request_id.clone(), None),
