@@ -21,6 +21,10 @@ function importFeedback(res: ImportResult, sourceType: string, t: TFunction): st
     return parts.join(" · ");
   }
   if (res.skipped) parts.push(t("importModal.skipped", { count: res.skipped }));
+  if (sourceType === "securecrt") {
+    const imported = res.sessions.filter((session) => session.password).length;
+    if (imported) parts.push(t("importModal.importedPasswords", { count: imported }));
+  }
   if (res.passwordsSkipped) parts.push(t("importModal.passwordsSkipped", { count: res.passwordsSkipped }));
   if (res.keysMissing) {
     const key = sourceType === "xshell_sessions" ? "keysMissing" : "keysMissingOther";
