@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
@@ -227,6 +227,222 @@ impl TelnetCodec {
     }
 }
 
+/// Prompts auto login answers: the last line of output, lower case, trailing blanks trimmed.
+const USER_PROMPTS: &[&str] = &[
+    "login:", "username:", "user name:", "login name:", "user:", "用户名:", "用户名：", "账号:", "账号：", "帐号:", "帐号：",
+];
+const PASSWORD_PROMPTS: &[&str] = &["password:", "passwd:", "passcode:", "密码:", "密码："];
+const SHELL_PROMPTS: &[char] = &['$', '#', '>', '%'];
+/// How long a login step waits for its prompt before giving up.
+const PROMPT_WAIT: Duration = Duration::from_secs(30);
+/// After the password: how long to wait for a shell prompt before sending the startup command anyway.
+const SHELL_WAIT: Duration = Duration::from_secs(10);
+const LINE_MAX: usize = 256;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Step {
+    User,
+    Password,
+    /// Logged in (or the user is typing the password): the startup command waits for the shell prompt.
+    Shell,
+    Done,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Prompt {
+    User,
+    Password,
+    Shell,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Esc {
+    None,
+    Esc,
+    Csi,
+    Osc,
+    OscEsc,
+}
+
+/// Telnet has no login of its own: answer the server's `login:` / `Password:` prompts once each
+/// with the session's user name and password, then send the startup command at the shell prompt.
+/// A prompt asked again means the login was refused: it stops there instead of retrying.
+pub struct AutoLogin {
+    user: String,
+    password: Option<String>,
+    startup: Option<String>,
+    step: Step,
+    sent_user: bool,
+    /// The current (unfinished) line of output, escape sequences removed.
+    line: Vec<u8>,
+    esc: Esc,
+    deadline: Option<Instant>,
+}
+
+fn startup_line(session: &SessionConfig) -> Option<String> {
+    session.startup_command.as_ref().filter(|s| !s.trim().is_empty()).map(|s| format!("{}\r", s))
+}
+
+impl AutoLogin {
+    /// None without a user name or password: the startup command then goes out right away.
+    pub fn new(session: &SessionConfig, now: Instant) -> Option<Self> {
+        let user = session.username.trim().to_string();
+        let password = session.password.clone().filter(|p| !p.is_empty());
+        if user.is_empty() && password.is_none() {
+            return None;
+        }
+        Some(Self {
+            step: if user.is_empty() { Step::Password } else { Step::User },
+            user,
+            password,
+            startup: startup_line(session),
+            sent_user: false,
+            line: Vec::new(),
+            esc: Esc::None,
+            deadline: Some(now + PROMPT_WAIT),
+        })
+    }
+
+    pub fn done(&self) -> bool {
+        self.step == Step::Done
+    }
+
+    pub fn deadline(&self) -> Option<Instant> {
+        if self.done() { None } else { self.deadline }
+    }
+
+    fn push(&mut self, data: &[u8]) {
+        for &b in data {
+            self.esc = match (self.esc, b) {
+                (Esc::None, 0x1b) => Esc::Esc,
+                (Esc::None, b'\r' | b'\n') => {
+                    self.line.clear();
+                    Esc::None
+                }
+                (Esc::None, 0x08) => {
+                    self.line.pop();
+                    Esc::None
+                }
+                (Esc::None, b) if b < 0x20 || b == 0x7f => Esc::None,
+                (Esc::None, b) => {
+                    self.line.push(b);
+                    Esc::None
+                }
+                (Esc::Esc, b'[') => Esc::Csi,
+                (Esc::Esc, b']') => Esc::Osc,
+                (Esc::Esc, _) => Esc::None,
+                (Esc::Csi, 0x40..=0x7e) => Esc::None,
+                (Esc::Csi, _) => Esc::Csi,
+                (Esc::Osc, 0x07) => Esc::None,
+                (Esc::Osc, 0x1b) => Esc::OscEsc,
+                (Esc::Osc, _) => Esc::Osc,
+                (Esc::OscEsc, b'\\') => Esc::None,
+                (Esc::OscEsc, _) => Esc::Osc,
+            };
+        }
+        if self.line.len() > LINE_MAX {
+            self.line.drain(..self.line.len() - LINE_MAX);
+        }
+    }
+
+    fn prompt(&self) -> Option<Prompt> {
+        let text = String::from_utf8_lossy(&self.line).trim_end().to_lowercase();
+        if text.is_empty() || text.starts_with("last login") {
+            return None;
+        }
+        if PASSWORD_PROMPTS.iter().any(|p| text.ends_with(p)) {
+            Some(Prompt::Password)
+        } else if USER_PROMPTS.iter().any(|p| text.ends_with(p)) {
+            Some(Prompt::User)
+        } else if text.ends_with(SHELL_PROMPTS) {
+            Some(Prompt::Shell)
+        } else {
+            None
+        }
+    }
+
+    /// Wait for the shell prompt (`wait`: then send the startup command anyway).
+    fn to_shell(&mut self, now: Instant, wait: Option<Duration>) {
+        if self.startup.is_some() {
+            self.step = Step::Shell;
+            self.deadline = wait.map(|w| now + w);
+        } else {
+            self.step = Step::Done;
+        }
+    }
+
+    /// Output from the server (already decoded); returns what to type.
+    pub fn feed(&mut self, data: &[u8], now: Instant) -> Option<String> {
+        if self.done() {
+            return None;
+        }
+        self.push(data);
+        let prompt = self.prompt()?;
+        let reply = match (self.step, prompt) {
+            (Step::User, Prompt::User) => {
+                self.sent_user = true;
+                if self.password.is_some() {
+                    self.step = Step::Password;
+                    self.deadline = Some(now + PROMPT_WAIT);
+                } else if self.startup.is_some() {
+                    // The user types the password (if one is asked): no time limit.
+                    self.step = Step::Password;
+                    self.deadline = None;
+                } else {
+                    self.step = Step::Done;
+                }
+                Some(format!("{}\r", self.user))
+            }
+            (Step::User | Step::Password, Prompt::Password) => match self.password.clone() {
+                Some(p) => {
+                    self.to_shell(now, Some(SHELL_WAIT));
+                    Some(format!("{}\r", p))
+                }
+                // The user types it: the startup command still waits for the shell.
+                None => {
+                    self.to_shell(now, None);
+                    None
+                }
+            },
+            // Asked for the name again: refused.
+            (Step::Password, Prompt::User) if self.sent_user => {
+                self.step = Step::Done;
+                None
+            }
+            // Only a password is saved: the user types the name.
+            (Step::Password, Prompt::User) => {
+                self.deadline = Some(now + PROMPT_WAIT);
+                None
+            }
+            // A login prompt after the password: refused, no startup command.
+            (Step::Shell, Prompt::User | Prompt::Password) => {
+                self.step = Step::Done;
+                None
+            }
+            // Logged in with the name alone (no password asked).
+            (Step::Password, Prompt::Shell) if self.sent_user && self.password.is_none() => {
+                self.step = Step::Done;
+                self.startup.take()
+            }
+            (Step::Shell, Prompt::Shell) => {
+                self.step = Step::Done;
+                self.startup.take()
+            }
+            // Not asked for a login yet (a banner line can end in '#' or '>').
+            (_, Prompt::Shell) | (Step::Done, _) => return None,
+        };
+        self.line.clear();
+        reply
+    }
+
+    /// The deadline passed: give up the login, or send the startup command without having seen the prompt.
+    pub fn timeout(&mut self) -> Option<String> {
+        let shell = self.step == Step::Shell;
+        self.step = Step::Done;
+        if shell { self.startup.take() } else { None }
+    }
+}
+
 pub fn spawn_telnet_session(
     instance_id: String,
     session: SessionConfig,
@@ -258,15 +474,19 @@ pub fn spawn_telnet_session(
         }
         sink.emit_state(&instance_id, "connected", None);
 
-        if let Some(startup) = session.startup_command.as_ref().filter(|s| !s.trim().is_empty()) {
-            let line = format!("{}\r", startup);
-            let _ = wr.write_all(&codec.encode(line.as_bytes())).await;
+        let mut login = AutoLogin::new(&session, Instant::now());
+        if login.is_none() {
+            if let Some(line) = startup_line(&session) {
+                let _ = wr.write_all(&codec.encode(line.as_bytes())).await;
+            }
         }
 
         let mut buf = vec![0u8; 64 * 1024];
         // Keys still go out while the screen is behind (see pump.rs).
         let mut pump = OutputPump::new(Arc::clone(&sink), instance_id.clone());
         loop {
+            let login_wake = login.as_ref().and_then(AutoLogin::deadline);
+            let mut typed = None;
             tokio::select! {
                 read_res = rd.read(&mut buf), if !pump.is_behind() => {
                     match read_res {
@@ -280,6 +500,7 @@ pub fn spawn_telnet_session(
                                 break;
                             }
                             pump.output(&data);
+                            typed = login.as_mut().and_then(|l| l.feed(&data, Instant::now()));
                         }
                         Err(e) => {
                             pump.state("disconnected", Some(format!("Telnet 读取错误: {}", e)));
@@ -288,6 +509,9 @@ pub fn spawn_telnet_session(
                     }
                 }
                 _ = pump.flush(), if pump.is_behind() => {}
+                _ = tokio::time::sleep_until(login_wake.unwrap_or_else(Instant::now).into()), if login_wake.is_some() => {
+                    typed = login.as_mut().and_then(AutoLogin::timeout);
+                }
                 Some(data) = write_rx.recv() => {
                     if let Err(e) = wr.write_all(&codec.encode(&data)).await {
                         pump.state("disconnected", Some(format!("Telnet 写入错误: {}", e)));
@@ -305,6 +529,15 @@ pub fn spawn_telnet_session(
                     pump.state("disconnected", Some("已断开连接".into()));
                     break;
                 }
+            }
+            if let Some(text) = typed {
+                if let Err(e) = wr.write_all(&codec.encode(text.as_bytes())).await {
+                    pump.state("disconnected", Some(format!("Telnet 写入错误: {}", e)));
+                    break;
+                }
+            }
+            if login.as_ref().is_some_and(AutoLogin::done) {
+                login = None;
             }
         }
         pump.finish().await;
@@ -345,5 +578,89 @@ mod tests {
 
         assert_eq!(c.encode(&[b'l', b's', b'\r', IAC]), vec![b'l', b's', b'\r', b'\n', IAC, IAC]);
         assert_eq!(c.resize(80, 255), vec![IAC, SB, OPT_NAWS, 0, 80, 0, 255, 255, IAC, SE]);
+    }
+
+    fn session(user: &str, password: Option<&str>, startup: Option<&str>) -> SessionConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "t", "label": "t", "protocol": "telnet", "host": "h", "port": 23,
+            "username": user, "password": password, "startupCommand": startup,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn auto_login_answers_each_prompt_once() {
+        let t0 = Instant::now();
+        let mut l = AutoLogin::new(&session("root", Some("pw"), Some("uptime")), t0).unwrap();
+        // A banner line ending in '#' is not a shell yet; a prompt split across reads and
+        // coloured with escape sequences is still found.
+        assert_eq!(l.feed(b"#####\r\nWelcome\r\n\x1b[1mrouter lo", t0), None);
+        assert_eq!(l.feed(b"gin:\x1b[0m ", t0).as_deref(), Some("root\r"));
+        assert_eq!(l.feed(b"root\r\nPassword: ", t0).as_deref(), Some("pw\r"));
+        assert_eq!(l.feed(b"\r\nLast login: Mon\r\n", t0), None);
+        assert_eq!(l.feed(b"root@router:~# ", t0).as_deref(), Some("uptime\r"));
+        assert!(l.done());
+        assert_eq!(l.feed(b"\r\nlogin: ", t0), None);
+    }
+
+    #[test]
+    fn auto_login_stops_when_refused() {
+        let t0 = Instant::now();
+        let mut l = AutoLogin::new(&session("root", Some("bad"), Some("uptime")), t0).unwrap();
+        assert!(l.feed(b"login: ", t0).is_some());
+        assert!(l.feed(b"\r\nPassword: ", t0).is_some());
+        // Refused: asked again, nothing more is typed (no retry loop, no startup command).
+        assert_eq!(l.feed(b"\r\nLogin incorrect\r\n\r\nlogin: ", t0), None);
+        assert!(l.done());
+
+        // Without a password (or startup command) only the name goes out.
+        let mut l = AutoLogin::new(&session("admin", None, None), t0).unwrap();
+        assert_eq!(l.feed(b"Username: ", t0).as_deref(), Some("admin\r"));
+        assert!(l.done());
+    }
+
+    #[test]
+    fn auto_login_name_only_waits_for_the_typed_password() {
+        let t0 = Instant::now();
+        let mut l = AutoLogin::new(&session("admin", None, Some("show ver")), t0).unwrap();
+        assert_eq!(l.feed(b"Username: ", t0).as_deref(), Some("admin\r"));
+        assert_eq!(l.deadline(), None);
+        // The user types it; the startup command waits for the prompt after it.
+        assert_eq!(l.feed(b"admin\r\nPassword: ", t0), None);
+        assert_eq!(l.feed(b"\r\n<H3C>", t0).as_deref(), Some("show ver\r"));
+
+        // No password asked at all.
+        let mut l = AutoLogin::new(&session("admin", None, Some("show ver")), t0).unwrap();
+        l.feed(b"login: ", t0);
+        assert_eq!(l.feed(b"admin\r\nrouter> ", t0).as_deref(), Some("show ver\r"));
+    }
+
+    #[test]
+    fn auto_login_timeouts_and_partial_logins() {
+        let t0 = Instant::now();
+        assert!(AutoLogin::new(&session("", None, Some("ls")), t0).is_none());
+
+        // No prompt in time: give up, nothing typed.
+        let mut l = AutoLogin::new(&session("root", Some("pw"), Some("ls")), t0).unwrap();
+        assert_eq!(l.deadline(), Some(t0 + PROMPT_WAIT));
+        assert_eq!(l.timeout(), None);
+        assert!(l.done() && l.deadline().is_none());
+
+        // Logged in but no recognizable shell prompt: the startup command goes out at the deadline.
+        let mut l = AutoLogin::new(&session("root", Some("pw"), Some("ls")), t0).unwrap();
+        l.feed(b"login: ", t0);
+        l.feed(b"Password: ", t0);
+        assert_eq!(l.feed(b"\r\nREADY\r\n", t0), None);
+        assert_eq!(l.deadline(), Some(t0 + SHELL_WAIT));
+        assert_eq!(l.timeout().as_deref(), Some("ls\r"));
+
+        // Only a password (e.g. a switch's line password): the name prompt is left to the user.
+        let mut l = AutoLogin::new(&session("", Some("pw"), None), t0).unwrap();
+        assert_eq!(l.feed(b"\r\nUser Access Verification\r\n\r\nPassword: ", t0).as_deref(), Some("pw\r"));
+        assert!(l.done());
+        let mut l = AutoLogin::new(&session("", Some("pw"), None), t0).unwrap();
+        assert_eq!(l.feed(b"login: ", t0), None);
+        assert!(!l.done());
+        assert_eq!(l.feed("me\r\n密码：".as_bytes(), t0).as_deref(), Some("pw\r"));
     }
 }

@@ -13,16 +13,18 @@ const own = { username: "me", authType: "password" as const };
 const ssh = { id: "s", label: "s", group: "", protocol: "ssh", host: "h", port: 22, username: "me", authType: "password", term: "xterm", keepAliveSecs: 0 } as SessionConfig;
 
 describe("credentials in the session form", () => {
-  it("offers keys to SSH only, and nothing to other protocols", () => {
+  it("offers keys to SSH only, passwords to Telnet and desktops, and nothing to other protocols", () => {
     expect(credentialsFor("ssh", list).map((c) => c.id)).toEqual(["anon", "key", "pw"]);
     expect(credentialsFor("rdp", list).map((c) => c.id)).toEqual(["anon", "pw"]);
-    expect(credentialsFor("telnet", list)).toEqual([]);
+    expect(credentialsFor("telnet", list).map((c) => c.id)).toEqual(["anon", "pw"]);
+    expect(credentialsFor("tcp", list)).toEqual([]);
   });
 
   it("applies the picked credential", () => {
     expect(resolveLogin("ssh", "key", own, list)).toEqual({ credentialId: "key", username: "git", authType: "privatekey", usernameLocked: true });
     expect(resolveLogin("ssh", "anon", own, list)).toMatchObject({ username: "me", usernameLocked: false });
     expect(resolveLogin("vnc", "pw", own, list)).toMatchObject({ credentialId: "pw", username: "me", usernameLocked: false });
+    expect(resolveLogin("telnet", "pw", own, list)).toMatchObject({ credentialId: "pw", username: "ops", usernameLocked: true });
     expect(resolveLogin("ssh", "", own, list).credentialId).toBeUndefined();
   });
 
