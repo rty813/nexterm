@@ -73,6 +73,7 @@ import { formatDuration, type CommandDone } from "./utils/commandWatch";
 import type { RunningCommand } from "./utils/runningCommand";
 import { useAgentHooks } from "./hooks/useAgentHooks";
 import { compactMenu, ContextMenuProvider, type MenuItem } from "./components/ContextMenu";
+import { useGitBashFound } from "./hooks/useGitBash";
 import { HostKeyDialog, ZmodemDialog } from "./components/TransferDialogs";
 import { withCloseAction } from "./utils/closeAction";
 import { ConfirmDialog, PasteDialog, type ConfirmAnswer, type ConfirmRequest } from "./components/ConfirmDialog";
@@ -158,6 +159,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 export const App: React.FC = () => {
   const { t, i18n } = useTranslation();
   const [sessions, setSessions] = useState<SessionConfig[]>([]);
+  const gitBashFound = useGitBashFound();
   const [quickCommands, setQuickCommands] = useState<QuickCommand[]>([]);
   // Plugins add read-only quick commands after the user's own (re-rendered through usePluginPlatform below).
   const pluginQuickCommands = plugins.quickCommands();
@@ -624,6 +626,7 @@ export const App: React.FC = () => {
         powershell: "PowerShell",
         cmd: "CMD",
         wsl: "WSL",
+        gitbash: "Git Bash",
         ssh: "SSH",
         custom: "Shell",
         tcp: "TCP",
@@ -2610,6 +2613,7 @@ export const App: React.FC = () => {
         shell("powershell", t("palette.newShell.powershell"), keymap["tab.newShell"]),
         shell("cmd", t("palette.newShell.cmd")),
         shell("wsl", t("palette.newShell.wsl")),
+        gitBashFound && shell("gitbash", t("palette.newShell.gitbash")),
         { type: "separator" },
         ...recent.map(
           (s): MenuItem => ({

@@ -1364,7 +1364,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         if (leaf.status === "connected") onUserInputRef.current(leaf.paneId, "\x0c");
       },
     };
-    const modemOk = leaf.status === "connected" && leaf.session.protocol !== "powershell" && leaf.session.protocol !== "cmd" && leaf.session.protocol !== "wsl" && leaf.session.protocol !== "custom";
+    const modemOk = leaf.status === "connected" && leaf.session.protocol !== "powershell" && leaf.session.protocol !== "cmd" && leaf.session.protocol !== "wsl" && leaf.session.protocol !== "gitbash" && leaf.session.protocol !== "custom";
     const k = extras.keymap;
     const shellStatus = await backend.shellIntegrationStatus(leaf.paneId).catch(() => null);
     const tmux = (leaf.session.protocol === "ssh" || leaf.session.protocol === "wsl") && leaf.status === "connected";

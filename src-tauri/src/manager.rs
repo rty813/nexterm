@@ -638,6 +638,7 @@ impl ConnectionManager {
             ProtocolType::Powershell
             | ProtocolType::Cmd
             | ProtocolType::Wsl
+            | ProtocolType::GitBash
             | ProtocolType::Custom
             | ProtocolType::Serial
             | ProtocolType::Rdp

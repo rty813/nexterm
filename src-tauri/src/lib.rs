@@ -9,6 +9,7 @@ pub mod commands;
 pub mod credentials;
 pub mod desktop;
 pub mod fonts;
+pub mod git_bash;
 mod plugin_http;
 mod plugin_credentials;
 mod plugin_store;
@@ -2046,6 +2047,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             close_main_window,
+            git_bash::find_git_bash,
             set_window_background,
             credentials::list_credentials,
             credentials::save_credential,

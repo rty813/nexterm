@@ -63,6 +63,8 @@ describe("parseQuickConnectInput", () => {
     expect(parseQuickConnectInput("powershell")?.protocol).toBe("powershell");
     expect(parseQuickConnectInput("cmd")?.protocol).toBe("cmd");
     expect(parseQuickConnectInput("wsl")?.protocol).toBe("wsl");
+    expect(parseQuickConnectInput("gitbash")?.protocol).toBe("gitbash");
+    expect(parseQuickConnectInput("Git Bash")?.protocol).toBe("gitbash");
 
     const tcp = parseQuickConnectInput("tcp://127.0.0.1:47331");
     expect(tcp?.protocol).toBe("tcp");

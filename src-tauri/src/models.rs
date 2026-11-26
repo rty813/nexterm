@@ -8,6 +8,9 @@ pub enum ProtocolType {
     Powershell,
     Cmd,
     Wsl,
+    /// Git for Windows' bash (`git_bash.rs`).
+    #[serde(rename = "gitbash")]
+    GitBash,
     Custom,
     Tcp,
     Serial,

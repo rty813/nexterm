@@ -59,7 +59,18 @@ pub fn spawn_local_pty(
         })
         .context("无法创建本地 ConPTY 伪终端")?;
 
+    let git_bash = if session.protocol == ProtocolType::GitBash { crate::git_bash::find() } else { None };
     let mut cmd = match session.protocol {
+        ProtocolType::GitBash => {
+            let bash = git_bash
+                .clone()
+                .context("找不到 Git Bash（Git for Windows 的 bin\\bash.exe），请先安装 Git for Windows，或用自定义命令指定 bash.exe 的路径")?;
+            let mut c = CommandBuilder::new(bash);
+            c.args(["--login", "-i"]);
+            // Git's /etc/profile then stays in the working directory instead of cd-ing home.
+            c.env("CHERE_INVOKING", "1");
+            c
+        }
         ProtocolType::Powershell => {
             let mut c = CommandBuilder::new("powershell.exe");
             c.arg("-NoLogo");
@@ -142,13 +153,35 @@ pub fn spawn_local_pty(
             line.push_str("\r\n");
             line
         });
-    // WSL: shell integration typed into the shell like SSH (see shell_integration.rs); a
-    // separate wsl.exe in the same distro and user checks the shell and writes the scripts.
-    let injector = (session.protocol == ProtocolType::Wsl && crate::shell_integration::enabled())
-        .then(|| Arc::new(Mutex::new(Injector::new(Instant::now()))));
-    match &injector {
-        Some(injector) => drive_wsl_injection(Arc::clone(injector), Arc::clone(&writer), Arc::clone(&sink), instance_id.clone(), startup),
-        None => {
+    // WSL / Git Bash: shell integration typed into the shell like SSH (see
+    // shell_integration.rs); a separate sh (wsl.exe in the same distro and user, or Git's
+    // bash) checks the shell and writes the scripts to the /tmp the pane's shell sees.
+    let side_sh: Option<SideSh> = if !crate::shell_integration::enabled() {
+        None
+    } else {
+        match session.protocol {
+            // `wsl.exe --exec` may not set $SHELL; fall back to the passwd entry.
+            ProtocolType::Wsl => Some(SideSh {
+                command: Arc::new(|| {
+                    let mut c = Command::new("wsl.exe");
+                    c.args(["--exec", "sh", "-s"]);
+                    c
+                }),
+                prelude: "[ -n \"${SHELL-}\" ] || SHELL=$(getent passwd \"$(id -u)\" | cut -d: -f7)",
+            }),
+            ProtocolType::GitBash => git_bash.map(|bash| SideSh {
+                command: Arc::new(move || crate::git_bash::sh_command(&bash)),
+                prelude: "SHELL=/usr/bin/bash",
+            }),
+            _ => None,
+        }
+    };
+    let injector = side_sh.is_some().then(|| Arc::new(Mutex::new(Injector::new(Instant::now()))));
+    match (&injector, side_sh) {
+        (Some(injector), Some(side)) => {
+            drive_injection(side, Arc::clone(injector), Arc::clone(&writer), Arc::clone(&sink), instance_id.clone(), startup)
+        }
+        _ => {
             if let Some(line) = startup {
                 write_pty(&writer, line.as_bytes());
             }
@@ -241,11 +274,24 @@ fn write_pty(writer: &SharedWriter, data: &[u8]) -> bool {
     w.write_all(data).is_ok() && w.flush().is_ok()
 }
 
-/// Runs a POSIX sh script in the default WSL distribution as the default user (the same
-/// as the pane's plain `wsl.exe`); stdout, or None on failure or after `timeout`.
-fn wsl_sh(script: &str, timeout: Duration) -> Option<String> {
-    let mut cmd = Command::new("wsl.exe");
-    cmd.args(["--exec", "sh", "-s"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+/// The sh beside a local pane that uploads the shell integration scripts.
+struct SideSh {
+    /// A new `sh -s` (script on stdin) in the pane's environment: for WSL the default
+    /// distribution and user, the same as the pane's plain `wsl.exe`.
+    command: Arc<dyn Fn() -> Command + Send + Sync>,
+    /// Run before the upload script (sets $SHELL, which it checks).
+    prelude: &'static str,
+}
+
+impl SideSh {
+    fn run(&self, script: &str, timeout: Duration) -> Option<String> {
+        run_sh((self.command)(), script, timeout)
+    }
+}
+
+/// Runs a POSIX sh script on the command's stdin; stdout, or None on failure or after `timeout`.
+fn run_sh(mut cmd: Command, script: &str, timeout: Duration) -> Option<String> {
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -277,7 +323,8 @@ fn wsl_sh(script: &str, timeout: Duration) -> Option<String> {
 
 /// Uploads the scripts beside the pane, then types the loader once the prompt is drawn
 /// (the SSH loop in ssh_conn.rs does the same), and the startup command after it.
-fn drive_wsl_injection(
+fn drive_injection(
+    side: SideSh,
     injector: Arc<Mutex<Injector>>,
     writer: SharedWriter,
     sink: Arc<dyn TerminalSink>,
@@ -287,15 +334,12 @@ fn drive_wsl_injection(
     let token: String = uuid::Uuid::new_v4().simple().to_string()[..16].to_string();
     // 0: running, 1: scripts in place, 2: nothing uploaded.
     let upload = Arc::new(AtomicU8::new(0));
+    let side = Arc::new(side);
     {
-        let (injector, upload) = (Arc::clone(&injector), Arc::clone(&upload));
-        // `wsl.exe --exec` may not set $SHELL; fall back to the passwd entry.
-        let script = format!(
-            "[ -n \"${{SHELL-}}\" ] || SHELL=$(getent passwd \"$(id -u)\" | cut -d: -f7)\n{}",
-            crate::shell_integration::upload_script(&token)
-        );
+        let (injector, upload, side) = (Arc::clone(&injector), Arc::clone(&upload), Arc::clone(&side));
+        let script = format!("{}\n{}", side.prelude, crate::shell_integration::upload_script(&token));
         std::thread::spawn(move || {
-            let ok = wsl_sh(&script, Duration::from_secs(8)).is_some_and(|out| crate::shell_integration::upload_ok(&out));
+            let ok = side.run(&script, Duration::from_secs(8)).is_some_and(|out| crate::shell_integration::upload_ok(&out));
             upload.store(if ok { 1 } else { 2 }, Ordering::Release);
             lock(&injector).set_shell_ok(ok);
         });
@@ -337,7 +381,7 @@ fn drive_wsl_injection(
             std::thread::sleep(Duration::from_millis(100));
         }
         if !loaded && upload.load(Ordering::Acquire) == 1 {
-            let _ = wsl_sh(&crate::shell_integration::cleanup_script(&token), Duration::from_secs(8));
+            let _ = side.run(&crate::shell_integration::cleanup_script(&token), Duration::from_secs(8));
         }
     });
 }

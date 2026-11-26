@@ -1,6 +1,7 @@
 import React from "react";
 import {
   Cpu,
+  GitBranch,
   Monitor,
   MonitorPlay,
   Network,
@@ -51,6 +52,12 @@ export const ProtocolBadge: React.FC<ProtocolBadgeProps> = ({
       return (
         <span className="proto-badge proto-cmd" title="Command Prompt">
           <SquareTerminal size={size} />
+        </span>
+      );
+    case "gitbash":
+      return (
+        <span className="proto-badge proto-gitbash" title="Git Bash">
+          <GitBranch size={size} />
         </span>
       );
     case "wsl":

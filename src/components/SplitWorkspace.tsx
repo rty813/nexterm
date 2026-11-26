@@ -1,6 +1,6 @@
 import React, { useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Cpu, Download, Plus, SquareTerminal, Terminal } from "lucide-react";
+import { Cpu, Download, GitBranch, Plus, SquareTerminal, Terminal } from "lucide-react";
 import type {
   AppSettings,
   LayoutNode,
@@ -13,6 +13,7 @@ import type {
 import { TerminalPane } from "./TerminalPane";
 import { DesktopPane } from "./DesktopPane";
 import { LogcatPane } from "./LogcatPane";
+import { useGitBashFound } from "../hooks/useGitBash";
 import { isDesktopProtocol, isLogcatSession } from "../types/domain";
 import type { PaneExtras, ReconnectCredentials } from "./TerminalPane";
 import { GroupTabBar, SESSION_MIME, TAB_MIME, type GroupTabBarProps } from "./TabBar";
@@ -185,6 +186,7 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
   hideWelcome,
 }) => {
   const { t } = useTranslation();
+  const gitBashFound = useGitBashFound();
   const stageRef = useRef<HTMLDivElement | null>(null);
 
   // A tab dragged over the terminals (of this or another window): split or join a group.
@@ -259,6 +261,15 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
                 <span>{t("workspace.wslDesc")}</span>
               </div>
             </button>
+            {gitBashFound && (
+              <button type="button" className="empty-action-btn" onClick={() => onQuickShell("gitbash")}>
+                <GitBranch size={18} />
+                <div>
+                  <strong>{t("workspace.gitBashTitle")}</strong>
+                  <span>{t("workspace.gitBashDesc")}</span>
+                </div>
+              </button>
+            )}
           </div>
           <div className="empty-footer">
             <button type="button" className="btn-ghost" onClick={onOpenImportModal}>

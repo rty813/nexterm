@@ -604,6 +604,9 @@ textarea {
 .proto-wsl {
   color: #ae81ff;
 }
+.proto-gitbash {
+  color: #f05033;
+}
 .proto-tcp {
   color: #f92672;
 }

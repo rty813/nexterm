@@ -249,7 +249,7 @@ export const resources = {
         disconnect: "断开当前窗格连接",
         quickPrefix: "快速连接",
         quickPlaceholder:
-          "ssh user@host:22  |  telnet://10.0.0.1  |  tcp://127.0.0.1:47331  |  powershell / cmd / wsl  (Alt+Enter 分屏打开)",
+          "ssh user@host:22  |  telnet://10.0.0.1  |  tcp://127.0.0.1:47331  |  powershell / cmd / wsl / gitbash  (Alt+Enter 分屏打开)",
         connectBtn: "立即连接",
         splitRight: "向右分屏",
         splitDown: "向下分屏",
@@ -372,6 +372,8 @@ export const resources = {
         cmdDesc: "经典 cmd.exe 命令行",
         wslTitle: "WSL 终端",
         wslDesc: "Windows Linux 子系统",
+        gitBashTitle: "Git Bash",
+        gitBashDesc: "Git for Windows 自带的 bash",
         importFooter: "导入现有 WindTerm、Xshell、MobaXterm、SecureCRT、FinalShell、OpenSSH 会话与主题配色",
       },
       pane: {
@@ -906,7 +908,7 @@ export const resources = {
         disconnect: "Disconnect Active Pane",
         quickPrefix: "Quick",
         quickPlaceholder:
-          "ssh user@host:22  |  tcp://127.0.0.1:47331  |  powershell / cmd / wsl  (Alt+Enter: Split)",
+          "ssh user@host:22  |  tcp://127.0.0.1:47331  |  powershell / cmd / wsl / gitbash  (Alt+Enter: Split)",
         connectBtn: "Connect",
         splitRight: "Split Right",
         splitDown: "Split Down",
@@ -1029,6 +1031,8 @@ export const resources = {
         cmdDesc: "Classic cmd.exe shell",
         wslTitle: "WSL Terminal",
         wslDesc: "Windows Subsystem for Linux",
+        gitBashTitle: "Git Bash",
+        gitBashDesc: "The bash that comes with Git for Windows",
         importFooter: "Import Existing WindTerm, Xshell, MobaXterm, SecureCRT, FinalShell or OpenSSH Sessions & Themes",
       },
       pane: {
