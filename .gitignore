@@ -10,3 +10,11 @@ src-tauri/src-tauri
 !.env.example
 
 CLAUDE.local.md
+
+# Claude Code: worktrees, local settings, preview config and drafts stay on this machine.
+# A shared .claude/settings.json can still be committed.
+.claude/*
+!.claude/settings.json
+
+# One-off benchmark scratch folders (bench/.<name>/); the scripts and results stay tracked.
+bench/.*/
