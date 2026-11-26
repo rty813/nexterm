@@ -588,8 +588,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     </select>
                   </label>
                 </div>
-                {protocol === "rdp" && (
-                  <div className="form-grid-3">
+                <div className="form-grid-3">
+                  {protocol === "rdp" && (
                     <label className="field">
                       <span>{t("desktop.colorDepth")}</span>
                       <select
@@ -601,6 +601,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                         <option value={16}>{t("desktop.depth16")}</option>
                       </select>
                     </label>
+                  )}
+                  {protocol === "rdp" && (
                     <label className="field">
                       <span>{t("desktop.audio")}</span>
                       <select
@@ -612,9 +614,27 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                         <option value="off">{t("desktop.audioOff")}</option>
                       </select>
                     </label>
-                    <span />
-                  </div>
-                )}
+                  )}
+                  <label className="field" title={t("desktop.windowsKeysTip")}>
+                    <span>{t("desktop.windowsKeys")}</span>
+                    <select
+                      className="text-input"
+                      value={desktop.windowsKeys}
+                      disabled={protocol === "vnc" && desktop.viewOnly}
+                      onChange={(e) => setDesktop({ windowsKeys: e.target.value as DesktopConfig["windowsKeys"] })}
+                    >
+                      <option value="remote">{t("desktop.windowsKeysRemote")}</option>
+                      <option value="fullscreen">{t("desktop.windowsKeysFullscreen")}</option>
+                      <option value="local">{t("desktop.windowsKeysLocal")}</option>
+                    </select>
+                  </label>
+                  {protocol !== "rdp" && (
+                    <>
+                      <span />
+                      <span />
+                    </>
+                  )}
+                </div>
                 <div className="desktop-checks">
                   {protocol === "rdp" && (
                     <label className="checkbox-row" title={t("desktop.nlaTip")}>

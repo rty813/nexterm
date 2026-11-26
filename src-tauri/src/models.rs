@@ -197,6 +197,11 @@ pub struct DesktopConfig {
     /// RDP audio: "local" (play here) | "remote" (leave on the remote computer) | "off".
     #[serde(default = "default_audio")]
     pub audio: String,
+    /// Windows key combinations (Win+X, Alt+Tab, ...) while the pane has focus:
+    /// "remote" (send them to the remote computer) | "fullscreen" (only in full screen) |
+    /// "local" (this computer handles them). Frontend only.
+    #[serde(default = "default_windows_keys")]
+    pub windows_keys: String,
 }
 
 impl Default for DesktopConfig {
@@ -213,6 +218,7 @@ impl Default for DesktopConfig {
             clipboard_files: true,
             view_only: false,
             audio: default_audio(),
+            windows_keys: default_windows_keys(),
         }
     }
 }
@@ -239,6 +245,10 @@ fn default_color_depth() -> u32 {
 
 fn default_audio() -> String {
     "local".to_string()
+}
+
+fn default_windows_keys() -> String {
+    "remote".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

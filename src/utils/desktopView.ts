@@ -106,6 +106,16 @@ export function toRemote(px: number, py: number, box: Box, remoteW: number, remo
  * Wheel delta (WheelEvent) in 1/120 notch units, positive = away from the user, as RDP and
  * the backend expect. Chromium reports 100 px per notch for a mouse wheel.
  */
+/** Desktop toolbar position along the pane's top edge, 0 (left) .. 1 (right). */
+export function clampToolbarX(x: number): number {
+  return Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0.5;
+}
+
+/** The stored toolbar position; centered when missing or unreadable. */
+export function parseToolbarX(raw: string | null | undefined): number {
+  return raw ? clampToolbarX(Number(raw)) : 0.5;
+}
+
 export function wheelUnits(delta: number, deltaMode: number): number {
   if (!delta) return 0;
   const notches = deltaMode === 1 ? delta / 3 : deltaMode === 2 ? delta : delta / 100;

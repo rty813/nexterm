@@ -657,6 +657,12 @@ export const backend = {
     );
   },
 
+  /** Windows key combinations (Win+X, Alt+Tab, ...) go to this desktop pane while `on`. */
+  desktopCaptureKeys(instanceId: string, on: boolean): void {
+    if (!isTauriRuntime()) return;
+    void invoke("desktop_capture_keys", { instanceId, on }).catch(() => undefined);
+  },
+
   desktopAck(instanceId: string, seq: number): void {
     if (!isTauriRuntime()) return;
     void invoke("desktop_ack", { instanceId, seq }).catch(() => undefined);

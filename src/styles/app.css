@@ -5763,22 +5763,56 @@ html.ctxmenu-host #root {
   z-index: 3;
   background: rgba(60, 12, 28, 0.92);
 }
-.desktop-toolbar {
+/* Collapsed, only a small tab on the top edge takes clicks from the remote screen; hovering
+   it shows the buttons, clicking it pins them, dragging it moves it along the edge. */
+.desktop-toolbar-wrap {
   position: absolute;
-  top: 6px;
-  right: 10px;
+  top: 0;
+  /* Keep the expanded toolbar inside the pane wherever the tab was dragged. */
+  left: clamp(84px, var(--bar-x, 50%), calc(100% - 84px));
+  transform: translateX(-50%);
   z-index: 2;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.desktop-toolbar {
+  display: none;
   gap: 2px;
+  margin-top: 4px;
   padding: 2px;
   border-radius: 6px;
-  background: rgba(20, 20, 24, 0.78);
-  opacity: 0;
+  background: rgba(20, 20, 24, 0.85);
+}
+.desktop-toolbar-wrap:hover .desktop-toolbar,
+.desktop-toolbar-wrap.pinned .desktop-toolbar,
+.desktop-toolbar-wrap.dragging .desktop-toolbar,
+.desktop-toolbar-wrap:has(:focus-visible) .desktop-toolbar {
+  display: flex;
+}
+.desktop-toolbar-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 12px;
+  padding: 0;
+  border: none;
+  border-radius: 0 0 6px 6px;
+  background: rgba(20, 20, 24, 0.7);
+  color: #ccc;
+  opacity: 0.4;
+  cursor: grab;
+  touch-action: none;
   transition: opacity 0.15s;
 }
-.desktop-pane:hover .desktop-toolbar,
-.desktop-toolbar:focus-within {
+.desktop-toolbar-wrap:hover .desktop-toolbar-handle,
+.desktop-toolbar-wrap.pinned .desktop-toolbar-handle,
+.desktop-toolbar-handle:focus-visible {
   opacity: 1;
+}
+.desktop-toolbar-wrap.dragging .desktop-toolbar-handle {
+  cursor: grabbing;
 }
 .desktop-toolbar .btn-ghost {
   color: #ddd;

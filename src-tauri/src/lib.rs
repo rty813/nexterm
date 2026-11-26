@@ -1622,6 +1622,18 @@ fn desktop_resize(ctx: State<'_, AppContext>, instance_id: String, width: u32, h
 }
 
 #[tauri::command]
+fn desktop_capture_keys(window: tauri::WebviewWindow, ctx: State<'_, AppContext>, instance_id: String, on: bool) {
+    #[cfg(windows)]
+    let hwnd = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
+    #[cfg(not(windows))]
+    let hwnd = {
+        let _ = window;
+        0
+    };
+    ctx.desktops.capture_keys(&instance_id, hwnd, on);
+}
+
+#[tauri::command]
 fn desktop_ack(ctx: State<'_, AppContext>, instance_id: String, seq: u32) {
     ctx.desktops.ack(&instance_id, seq);
 }
@@ -2093,6 +2105,7 @@ pub fn run() {
             desktop_input,
             desktop_resize,
             desktop_ack,
+            desktop_capture_keys,
             desktop_disconnect,
             adb::commands::adb_status,
             adb::commands::adb_download,

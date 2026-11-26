@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { KeyRound, Keyboard, Maximize2, Minimize2, RotateCw, Scan } from "lucide-react";
+import { GripHorizontal, KeyRound, Keyboard, Maximize2, Minimize2, Pin, PinOff, RotateCw, Scan } from "lucide-react";
 import { backend, type DesktopInput } from "../services/backend";
 import { DEFAULT_DESKTOP, type TerminalLeafNode } from "../types/domain";
 import {
+  clampToolbarX,
   imageBox,
   missingDesktopCredentials,
   parseFrame,
+  parseToolbarX,
   requestedSize,
   toRemote,
   wheelUnits,
@@ -25,6 +27,10 @@ interface DesktopPaneProps {
 }
 
 const noop = () => {};
+
+/** Toolbar position and pin state, shared by all desktop panes on this computer. */
+const TOOLBAR_X_KEY = "nexterm.desktop.toolbarX";
+const TOOLBAR_PINNED_KEY = "nexterm.desktop.toolbarPinned";
 
 /** Cursor image as a CSS `cursor` value (browsers ignore cursors over 128 px). */
 function cursorCss(rgba: Uint8ClampedArray<ArrayBuffer>, width: number, height: number, hotX: number, hotY: number): string {
@@ -59,6 +65,7 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
   const [scale, setScale] = useState<ScaleMode>(desktop.scale);
   const [cursor, setCursor] = useState("default");
   const [fullscreen, setFullscreen] = useState(false);
+  const [focused, setFocused] = useState(false);
 
   // ---- credentials: NLA signs in before the session exists, so ask before connecting.
   const isRdp = leaf.session.protocol === "rdp";
@@ -226,13 +233,31 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
   };
 
   const onFocus = () => {
+    setFocused(true);
     // VNC has no clipboard sync of its own: offer the local text when the pane is entered.
     if (isVnc && desktop.clipboard && !viewOnly) {
       void backend.readClipboard().then((text) => text && send([{ type: "clipboard", text }]));
     }
   };
 
-  const onBlur = () => send([{ type: "releaseAll" }]);
+  const onBlur = (e: React.FocusEvent) => {
+    send([{ type: "releaseAll" }]);
+    // Focus moving to the toolbar or the sign-in card stays inside the pane.
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
+  };
+
+  // Windows key combinations (Win+X, Alt+Tab, ...) never reach the page: while the pane has
+  // focus the backend takes them with a keyboard hook and sends them to the session.
+  const captureKeys =
+    focused &&
+    !viewOnly &&
+    !authOpen &&
+    (desktop.windowsKeys === "remote" || (desktop.windowsKeys === "fullscreen" && fullscreen));
+  useEffect(() => {
+    if (!captureKeys) return;
+    backend.desktopCaptureKeys(paneId, true);
+    return () => backend.desktopCaptureKeys(paneId, false);
+  }, [captureKeys, paneId, leaf.reconnectCount]);
 
   // VNC server clipboard -> local clipboard.
   useEffect(() => {
@@ -279,6 +304,52 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneId, send]);
 
+  // ---- toolbar: collapsed to a small tab on the top edge (hover expands it, a click pins it),
+  // and it can be dragged sideways off whatever it covers on the remote screen.
+  const [barX, setBarX] = useState(() => parseToolbarX(localStorage.getItem(TOOLBAR_X_KEY)));
+  const [barPinned, setBarPinned] = useState(() => localStorage.getItem(TOOLBAR_PINNED_KEY) === "1");
+  const [barDragging, setBarDragging] = useState(false);
+  const barDrag = useRef<{ startX: number; startFrac: number; moved: boolean } | null>(null);
+  /** The click that ends a drag is not a pin toggle. */
+  const barDragged = useRef(false);
+
+  const setPinned = (pinned: boolean) => {
+    setBarPinned(pinned);
+    localStorage.setItem(TOOLBAR_PINNED_KEY, pinned ? "1" : "0");
+  };
+
+  const onHandleDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    barDrag.current = { startX: e.clientX, startFrac: barX, moved: false };
+    barDragged.current = false;
+  };
+  const onHandleMove = (e: React.PointerEvent) => {
+    const d = barDrag.current;
+    const width = containerRef.current?.clientWidth;
+    if (!d || !width) return;
+    const dx = e.clientX - d.startX;
+    if (!d.moved && Math.abs(dx) < 4) return;
+    if (!d.moved) setBarDragging(true);
+    d.moved = true;
+    setBarX(clampToolbarX(d.startFrac + dx / width));
+  };
+  const onHandleUp = () => {
+    const d = barDrag.current;
+    barDrag.current = null;
+    if (!d?.moved) return;
+    barDragged.current = true;
+    setBarDragging(false);
+    localStorage.setItem(TOOLBAR_X_KEY, String(barX));
+  };
+  const onHandleClick = () => {
+    if (barDragged.current) {
+      barDragged.current = false;
+      return;
+    }
+    setPinned(!barPinned);
+  };
+
   const toggleFullscreen = () => {
     const el = containerRef.current;
     if (!el) return;
@@ -319,20 +390,46 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
         onPointerUp={onPointerButton(false)}
       />
 
-      <div className="desktop-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        {!isVnc || !viewOnly ? (
-          <button type="button" className="btn-ghost btn-xs" title={t("desktop.ctrlAltDel")} onClick={() => send([{ type: "ctrlAltDel" }])}>
-            <Keyboard size={13} />
+      <div
+        className={`desktop-toolbar-wrap${barPinned ? " pinned" : ""}${barDragging ? " dragging" : ""}`}
+        style={{ "--bar-x": `${barX * 100}%` } as React.CSSProperties}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="desktop-toolbar">
+          {!isVnc || !viewOnly ? (
+            <button type="button" className="btn-ghost btn-xs" title={t("desktop.ctrlAltDel")} onClick={() => send([{ type: "ctrlAltDel" }])}>
+              <Keyboard size={13} />
+            </button>
+          ) : null}
+          <button type="button" className="btn-ghost btn-xs" title={t(`desktop.scale.${scale}`)} onClick={nextScale}>
+            <Scan size={13} />
           </button>
-        ) : null}
-        <button type="button" className="btn-ghost btn-xs" title={t(`desktop.scale.${scale}`)} onClick={nextScale}>
-          <Scan size={13} />
-        </button>
-        <button type="button" className="btn-ghost btn-xs" title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} onClick={toggleFullscreen}>
-          {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-        </button>
-        <button type="button" className="btn-ghost btn-xs" title={t("pane.reconnect")} onClick={() => onReconnectPane(paneId)}>
-          <RotateCw size={13} />
+          <button type="button" className="btn-ghost btn-xs" title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} onClick={toggleFullscreen}>
+            {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+          <button type="button" className="btn-ghost btn-xs" title={t("pane.reconnect")} onClick={() => onReconnectPane(paneId)}>
+            <RotateCw size={13} />
+          </button>
+          <button
+            type="button"
+            className="btn-ghost btn-xs"
+            title={barPinned ? t("desktop.unpinToolbar") : t("desktop.pinToolbar")}
+            onClick={() => setPinned(!barPinned)}
+          >
+            {barPinned ? <PinOff size={13} /> : <Pin size={13} />}
+          </button>
+        </div>
+        <button
+          type="button"
+          className="desktop-toolbar-handle"
+          title={t("desktop.toolbarHandle")}
+          onPointerDown={onHandleDown}
+          onPointerMove={onHandleMove}
+          onPointerUp={onHandleUp}
+          onPointerCancel={onHandleUp}
+          onClick={onHandleClick}
+        >
+          <GripHorizontal size={12} />
         </button>
       </div>
 

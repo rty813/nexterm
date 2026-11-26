@@ -40,6 +40,9 @@ export interface DesktopConfig {
   viewOnly: boolean;
   /** RDP audio: play here, leave on the remote computer, or off. */
   audio: "local" | "remote" | "off";
+  /** Windows key combinations (Win+X, Alt+Tab, ...) while the pane has focus: send them to the
+   *  remote computer, only in full screen, or leave them to this computer. */
+  windowsKeys: "remote" | "fullscreen" | "local";
 }
 
 export const DEFAULT_DESKTOP: DesktopConfig = {
@@ -54,6 +57,7 @@ export const DEFAULT_DESKTOP: DesktopConfig = {
   clipboardFiles: true,
   viewOnly: false,
   audio: "local",
+  windowsKeys: "remote",
 };
 
 export type AuthType = "password" | "privatekey" | "none";

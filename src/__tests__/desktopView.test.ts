@@ -5,8 +5,10 @@ import {
   MSG_CURSOR,
   MSG_CURSOR_HIDDEN,
   MSG_RESIZE,
+  clampToolbarX,
   imageBox,
   missingDesktopCredentials,
+  parseToolbarX,
   parseFrame,
   requestedSize,
   toRemote,
@@ -95,5 +97,17 @@ describe("desktop credentials", () => {
   it("leaves the sign-in to the remote computer without NLA, and VNC alone", () => {
     expect(missingDesktopCredentials({ ...rdp, desktop: { ...DEFAULT_DESKTOP, nla: false } })).toBeNull();
     expect(missingDesktopCredentials({ ...rdp, protocol: "vnc" })).toBeNull();
+  });
+});
+
+describe("desktop toolbar position", () => {
+  it("stays on the top edge and defaults to the middle", () => {
+    expect(parseToolbarX(null)).toBe(0.5);
+    expect(parseToolbarX("")).toBe(0.5);
+    expect(parseToolbarX("abc")).toBe(0.5);
+    expect(parseToolbarX("0.2")).toBe(0.2);
+    expect(parseToolbarX("7")).toBe(1);
+    expect(clampToolbarX(-0.3)).toBe(0);
+    expect(clampToolbarX(0.75)).toBe(0.75);
   });
 });

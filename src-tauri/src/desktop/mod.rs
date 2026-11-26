@@ -7,6 +7,7 @@
 
 mod certs;
 pub mod frame;
+mod keyhook;
 pub mod keymap;
 mod rdp;
 mod vnc;
@@ -165,6 +166,7 @@ impl DesktopManager {
             scale: scale.clamp(100, 500),
             superseded: Arc::clone(&superseded),
         };
+        keyhook::retarget(&instance_id, &tx);
         let task = tauri::async_runtime::spawn(async move {
             ctx.state("connecting", None);
             let session: BoxFuture<'_, Result<()>> = match protocol {
@@ -194,6 +196,19 @@ impl DesktopManager {
         }
     }
 
+    /// Windows key combinations (Win+X, Alt+Tab, ...) go to this pane's session while `on`
+    /// and its window (`hwnd`) is in front; see `keyhook.rs`.
+    pub fn capture_keys(&self, instance_id: &str, hwnd: isize, on: bool) {
+        if !on {
+            keyhook::release(instance_id);
+            return;
+        }
+        let tx = lock(&self.sessions).get(instance_id).map(|e| e.tx.clone());
+        if let Some(tx) = tx {
+            keyhook::capture(instance_id, hwnd, tx);
+        }
+    }
+
     pub fn ack(&self, instance_id: &str, seq: u32) {
         let frames = lock(&self.sessions).get(instance_id).map(|e| Arc::clone(&e.frames));
         if let Some(f) = frames {
@@ -203,6 +218,7 @@ impl DesktopManager {
 
     /// Ask the session to sign off, and stop it for good shortly after.
     pub fn disconnect(&self, instance_id: &str) {
+        keyhook::release(instance_id);
         let Some(entry) = lock(&self.sessions).remove(instance_id) else {
             return;
         };
