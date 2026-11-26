@@ -526,6 +526,9 @@ pub struct ImportResult {
     /// Sessions using a key that could not be found as a file (pick it again).
     #[serde(default)]
     pub keys_missing: usize,
+    /// Imported sessions that matched an existing one (imported before) and updated it.
+    #[serde(default)]
+    pub updated: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

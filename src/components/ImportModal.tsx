@@ -14,6 +14,7 @@ const SESSION_SOURCES = ["windterm_sessions", "xshell_sessions", "mobaxterm", "s
 function importFeedback(res: ImportResult, sourceType: string, t: TFunction): string {
   if (!SESSION_SOURCES.includes(sourceType)) return res.summary;
   const parts = [t("importModal.importedSessions", { count: res.sessions.length })];
+  if (res.updated) parts.push(t("importModal.updatedSessions", { count: res.updated }));
   if (sourceType === "windterm_sessions") {
     const count = res.sessions.filter((session) => session.password).length;
     if (count) parts.push(t("importModal.windtermPasswords", { count }));
@@ -25,7 +26,10 @@ function importFeedback(res: ImportResult, sourceType: string, t: TFunction): st
     const imported = res.sessions.filter((session) => session.password).length;
     if (imported) parts.push(t("importModal.importedPasswords", { count: imported }));
   }
-  if (res.passwordsSkipped) parts.push(t("importModal.passwordsSkipped", { count: res.passwordsSkipped }));
+  if (res.passwordsSkipped) {
+    const key = sourceType === "securecrt" ? "secureCrtPasswordsSkipped" : "passwordsSkipped";
+    parts.push(t(`importModal.${key}`, { count: res.passwordsSkipped }));
+  }
   if (res.keysMissing) {
     const key = sourceType === "xshell_sessions" ? "keysMissing" : "keysMissingOther";
     parts.push(t(`importModal.${key}`, { count: res.keysMissing }));
@@ -120,6 +124,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [withLogin, setWithLogin] = useState(false);
   const [master, setMaster] = useState("");
+  const [scrtPassphrase, setScrtPassphrase] = useState("");
   const [importing, setImporting] = useState(false);
 
   const refreshCandidates = async () => {
@@ -145,15 +150,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     setError(null);
     setFeedback(null);
     try {
-      const password = sourceType === "windterm_sessions" && withLogin ? master : undefined;
+      const secret = sourceType === "windterm_sessions" && withLogin ? master
+        : sourceType === "securecrt" && scrtPassphrase ? scrtPassphrase : undefined;
       setMaster("");
-      const res = await backend.executeImport(sourceType, path, password);
+      const res = await backend.executeImport(sourceType, path, secret);
+      // Kept after a wrong passphrase so it can be corrected; cleared once it worked.
+      if (sourceType === "securecrt") setScrtPassphrase("");
       setFeedback(importFeedback(res, sourceType, t));
       onImported(res);
     } catch (err) {
       const reason = String(err);
       const known = syncErrorKey(reason);
-      setError(["windtermProfile", "windtermMasterRequired", "windtermDecryptFailed"].includes(reason)
+      setError(["windtermProfile", "windtermMasterRequired", "windtermDecryptFailed", "securecrtPassphraseWrong"].includes(reason)
         ? t(`importModal.${reason}`) : known ? t(known) : reason);
     } finally {
       setImporting(false);
@@ -247,6 +255,14 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                         <label>{t("importModal.windtermMaster")}<input type="password" autoComplete="off" value={master}
                           disabled={importing} onChange={(event) => setMaster(event.target.value)} /></label>
                       </>}
+                    </div>
+                  )}
+
+                  {card.app === "securecrt" && (
+                    <div className="import-card-option">
+                      <label>{t("importModal.secureCrtPassphrase")}<input type="password" autoComplete="off" value={scrtPassphrase}
+                        disabled={importing} onChange={(event) => setScrtPassphrase(event.target.value)} /></label>
+                      <p className="adv-hint">{t("importModal.secureCrtPassphraseHint")}</p>
                     </div>
                   )}
 

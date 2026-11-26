@@ -861,7 +861,52 @@ fn scan_windterm_profiles_dir(
     }
 }
 
-pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Option<&str>) -> Result<ImportResult> {
+/// Identity of an imported session for spotting a repeated import: importers make a new id
+/// every time, so match on group, name, protocol, host and port instead. Username is left out
+/// so that a re-import with a corrected username still updates the old entry.
+fn import_identity(s: &SessionConfig) -> (String, String, String, String, u16) {
+    (
+        s.group.trim().to_lowercase(),
+        s.label.trim().to_lowercase(),
+        format!("{:?}", s.protocol),
+        s.host.trim().to_lowercase(),
+        s.port,
+    )
+}
+
+/// Merge imported sessions into the saved list. One that matches an existing session (same
+/// id, or the same identity: imported before) replaces it in place and takes over its id, so
+/// importing twice does not duplicate. A credential reference the user attached afterwards is
+/// kept when the import brings no password or key of its own. Returns how many were updated.
+pub fn merge_imported_sessions(existing: &mut Vec<SessionConfig>, incoming: &mut [SessionConfig]) -> usize {
+    let mut updated = 0;
+    let mut claimed = vec![false; existing.len()];
+    for s in incoming.iter_mut() {
+        let id = import_identity(s);
+        let pos = existing.iter().position(|e| e.id == s.id).or_else(|| {
+            existing.iter().enumerate().position(|(i, e)| !claimed.get(i).copied().unwrap_or(true) && import_identity(e) == id)
+        });
+        match pos {
+            Some(pos) => {
+                let old = &existing[pos];
+                s.id = old.id.clone();
+                let brings_secret = s.password.is_some() || s.private_key_path.is_some();
+                if !brings_secret && s.credential_id.is_none() {
+                    s.credential_id = old.credential_id.clone();
+                }
+                existing[pos] = s.clone();
+                if let Some(c) = claimed.get_mut(pos) {
+                    *c = true;
+                }
+                updated += 1;
+            }
+            None => existing.push(s.clone()),
+        }
+    }
+    updated
+}
+
+pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>) -> Result<ImportResult> {
     let path = Path::new(path_str);
     match source_type {
         "windterm_sessions" => {
@@ -870,7 +915,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
             let mut key = None;
             let (mut passwords_skipped, mut opened, mut failed) = (0, 0, 0);
             let sessions = parse_windterm_sessions_with_login(&raw, |blob| {
-                let Some(master) = windterm_master else {
+                let Some(master) = secret else {
                     passwords_skipped += 1;
                     return Ok(None);
                 };
@@ -895,6 +940,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: 0,
                 passwords_skipped,
                 keys_missing: 0,
+                updated: 0,
             })
         }
         "windterm_quickbar" => {
@@ -910,6 +956,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: 0,
                 passwords_skipped: 0,
                 keys_missing: 0,
+                updated: 0,
             })
         }
         "openssh_config" => {
@@ -925,6 +972,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: 0,
                 passwords_skipped: 0,
                 keys_missing: 0,
+                updated: 0,
             })
         }
         "windterm_theme" => {
@@ -943,6 +991,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: 0,
                 passwords_skipped: 0,
                 keys_missing: 0,
+                updated: 0,
             })
         }
         "xshell_sessions" => {
@@ -955,6 +1004,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: r.skipped,
                 passwords_skipped: r.passwords_skipped,
                 keys_missing: r.keys_missing,
+                updated: 0,
             })
         }
         "mobaxterm" => {
@@ -967,10 +1017,11 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: r.skipped,
                 passwords_skipped: 0,
                 keys_missing: 0,
+                updated: 0,
             })
         }
         "securecrt" => {
-            let r = crate::importer_securecrt::import_path(path)?;
+            let r = crate::importer_securecrt::import_path_with(path, secret.unwrap_or("").as_bytes())?;
             Ok(ImportResult {
                 summary: format!("已从 SecureCRT 导入 {} 个会话", r.sessions.len()),
                 sessions: r.sessions,
@@ -979,6 +1030,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: r.skipped,
                 passwords_skipped: r.passwords_skipped,
                 keys_missing: r.keys_missing,
+                updated: 0,
             })
         }
         "finalshell" => {
@@ -991,6 +1043,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, windterm_master: Opti
                 skipped: r.skipped,
                 passwords_skipped: r.passwords_skipped,
                 keys_missing: r.keys_missing,
+                updated: 0,
             })
         }
         _ => anyhow::bail!("不支持的导入源类型: {}", source_type),
@@ -1129,6 +1182,38 @@ pub fn expand_tilde(path_str: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_reimport_updates_instead_of_duplicating() {
+        let sess = |id: &str, user: &str| SessionConfig {
+            id: id.into(),
+            label: "pc".into(),
+            group: "SecureCRT".into(),
+            protocol: ProtocolType::Rdp,
+            host: "192.0.2.10".into(),
+            port: 3389,
+            username: user.into(),
+            ..Default::default()
+        };
+        let other = SessionConfig { label: "db".into(), ..sess("other", "root") };
+        let mut existing = vec![
+            SessionConfig { credential_id: Some("cred".into()), ..sess("old", "192.0.2.10\\user@example.com") },
+            other.clone(),
+        ];
+        let mut incoming = vec![sess("new", "user@example.com"), SessionConfig { id: "new2".into(), host: "10.0.0.9".into(), ..sess("", "") }];
+        assert_eq!(merge_imported_sessions(&mut existing, &mut incoming), 1);
+        assert_eq!(existing.len(), 3);
+        assert_eq!((incoming[0].id.as_str(), existing[0].username.as_str()), ("old", "user@example.com"));
+        // No password in the import: the credential the user attached is kept.
+        assert_eq!(existing[0].credential_id.as_deref(), Some("cred"));
+        assert_eq!(existing[1].id, other.id);
+        assert_eq!(existing[2].id, "new2");
+
+        // A second identical import changes nothing in size.
+        let mut again = vec![sess("x", "user@example.com"), SessionConfig { id: "y".into(), host: "10.0.0.9".into(), ..sess("", "") }];
+        assert_eq!(merge_imported_sessions(&mut existing, &mut again), 2);
+        assert_eq!(existing.len(), 3);
+    }
 
     #[test]
     fn windterm_import_saved_logins() {

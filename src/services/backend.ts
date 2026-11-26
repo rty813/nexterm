@@ -755,11 +755,12 @@ export const backend = {
     return invoke<DiscoveryCandidate[]>("scan_import_candidates");
   },
 
-  async executeImport(sourceType: string, path: string, windtermMaster?: string): Promise<ImportResult> {
+  /** `secret`: the WindTerm master password or the SecureCRT config passphrase. */
+  async executeImport(sourceType: string, path: string, secret?: string): Promise<ImportResult> {
     if (!isTauriRuntime()) {
       return { sessions: [], themes: [], quickCommands: [], summary: "Browser preview mode" };
     }
-    return invoke<ImportResult>("execute_import", { sourceType, path, windtermMaster });
+    return invoke<ImportResult>("execute_import", { sourceType, path, secret });
   },
 
   /** The local WindTerm quick commands (quickbar.config), without saving them; null when none. */

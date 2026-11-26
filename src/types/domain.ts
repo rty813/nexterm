@@ -832,6 +832,8 @@ export interface ImportResult {
   passwordsSkipped?: number;
   /** Sessions using a key that was not found as a file. */
   keysMissing?: number;
+  /** Sessions that matched one imported before and updated it instead of adding a copy. */
+  updated?: number;
 }
 
 export type ConnectionStatus =

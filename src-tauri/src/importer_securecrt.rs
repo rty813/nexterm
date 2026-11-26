@@ -34,6 +34,8 @@ pub struct SecureCrtImport {
     /// Sessions of a protocol Nexterm cannot open (SSH1, RLogin, TAPI, ...) or without a host.
     pub skipped: usize,
     pub passwords_skipped: usize,
+    /// Sessions with a saved password, read or not.
+    pub passwords_stored: usize,
     pub keys_missing: usize,
 }
 
@@ -54,8 +56,26 @@ pub fn count_sessions(dir: &Path) -> usize {
     files.len()
 }
 
-/// Import a Sessions folder, a single session `.ini` or an exported `.xml`.
+/// Import a Sessions folder, a single session `.ini` or an exported `.xml`, with an empty
+/// config passphrase (SecureCRT's default).
+#[cfg(test)]
 pub fn import_path(path: &Path) -> Result<SecureCrtImport> {
+    import_path_with(path, b"")
+}
+
+/// Import with the config passphrase that encrypts saved passwords (empty when none is set).
+/// A passphrase that opens none of the stored passwords is an error (`securecrtPassphraseWrong`)
+/// rather than an import without them, so a typo does not silently drop every password.
+pub fn import_path_with(path: &Path, passphrase: &[u8]) -> Result<SecureCrtImport> {
+    let out = import_inner(path, passphrase)?;
+    anyhow::ensure!(
+        passphrase.is_empty() || out.passwords_stored == 0 || out.passwords_skipped < out.passwords_stored,
+        "securecrtPassphraseWrong"
+    );
+    Ok(out)
+}
+
+fn import_inner(path: &Path, passphrase: &[u8]) -> Result<SecureCrtImport> {
     let mut out = SecureCrtImport::default();
     if path.is_dir() {
         let config_dir = config_dir_of(path);
@@ -66,18 +86,18 @@ pub fn import_path(path: &Path) -> Result<SecureCrtImport> {
             let raw = read_limited(&file, INI_MAX)?;
             let fields = parse_session_ini(&decode_text(&raw));
             let (groups, label) = split_rel(&rel);
-            add(&mut out, &fields, &groups, &label, config_dir.as_deref());
+            add(&mut out, &fields, &groups, &label, config_dir.as_deref(), passphrase);
         }
         return Ok(out);
     }
     let raw = read_limited(path, IMPORT_FILE_MAX)?;
     let text = decode_text(&raw);
     if text.trim_start().starts_with('<') {
-        return parse_xml_export(&text);
+        return parse_xml_export(&text, passphrase);
     }
     let name = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let config_dir = path.parent().and_then(config_dir_of);
-    add(&mut out, &parse_session_ini(&text), &[], &name, config_dir.as_deref());
+    add(&mut out, &parse_session_ini(&text), &[], &name, config_dir.as_deref(), passphrase);
     Ok(out)
 }
 
@@ -153,10 +173,11 @@ pub fn parse_session_ini(text: &str) -> HashMap<String, String> {
     out
 }
 
-fn add(out: &mut SecureCrtImport, fields: &HashMap<String, String>, groups: &[String], label: &str, config_dir: Option<&Path>) {
-    match session_from_fields(fields, groups, label, config_dir) {
+fn add(out: &mut SecureCrtImport, fields: &HashMap<String, String>, groups: &[String], label: &str, config_dir: Option<&Path>, passphrase: &[u8]) {
+    match session_from_fields_with(fields, groups, label, config_dir, passphrase) {
         Some(p) => {
             out.passwords_skipped += p.had_password as usize;
+            out.passwords_stored += (p.had_password || p.session.password.is_some()) as usize;
             out.keys_missing += p.key_missing as usize;
             out.sessions.push(p.session);
         }
@@ -177,12 +198,23 @@ fn group_path(groups: &[String]) -> String {
         .join(">")
 }
 
-/// One session. None when the protocol has no Nexterm equivalent or the target is missing.
+#[cfg(test)]
 pub fn session_from_fields(
     fields: &HashMap<String, String>,
     groups: &[String],
     label: &str,
     config_dir: Option<&Path>,
+) -> Option<ParsedSession> {
+    session_from_fields_with(fields, groups, label, config_dir, b"")
+}
+
+/// One session. None when the protocol has no Nexterm equivalent or the target is missing.
+pub fn session_from_fields_with(
+    fields: &HashMap<String, String>,
+    groups: &[String],
+    label: &str,
+    config_dir: Option<&Path>,
+    passphrase: &[u8],
 ) -> Option<ParsedSession> {
     let get = |k: &str| fields.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
     let num = |k: &str| get(k).and_then(|v| v.parse::<u32>().ok());
@@ -203,7 +235,7 @@ pub fn session_from_fields(
     let mut had_password = false;
     let mut key_missing = false;
     // Saved password: decrypted when it can be, otherwise counted as skipped.
-    let password = crypto::session_password(fields);
+    let password = crypto::session_password_with(fields, passphrase);
     match protocol.as_str() {
         "SSH2" => {
             if host.is_empty() {
@@ -215,16 +247,15 @@ pub fn session_from_fields(
             s.password = password.value.clone();
             had_password = password.skipped;
             // "Identity Filename V2" is `<path>::rawkey` / `<path>::openssh...`; an empty one
-            // with "Use Global Public Key" means the global key, which is not imported.
-            let key = get("Identity Filename V2").or_else(|| get("Identity Filename")).and_then(|k| resolve_key(k, config_dir));
-            let wants_key = key.is_some()
-                || get("Identity Filename V2").is_some()
-                || get("Identity Filename").is_some()
-                || auth_prefers_key(get("SSH2 Authentications V2"));
-            if let Some(path) = key {
+            // with "Use Global Public Key" means the global key, which is not imported. Only a
+            // session key counts: "SSH2 Authentications V2" starts with `publickey` by default
+            // (`publickey,keyboard-interactive,password,gssapi`), so its order says nothing
+            // about whether the session actually signs in with a key.
+            let key_field = get("Identity Filename V2").or_else(|| get("Identity Filename"));
+            if let Some(path) = key_field.and_then(|k| resolve_key(k, config_dir)) {
                 s.auth_type = AuthType::PrivateKey;
                 s.private_key_path = Some(path);
-            } else if wants_key {
+            } else if key_field.is_some() {
                 s.auth_type = AuthType::PrivateKey;
                 key_missing = true;
             } else {
@@ -276,15 +307,17 @@ pub fn session_from_fields(
                 return None;
             }
             s.protocol = ProtocolType::Rdp;
+            let (user, user_domain) = split_rdp_username(&s.username, &host);
+            s.username = user;
             s.host = host;
-            s.port = port("[RDP] Port", 3389);
+            s.port = num("[RDP] Port").or_else(|| num("Port")).and_then(|p| u16::try_from(p).ok()).filter(|p| *p > 0).unwrap_or(3389);
             s.auth_type = AuthType::None;
             s.keep_alive_secs = 0;
             s.password = password.value.clone();
             had_password = password.skipped;
             let mut desktop = crate::models::DesktopConfig::default();
-            if let Some(domain) = get("[RDP] Domain").or_else(|| get("Domain")) {
-                desktop.domain = domain.to_string();
+            if let Some(domain) = get("[RDP] Domain").or_else(|| get("Domain")).map(str::to_string).or(user_domain) {
+                desktop.domain = domain;
             }
             s.desktop = Some(desktop);
         }
@@ -293,11 +326,19 @@ pub fn session_from_fields(
     Some(ParsedSession { session: s, had_password, key_missing })
 }
 
-/// "SSH2 Authentications V2" lists methods in preference order, e.g. `publickey,password`.
-fn auth_prefers_key(methods: Option<&str>) -> bool {
-    methods
-        .and_then(|m| m.split(',').map(str::trim).find(|m| !m.is_empty()))
-        .is_some_and(|first| first.eq_ignore_ascii_case("publickey"))
+/// SecureCRT's RDP "Username" is `DOMAIN\user` (it fills in the host as the domain for local
+/// accounts). The domain is dropped when it is just the host or `.` (a local account) or the
+/// user is a UPN (`user@example.com`, e.g. a Microsoft account), which carries its own.
+fn split_rdp_username(raw: &str, host: &str) -> (String, Option<String>) {
+    let Some((domain, user)) = raw.split_once('\\') else {
+        return (raw.to_string(), None);
+    };
+    let (domain, user) = (domain.trim(), user.trim());
+    if user.is_empty() {
+        return (raw.to_string(), None);
+    }
+    let local = domain.is_empty() || domain == "." || domain.eq_ignore_ascii_case(host.trim()) || user.contains('@');
+    (user.to_string(), (!local).then(|| domain.to_string()))
 }
 
 /// A key file path with SecureCRT's suffix removed and `${VDS_CONFIG_PATH}` (and the user
@@ -331,8 +372,8 @@ pub struct Password {
     pub skipped: bool,
 }
 
-/// SecureCRT's two password schemes. The config passphrase is assumed empty (the default);
-/// with one set, V2's checksum fails and the password is simply left out.
+/// SecureCRT's password schemes. "Password V2" is keyed by the config passphrase (empty by
+/// default); with a wrong one the checksum fails and the password is left out.
 mod crypto {
     use super::Password;
     use std::collections::HashMap;
@@ -342,13 +383,23 @@ mod crypto {
     const V1_KEY1: [u8; 16] = [0x24, 0xA6, 0x3D, 0xDE, 0x5B, 0xD3, 0xB3, 0x82, 0x9C, 0x7E, 0x06, 0xF4, 0x08, 0x16, 0xAA, 0x07];
     const V1_KEY2: [u8; 16] = [0x5F, 0xB0, 0x45, 0xA2, 0x94, 0x17, 0xD9, 0x16, 0xC6, 0xC6, 0xA2, 0xFF, 0x06, 0x41, 0x82, 0xB7];
 
-    /// The decrypted saved password of a session. "Password V2" wins over the legacy "Password".
+    #[cfg(test)]
     pub fn session_password(fields: &HashMap<String, String>) -> Password {
+        session_password_with(fields, b"")
+    }
+
+    /// The decrypted saved password of a session. "Password V2" wins over the legacy "Password"
+    /// (which does not use the passphrase).
+    pub fn session_password_with(fields: &HashMap<String, String>, passphrase: &[u8]) -> Password {
         let field = |k: &str| fields.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
         if let Some(v2) = field("Password V2") {
-            // Stored as `02:<hex>`; the `NN:` prefix is the format tag.
-            let hex = v2.split_once(':').map(|(_, rest)| rest).unwrap_or(v2);
-            return stored(decrypt_v2(hex));
+            // Stored as `02:<hex>` (older SecureCRT) or `03:<hex>` (9.x); the `NN:` prefix is
+            // the format tag.
+            return stored(match v2.split_once(':') {
+                Some(("03", hex)) => decrypt_v3(hex, passphrase),
+                Some((_, hex)) => decrypt_v2(hex, passphrase),
+                None => decrypt_v2(v2, passphrase),
+            });
         }
         if let Some(v1) = field("Password") {
             return stored(decrypt_v1(v1));
@@ -366,6 +417,10 @@ mod crypto {
         encrypt::v2(password)
     }
     #[cfg(test)]
+    pub fn test_encrypt_v3(password: &str) -> String {
+        encrypt::v3(password, [0x5a; 16], b"")
+    }
+    #[cfg(test)]
     pub fn test_encrypt_v1(password: &str) -> String {
         encrypt::v1(password)
     }
@@ -378,17 +433,35 @@ mod crypto {
         (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()).collect()
     }
 
-    /// AES-256-CBC, key = SHA-256(passphrase), IV = 0. The plaintext is a 4-byte little-endian
-    /// length, the UTF-8 password, its SHA-256 (verified) and then padding.
-    fn decrypt_v2(hex: &str) -> Option<String> {
+    /// "02": AES-256-CBC, key = SHA-256(passphrase), IV = 0.
+    fn decrypt_v2(hex: &str, passphrase: &[u8]) -> Option<String> {
         let mut data = unhex(hex)?;
+        let key = ring::digest::digest(&ring::digest::SHA256, passphrase);
+        aes_payload(key.as_ref(), &[0u8; 16], &mut data)
+    }
+
+    /// "03": a 16-byte salt, then AES-256-CBC whose key and IV are the 48 bytes of
+    /// bcrypt_pbkdf(passphrase, salt, 16 rounds).
+    fn decrypt_v3(hex: &str, passphrase: &[u8]) -> Option<String> {
+        let data = unhex(hex)?;
+        if data.len() <= 16 {
+            return None;
+        }
+        let (salt, ct) = data.split_at(16);
+        let mut key_iv = [0u8; 48];
+        bcrypt_pbkdf(passphrase, salt, 16, &mut key_iv);
+        aes_payload(&key_iv[..32], &key_iv[32..], &mut ct.to_vec())
+    }
+
+    /// The V2 / V3 plaintext: a 4-byte little-endian length, the UTF-8 password, its SHA-256
+    /// (verified) and then padding.
+    fn aes_payload(key: &[u8], iv: &[u8], data: &mut [u8]) -> Option<String> {
         if data.is_empty() || data.len() % 16 != 0 {
             return None;
         }
-        let key = ring::digest::digest(&ring::digest::SHA256, b"");
-        let plain = cbc::Decryptor::<aes::Aes256>::new_from_slices(key.as_ref(), &[0u8; 16])
+        let plain = cbc::Decryptor::<aes::Aes256>::new_from_slices(key, iv)
             .ok()?
-            .decrypt_padded::<NoPadding>(&mut data)
+            .decrypt_padded::<NoPadding>(data)
             .ok()?;
         let len = u32::from_le_bytes(plain.get(..4)?.try_into().ok()?) as usize;
         let body = plain.get(4..)?;
@@ -422,6 +495,56 @@ mod crypto {
         String::from_utf16(&units).ok()
     }
 
+    /// OpenSSH's bcrypt_pbkdf. Written out because the `bcrypt-pbkdf` crate (like OpenSSH)
+    /// rejects an empty passphrase, which is SecureCRT's default.
+    pub(super) fn bcrypt_pbkdf(pass: &[u8], salt: &[u8], rounds: u32, out: &mut [u8]) {
+        use ring::digest::{digest, Context, SHA512};
+        let sha_pass = digest(&SHA512, pass);
+        let stride = out.len().div_ceil(32);
+        for block in 0..stride {
+            let mut ctx = Context::new(&SHA512);
+            ctx.update(salt);
+            ctx.update(&(block as u32 + 1).to_be_bytes());
+            let mut tmp = bhash(sha_pass.as_ref(), ctx.finish().as_ref());
+            let mut acc = tmp;
+            for _ in 1..rounds {
+                tmp = bhash(sha_pass.as_ref(), digest(&SHA512, &tmp).as_ref());
+                acc.iter_mut().zip(tmp).for_each(|(a, t)| *a ^= t);
+            }
+            // The output bytes are interleaved across the blocks.
+            for (i, b) in acc.iter().enumerate() {
+                if let Some(o) = out.get_mut(i * stride + block) {
+                    *o = *b;
+                }
+            }
+        }
+    }
+
+    fn bhash(sha_pass: &[u8], sha_salt: &[u8]) -> [u8; 32] {
+        let mut bf: blowfish::Blowfish = blowfish::Blowfish::bc_init_state();
+        bf.salted_expand_key(sha_salt, sha_pass);
+        for _ in 0..64 {
+            bf.bc_expand_key(sha_salt);
+            bf.bc_expand_key(sha_pass);
+        }
+        let mut words = [0u32; 8];
+        for (w, c) in words.iter_mut().zip(b"OxychromaticBlowfishSwatDynamite".chunks_exact(4)) {
+            *w = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+        }
+        for _ in 0..64 {
+            for pair in words.chunks_exact_mut(2) {
+                let [l, r] = bf.bc_encrypt([pair[0], pair[1]]);
+                pair[0] = l;
+                pair[1] = r;
+            }
+        }
+        let mut out = [0u8; 32];
+        for (o, w) in out.chunks_exact_mut(4).zip(words) {
+            o.copy_from_slice(&w.to_le_bytes());
+        }
+        out
+    }
+
     fn blowfish_dec<'a>(key: &[u8], data: &'a mut [u8]) -> Option<&'a [u8]> {
         cbc::Decryptor::<blowfish::Blowfish>::new_from_slices(key, &[0u8; 8])
             .ok()?
@@ -447,6 +570,22 @@ mod crypto {
                 .unwrap()
                 .to_vec();
             format!("02:{}", hex(&ct))
+        }
+
+        pub fn v3(password: &str, salt: [u8; 16], passphrase: &[u8]) -> String {
+            let mut plain = (password.len() as u32).to_le_bytes().to_vec();
+            plain.extend_from_slice(password.as_bytes());
+            plain.extend_from_slice(ring::digest::digest(&ring::digest::SHA256, password.as_bytes()).as_ref());
+            plain.resize(plain.len().div_ceil(16) * 16, 0);
+            let mut key_iv = [0u8; 48];
+            bcrypt_pbkdf(passphrase, &salt, 16, &mut key_iv);
+            let n = plain.len();
+            let ct = cbc::Encryptor::<aes::Aes256>::new_from_slices(&key_iv[..32], &key_iv[32..])
+                .unwrap()
+                .encrypt_padded::<NoPadding>(&mut plain, n)
+                .unwrap()
+                .to_vec();
+            format!("03:{}{}", hex(&salt), hex(&ct))
         }
 
         pub fn v1(password: &str) -> String {
@@ -505,9 +644,40 @@ mod crypto {
             // Ciphertext produced by an independent OpenSSL implementation (aes-256-cbc /
             // bf-cbc), not by this crate — a real cross-check of the decrypt, not a round-trip.
             let v2 = "02:a946feca74f2916b52e36e1458fa1a6647b1af207ac92ee8b3273d4f6e54f8c85d5a0dcd7431cd38b8cab7f85133bddf";
-            assert_eq!(decrypt_v2(v2.split_once(':').unwrap().1).as_deref(), Some("hunter2"));
+            assert_eq!(decrypt_v2(v2.split_once(':').unwrap().1, b"").as_deref(), Some("hunter2"));
             let v1 = "1966e6b30a27b2c25c50ba9c27d68b524f672c4994101e7d";
             assert_eq!(decrypt_v1(v1).as_deref(), Some("hunter2"));
+        }
+
+        #[test]
+        fn bcrypt_pbkdf_matches_crate() {
+            // The crate refuses an empty passphrase, so compare on a non-empty one.
+            for (pass, salt, len) in [(&b"pw"[..], &b"0123456789abcdef"[..], 48), (b"secret", b"s", 70)] {
+                let mut ours = vec![0u8; len];
+                bcrypt_pbkdf(pass, salt, 16, &mut ours);
+                let mut theirs = vec![0u8; len];
+                ::bcrypt_pbkdf::bcrypt_pbkdf(pass, salt, 16, &mut theirs).unwrap();
+                assert_eq!(ours, theirs);
+            }
+        }
+
+        #[test]
+        fn v3_round_trip() {
+            for pw in ["hunter2", "", "пароль🔒"] {
+                let p = session_password(&fields("Password V2", &encrypt::v3(pw, [7u8; 16], b"")));
+                assert_eq!(p.value.as_deref(), Some(pw), "V3 {pw:?}");
+            }
+        }
+
+        #[test]
+        fn passphrase_v2_v3() {
+            let pass = "口令 pass".as_bytes();
+            let f = fields("Password V2", &encrypt::v3("hunter2", [3u8; 16], pass));
+            assert_eq!(session_password_with(&f, pass).value.as_deref(), Some("hunter2"));
+            assert!(session_password_with(&f, b"wrong").skipped);
+            assert!(session_password(&f).skipped);
+            // "02" is keyed by the SHA-256 of the passphrase.
+            assert!(session_password_with(&fields("Password V2", &encrypt::v2("hunter2")), b"x").skipped);
         }
 
         #[test]
@@ -525,7 +695,7 @@ mod crypto {
 // ------------------------------------------------------------------ XML export
 
 /// Sessions of an exported settings XML.
-pub fn parse_xml_export(text: &str) -> Result<SecureCrtImport> {
+pub fn parse_xml_export(text: &str, passphrase: &[u8]) -> Result<SecureCrtImport> {
     let mut stack: Vec<(String, HashMap<String, String>)> = Vec::new();
     let mut value: Option<(String, String)> = None;
     let mut found_sessions = false;
@@ -565,7 +735,7 @@ pub fn parse_xml_export(text: &str) -> Result<SecureCrtImport> {
                         continue;
                     }
                     let groups: Vec<String> = stack[at + 1..].iter().map(|(n, _)| n.clone()).collect();
-                    add(&mut out, &fields, &groups, &name, None);
+                    add(&mut out, &fields, &groups, &name, None, passphrase);
                 }
                 _ => {}
             },
@@ -748,7 +918,7 @@ mod tests {
 
     #[test]
     fn test_parse_xml_export() {
-        let r = parse_xml_export(XML).unwrap();
+        let r = parse_xml_export(XML, b"").unwrap();
         // "Default" (no host) and RLogin are skipped.
         assert_eq!(r.skipped, 2);
         assert_eq!(r.passwords_skipped, 1);
@@ -771,8 +941,8 @@ mod tests {
 
     #[test]
     fn test_xml_without_sessions() {
-        assert!(parse_xml_export("<VanDyke><key name=\"Options\"></key></VanDyke>").is_err());
-        assert!(parse_xml_export("<VanDyke><key name=\"Sessions\"").is_err());
+        assert!(parse_xml_export("<VanDyke><key name=\"Options\"></key></VanDyke>", b"").is_err());
+        assert!(parse_xml_export("<VanDyke><key name=\"Sessions\"", b"").is_err());
     }
 
     #[test]
@@ -837,6 +1007,44 @@ Z:\"Description\"=00000002\r\n line one\r\n line two\r\nB:\"Blob\"=00000002\r\n 
         assert_eq!(p.session.password.as_deref(), Some("s3cret"));
         assert_eq!(p.session.desktop.as_ref().unwrap().domain, "CORP");
         assert!(!p.had_password);
+    }
+
+    #[test]
+    fn test_default_auth_list_is_password() {
+        // SecureCRT 9.x defaults: publickey first, global key, no session key, "03:" password.
+        let mut f = parse_session_ini(
+            "S:\"Protocol Name\"=SSH2\r\nS:\"Hostname\"=backend.cn\r\nS:\"Username\"=admin\r\nS:\"Identity Filename V2\"=\r\n\
+D:\"Use Global Public Key\"=00000001\r\nS:\"SSH2 Authentications V2\"=publickey,keyboard-interactive,password,gssapi\r\n",
+        );
+        f.insert("Password V2".into(), crypto::test_encrypt_v3("s3cret"));
+        let p = session_from_fields(&f, &[], "backend", None).unwrap();
+        assert_eq!(p.session.auth_type, AuthType::Password);
+        assert_eq!(p.session.password.as_deref(), Some("s3cret"));
+        assert!(!p.key_missing && !p.had_password);
+        // No saved password either: still a password login (prompted when connecting).
+        f.remove("Password V2");
+        let p = session_from_fields(&f, &[], "backend", None).unwrap();
+        assert_eq!(p.session.auth_type, AuthType::Password);
+        assert!(!p.key_missing);
+    }
+
+    #[test]
+    fn test_rdp_username_domain() {
+        let rdp = |user: &str| {
+            let f = HashMap::from([
+                ("Protocol Name".to_string(), "RDP".to_string()),
+                ("Hostname".to_string(), "192.0.2.10".to_string()),
+                ("Port".to_string(), "3389".to_string()),
+                ("Username".to_string(), user.to_string()),
+            ]);
+            let s = session_from_fields(&f, &[], "pc", None).unwrap().session;
+            (s.username, s.desktop.unwrap().domain, s.port)
+        };
+        assert_eq!(rdp("192.0.2.10\\user@example.com"), ("user@example.com".into(), String::new(), 3389));
+        assert_eq!(rdp("192.0.2.10\\admin"), ("admin".into(), String::new(), 3389));
+        assert_eq!(rdp(".\\admin").0, "admin");
+        assert_eq!(rdp("CORP\\alice"), ("alice".into(), "CORP".into(), 3389));
+        assert_eq!(rdp("bob"), ("bob".into(), String::new(), 3389));
     }
 
     #[test]

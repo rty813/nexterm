@@ -23,7 +23,7 @@ russh = { version = "0.65", default-features = false, features = ["ring", "flate
 portable-pty = "0.9"
 base64 = "0.22"
 aes = "0.9"
-blowfish = "0.10"
+blowfish = { version = "0.10", features = ["bcrypt"] }
 cbc = "0.2"
 pbkdf2 = "0.13"
 sha3 = "0.12"
@@ -72,3 +72,6 @@ ironrdp-tls = { version = "0.3", features = ["native-tls"] }
 x509-cert = { version = "0.3", default-features = false, features = ["std"] }
 smallvec = "1"
 vnc-rs = "0.6"
+
+[dev-dependencies]
+bcrypt-pbkdf = "0.11"

@@ -1798,24 +1798,21 @@ async fn execute_import(
     ctx: State<'_, AppContext>,
     source_type: String,
     path: String,
-    windterm_master: Option<String>,
+    // WindTerm master password or SecureCRT config passphrase, depending on the source.
+    secret: Option<String>,
 ) -> Result<ImportResult, String> {
-    let res = tauri::async_runtime::spawn_blocking(move || {
-        let master = windterm_master.map(zeroize::Zeroizing::new);
-        import_from_path(&source_type, &path, master.as_ref().map(|s| s.as_str()))
+    let mut res = tauri::async_runtime::spawn_blocking(move || {
+        let secret = secret.map(zeroize::Zeroizing::new);
+        import_from_path(&source_type, &path, secret.as_ref().map(|s| s.as_str()))
     }).await.map_err(|e| e.to_string())?.map_err(|e| format!("{:#}", e))?;
 
     let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
 
     if !res.sessions.is_empty() {
         let mut existing = storage.load_sessions().map_err(|e| e.to_string())?;
-        for incoming in &res.sessions {
-            if let Some(pos) = existing.iter().position(|s| s.id == incoming.id) {
-                existing[pos] = incoming.clone();
-            } else {
-                existing.push(incoming.clone());
-            }
-        }
+        // Rewrites ids of re-imported sessions to the saved ones, so the frontend merge
+        // (by id) updates them too.
+        res.updated = crate::importer::merge_imported_sessions(&mut existing, &mut res.sessions);
         storage.save_sessions(&existing).map_err(|e| e.to_string())?;
     }
 
