@@ -9,6 +9,8 @@ import {
   decideAction,
   manualItems,
   matchPrompt,
+  appliesTo,
+  inGroup,
   onekeysFor,
   promptField,
   rankMatches,
@@ -86,11 +88,29 @@ describe("prompts", () => {
 describe("OneKeys of a session", () => {
   const list = [key("a"), key("b"), key("login", { onekey: false, login: true })];
 
+  const s = { id: "s1", group: "Prod > Web" };
+
   it("are all OneKeys, or the ones it is limited to", () => {
-    expect(onekeysFor(list, {}).map((c) => c.id)).toEqual(["a", "b"]);
-    expect(onekeysFor(list, { onekeys: [] }).map((c) => c.id)).toEqual(["a", "b"]);
-    expect(onekeysFor(list, { onekeys: ["b", "gone", "login"] }).map((c) => c.id)).toEqual(["b"]);
-    expect(onekeysFor(list, { onekeys: ["gone"] })).toEqual([]);
+    expect(onekeysFor(list, s).map((c) => c.id)).toEqual(["a", "b"]);
+    expect(onekeysFor(list, { ...s, onekeys: [] })).toEqual([]);
+    expect(onekeysFor(list, { ...s, onekeys: ["b", "gone", "login"] }).map((c) => c.id)).toEqual(["b"]);
+    expect(onekeysFor(list, { ...s, onekeys: ["gone"] })).toEqual([]);
+  });
+
+  it("only include OneKeys offered in the session, by id or group", () => {
+    const only = (sessions: string[], groups: string[]) => key("x", { appliesTo: { sessions, groups } });
+    expect(appliesTo(only(["s1"], []), s)).toBe(true);
+    expect(appliesTo(only([], ["Prod"]), s)).toBe(true);
+    expect(appliesTo(only([], ["Prod>Web"]), s)).toBe(true);
+    expect(appliesTo(only([], ["Pro"]), s)).toBe(false);
+    expect(appliesTo(only([], ["Prod>Web>Old"]), s)).toBe(false);
+    expect(appliesTo(only([], []), s)).toBe(false);
+    expect(appliesTo(key("x", { appliesTo: null }), s)).toBe(true);
+    // A session's own pick can't bring back a OneKey not offered in it.
+    expect(onekeysFor([only(["other"], [])], { ...s, onekeys: ["x"] })).toEqual([]);
+    expect(inGroup("A>B", "A")).toBe(true);
+    expect(inGroup("AB", "A")).toBe(false);
+    expect(inGroup("A", "")).toBe(false);
   });
 
   it("are ranked by recent use, then the session's user, then name", () => {

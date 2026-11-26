@@ -39,10 +39,22 @@ pub struct Credential {
     pub onekey: bool,
     #[serde(default)]
     pub expect: OnekeyExpect,
+    /// Where the OneKey is offered; None: in every session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applies_to: Option<OnekeyTargets>,
 }
 
 fn yes() -> bool {
     true
+}
+
+/// The sessions a OneKey is offered in: these sessions, and every session in these groups
+/// (`A>B` also covers `A>B>C`). Matched by the frontend. Empty: none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OnekeyTargets {
+    pub sessions: Vec<String>,
+    pub groups: Vec<String>,
 }
 
 /// A prompt rule: the pane's text before the cursor must end with a match.
@@ -93,6 +105,7 @@ pub struct CredentialSummary {
     login: bool,
     onekey: bool,
     expect: OnekeyExpect,
+    applies_to: Option<OnekeyTargets>,
     /// Sessions using it (themselves, their jump host, or their OneKey list).
     used_by: usize,
 }
@@ -112,6 +125,7 @@ impl CredentialSummary {
             login: c.login,
             onekey: c.onekey,
             expect: c.expect.clone(),
+            applies_to: c.applies_to.clone(),
             used_by: sessions
                 .iter()
                 .filter(|s| {
@@ -147,6 +161,8 @@ pub struct CredentialInput {
     onekey: bool,
     #[serde(default)]
     expect: OnekeyExpect,
+    #[serde(default)]
+    applies_to: Option<OnekeyTargets>,
 }
 
 /// Ids of the OneKeys a session is limited to (frontend field `onekeys`, kept in `extra`).
@@ -200,6 +216,7 @@ fn upsert(list: &mut Vec<Credential>, input: CredentialInput) -> Result<String, 
         login: input.login,
         onekey: input.onekey,
         expect: input.expect,
+        applies_to: if input.onekey { input.applies_to } else { None },
     };
     // Only the secrets of the chosen kind are kept.
     if next.auth_type == AuthType::PrivateKey {
@@ -331,9 +348,30 @@ fn update_sessions(sessions: &mut [SessionConfig], id: &str, credential: Option<
     changed
 }
 
-fn follow(storage: &Storage, id: &str, credential: Option<&Credential>) -> Result<bool, String> {
+/// Sessions newly picked in a OneKey's "offered in" list: one that is limited to some
+/// OneKeys gets this one added to its list, so picking it there makes it show up.
+fn bind_sessions(sessions: &mut [SessionConfig], id: &str, added: &[String]) -> bool {
+    let mut changed = false;
+    for s in sessions.iter_mut().filter(|s| added.contains(&s.id)) {
+        if let Some(Value::Array(ids)) = s.extra.get_mut("onekeys") {
+            if !ids.iter().any(|v| v.as_str() == Some(id)) {
+                ids.push(Value::from(id));
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// Session ids in `next`'s targets that `before` did not have.
+fn added_sessions(before: Option<&OnekeyTargets>, next: Option<&OnekeyTargets>) -> Vec<String> {
+    let Some(next) = next else { return Vec::new() };
+    next.sessions.iter().filter(|id| !before.is_some_and(|b| b.sessions.contains(id))).cloned().collect()
+}
+
+fn follow(storage: &Storage, id: &str, credential: Option<&Credential>, added: &[String]) -> Result<bool, String> {
     let mut sessions = storage.load_sessions().map_err(|e| e.to_string())?;
-    let changed = update_sessions(&mut sessions, id, credential);
+    let changed = update_sessions(&mut sessions, id, credential) | bind_sessions(&mut sessions, id, added);
     if changed {
         storage.save_sessions(&sessions).map_err(|e| e.to_string())?;
     }
@@ -402,9 +440,12 @@ pub fn save_credential(app: AppHandle, ctx: State<'_, crate::AppContext>, creden
     let (id, changed) = {
         let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
         let mut list = storage.load_credentials().map_err(|e| e.to_string())?;
+        let before = credential.id.as_ref().and_then(|id| list.iter().find(|c| &c.id == id)).and_then(|c| c.applies_to.clone());
         let id = upsert(&mut list, credential)?;
         storage.save_credentials(&list).map_err(|e| e.to_string())?;
-        let changed = follow(&storage, &id, list.iter().find(|c| c.id == id))?;
+        let saved = list.iter().find(|c| c.id == id);
+        let added = added_sessions(before.as_ref(), saved.and_then(|c| c.applies_to.as_ref()));
+        let changed = follow(&storage, &id, saved, &added)?;
         (id, changed)
     };
     notify(&app, changed);
@@ -417,7 +458,7 @@ pub fn delete_credential(app: AppHandle, ctx: State<'_, crate::AppContext>, id: 
     let changed = {
         let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
         let mut list = storage.load_credentials().map_err(|e| e.to_string())?;
-        let changed = follow(&storage, &id, None)?;
+        let changed = follow(&storage, &id, None, &[])?;
         list.retain(|c| c.id != id);
         storage.save_credentials(&list).map_err(|e| e.to_string())?;
         changed
@@ -566,6 +607,41 @@ mod tests {
         assert!(!update_sessions(&mut list, "p", Some(&store[0])));
         assert!(update_sessions(&mut list, "p", None));
         assert_eq!(list[0].extra["onekeys"], json!(["k"]));
+    }
+
+    #[test]
+    fn onekeys_keep_where_they_are_offered() {
+        let mut list = store();
+        let targets = json!({"sessions": ["s1"], "groups": ["Prod"]});
+        let id = upsert(&mut list, input(json!({"name": "o", "authType": "password", "password": "x", "onekey": true, "appliesTo": targets}))).unwrap();
+        let saved = list.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(saved.applies_to.as_ref().unwrap().groups, vec!["Prod".to_string()]);
+        assert!(serde_json::to_string(&CredentialSummary::new(saved, &[])).unwrap().contains("\"appliesTo\":{\"sessions\":[\"s1\"]"));
+        // Not a OneKey: nothing to offer anywhere. Older ones: offered everywhere.
+        let id = upsert(&mut list, input(json!({"name": "l", "authType": "password", "password": "x", "appliesTo": targets}))).unwrap();
+        assert!(list.iter().find(|c| c.id == id).unwrap().applies_to.is_none());
+        assert!(store()[0].applies_to.is_none());
+        assert!(!serde_json::to_string(&store()[0]).unwrap().contains("appliesTo"));
+    }
+
+    #[test]
+    fn sessions_picked_for_a_onekey_include_it_in_their_own_list() {
+        let t = |ids: &[&str]| OnekeyTargets { sessions: ids.iter().map(|s| s.to_string()).collect(), groups: vec![] };
+        assert_eq!(added_sessions(Some(&t(&["a"])), Some(&t(&["a", "b"]))), vec!["b".to_string()]);
+        assert_eq!(added_sessions(None, Some(&t(&["a"]))), vec!["a".to_string()]);
+        assert!(added_sessions(Some(&t(&["a"])), None).is_empty());
+
+        let mut list = vec![
+            session(json!({"id": "a", "onekeys": ["x"]})),
+            session(json!({"id": "b"})),
+            session(json!({"id": "c", "onekeys": ["k"]})),
+        ];
+        assert!(bind_sessions(&mut list, "k", &["a".into(), "b".into(), "c".into()]));
+        assert_eq!(list[0].extra["onekeys"], json!(["x", "k"]));
+        // Offered all OneKeys already / already listed: unchanged.
+        assert!(list[1].extra.get("onekeys").is_none());
+        assert_eq!(list[2].extra["onekeys"], json!(["k"]));
+        assert!(!bind_sessions(&mut list, "k", &["a".into()]));
     }
 
     #[test]

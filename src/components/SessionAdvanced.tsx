@@ -16,7 +16,7 @@ import {
   isDesktopProtocol,
 } from "../types/domain";
 import { TAB_COLORS } from "./TerminalPane";
-import { useCredentials } from "../services/credentials";
+import { SessionOnekeyChoice } from "./OnekeyPickers";
 
 export interface AdvancedState {
   proxy: ProxyConfig;
@@ -27,8 +27,8 @@ export interface AdvancedState {
   skipHostKeyCheck: boolean;
   termOptions: TerminalOptions;
   tabColor: string | null;
-  /** OneKeys offered in this session ([] = all). */
-  onekeys: string[];
+  /** The only OneKeys offered in this session (null: all that apply to it). */
+  onekeys: string[] | null;
 }
 
 export function initialAdvanced(s?: Partial<{
@@ -40,7 +40,7 @@ export function initialAdvanced(s?: Partial<{
   skipHostKeyCheck: boolean;
   termOptions: TerminalOptions;
   tabColor: string | null;
-  onekeys: string[];
+  onekeys: string[] | null;
 }> | null): AdvancedState {
   return {
     proxy: s?.proxy ?? { kind: "none", host: "", port: 1080 },
@@ -51,7 +51,7 @@ export function initialAdvanced(s?: Partial<{
     skipHostKeyCheck: s?.skipHostKeyCheck ?? false,
     termOptions: { ...DEFAULT_TERMINAL_OPTIONS, ...(s?.termOptions ?? {}) },
     tabColor: s?.tabColor ?? null,
-    onekeys: s?.onekeys ?? [],
+    onekeys: s?.onekeys ?? null,
   };
 }
 
@@ -75,7 +75,7 @@ export function advancedToSession(a: AdvancedState, protocol: ProtocolType) {
     skipHostKeyCheck: protocol === "ssh" ? a.skipHostKeyCheck : false,
     termOptions: a.termOptions,
     tabColor: a.tabColor,
-    onekeys: isDesktopProtocol(protocol) || !a.onekeys.length ? undefined : a.onekeys,
+    onekeys: isDesktopProtocol(protocol) || !a.onekeys ? undefined : a.onekeys,
   };
 }
 
@@ -85,7 +85,9 @@ export const SessionAdvanced: React.FC<{
   protocol: ProtocolType;
   value: AdvancedState;
   onChange: (next: AdvancedState) => void;
-}> = ({ protocol, value: v, onChange }) => {
+  /** The session being edited (which OneKeys are offered in it). */
+  session?: { id: string; group: string };
+}> = ({ protocol, value: v, onChange, session }) => {
   const { t } = useTranslation();
   const [section, setSection] = useState<Section>("connection");
   const [charsets, setCharsets] = useState<string[]>([]);
@@ -472,46 +474,15 @@ export const SessionAdvanced: React.FC<{
               ))}
             </div>
           </div>
-          {!isDesktopProtocol(protocol) && <OnekeyScope value={v.onekeys} onChange={(onekeys) => set({ onekeys })} />}
+          {!isDesktopProtocol(protocol) && (
+            <div className="field">
+              <span>{t("onekey.scope")}</span>
+              <SessionOnekeyChoice sessions={[session ?? { id: "", group: "" }]} value={v.onekeys} onChange={(onekeys) => set({ onekeys })} />
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 };
 
-/** Which OneKeys this session offers at its prompts: all of them, or the ones picked here. */
-const OnekeyScope: React.FC<{ value: string[]; onChange: (ids: string[]) => void }> = ({ value, onChange }) => {
-  const { t } = useTranslation();
-  const { list } = useCredentials();
-  const keys = list.filter((c) => c.onekey).sort((a, b) => a.name.localeCompare(b.name, "zh"));
-  const limited = value.length > 0;
-  // Picked before "only these" has any id: keep the choice open while nothing is ticked.
-  const [only, setOnly] = useState(limited);
-  const toggle = (id: string, on: boolean) => onChange(on ? [...value, id] : value.filter((x) => x !== id));
-  return (
-    <div className="field">
-      <span>{t("onekey.scope")}</span>
-      <div className="onekey-usage">
-        <label className="checkbox-row">
-          <input type="radio" checked={!only} onChange={() => (setOnly(false), onChange([]))} />
-          <span>{t("onekey.scopeAll")}</span>
-        </label>
-        <label className="checkbox-row">
-          <input type="radio" checked={only} disabled={!keys.length} onChange={() => setOnly(true)} />
-          <span>{t("onekey.scopeOnly")}</span>
-        </label>
-      </div>
-      {only && (
-        <div className="onekey-usage">
-          {keys.map((c) => (
-            <label key={c.id} className="checkbox-row">
-              <input type="checkbox" checked={value.includes(c.id)} onChange={(e) => toggle(c.id, e.target.checked)} />
-              <span>{c.username ? `${c.name} (${c.username})` : c.name}</span>
-            </label>
-          ))}
-        </div>
-      )}
-      <p className="adv-hint">{t(keys.length ? (only && !limited ? "onekey.scopeNone" : "onekey.scopeHint") : "onekey.scopeEmpty")}</p>
-    </div>
-  );
-};

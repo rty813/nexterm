@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { Eye, EyeOff, FolderOpen, Keyboard, KeyRound, Plus, Trash2, X } from "lucide-react";
 import { backend } from "../services/backend";
 import { useCredentials } from "../services/credentials";
-import type { CredentialInput, CredentialSummary, Expect, OnekeyExpect } from "../types/domain";
+import type { CredentialInput, CredentialSummary, Expect, OnekeyExpect, OnekeyTargets, SessionConfig } from "../types/domain";
+import { coveredSessions, SessionTargetPicker } from "./OnekeyPickers";
 import { compileExpect, DEFAULT_EXPECT, freeName } from "../utils/onekey";
 import { useCloseGuard } from "./useCloseGuard";
 
@@ -19,9 +20,11 @@ interface Draft {
   login: boolean;
   onekey: boolean;
   expect: OnekeyExpect;
+  /** Sessions the OneKey is offered in (null: all). */
+  appliesTo: OnekeyTargets | null;
 }
 
-const EMPTY: Draft = { name: "", username: "", authType: "password", privateKeyPath: "", login: true, onekey: false, expect: DEFAULT_EXPECT };
+const EMPTY: Draft = { name: "", username: "", authType: "password", privateKeyPath: "", login: true, onekey: false, expect: DEFAULT_EXPECT, appliesTo: null };
 const EMPTY_ONEKEY: Draft = { ...EMPTY, login: false, onekey: true };
 
 const draftOf = (c: CredentialSummary): Draft => ({
@@ -33,6 +36,7 @@ const draftOf = (c: CredentialSummary): Draft => ({
   login: c.login !== false,
   onekey: Boolean(c.onekey),
   expect: c.expect ?? DEFAULT_EXPECT,
+  appliesTo: c.appliesTo ?? null,
 });
 
 /** One Expect rule: the pattern and its regex / case / whole word switches (WindTerm OneKeys). */
@@ -75,9 +79,11 @@ export const CredentialManager: React.FC<{
   onClose: () => void;
   /** Start on a new OneKey (from a terminal prompt): its suggested name. */
   newOnekey?: { name: string };
+  /** Saved sessions, to pick where a OneKey is offered. */
+  sessions?: SessionConfig[];
   /** A new credential was saved (its id and whether it is a OneKey). */
   onCreated?: (id: string, onekey: boolean) => void;
-}> = ({ onClose, newOnekey, onCreated }) => {
+}> = ({ onClose, newOnekey, onCreated, sessions = [] }) => {
   const { t } = useTranslation();
   const { list, loaded, error: loadError } = useCredentials();
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -154,6 +160,7 @@ export const CredentialManager: React.FC<{
       login: draft.login,
       onekey: draft.onekey,
       expect: draft.expect,
+      appliesTo: draft.onekey ? draft.appliesTo : null,
     };
     setBusy(true);
     try {
@@ -338,6 +345,28 @@ export const CredentialManager: React.FC<{
                   <button type="button" className="btn-ghost btn-sm onekey-reset" onClick={() => patch({ expect: DEFAULT_EXPECT })}>
                     {t("onekey.resetRules")}
                   </button>
+                  <fieldset className="onekey-box">
+                    <legend>{t("onekey.appliesTo")}</legend>
+                    <div className="onekey-usage">
+                      <label className="checkbox-row">
+                        <input type="radio" checked={!draft.appliesTo} onChange={() => patch({ appliesTo: null })} />
+                        <span>{t("onekey.appliesAll")}</span>
+                      </label>
+                      <label className="checkbox-row">
+                        <input type="radio" checked={Boolean(draft.appliesTo)} onChange={() => patch({ appliesTo: draft.appliesTo ?? { sessions: [], groups: [] } })} />
+                        <span>{t("onekey.appliesOnly")}</span>
+                      </label>
+                    </div>
+                    {draft.appliesTo && (
+                      <>
+                        <SessionTargetPicker sessions={sessions} value={draft.appliesTo} onChange={(appliesTo) => patch({ appliesTo })} />
+                        {!coveredSessions(sessions, draft.appliesTo).length && draft.appliesTo.groups.length === 0 && (
+                          <p className="adv-hint sync-warn">{t("onekey.appliesNone")}</p>
+                        )}
+                      </>
+                    )}
+                    <p className="adv-hint">{t("onekey.appliesHint")}</p>
+                  </fieldset>
                   <p className="adv-hint">{t(draft.login ? "onekey.hintBoth" : "onekey.hint")}</p>
                 </>
               ) : (
