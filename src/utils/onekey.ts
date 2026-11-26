@@ -79,6 +79,37 @@ export function matchPrompt(beforeCursor: string, keys: CompiledOnekey[]): Oneke
   return out;
 }
 
+const DEFAULT_RULES: Record<AutofillField, RegExp | null> = {
+  username: compileExpect(DEFAULT_EXPECT.username).re,
+  password: compileExpect(DEFAULT_EXPECT.password).re,
+};
+
+/**
+ * Whether the text before the cursor is a login prompt at all, matched or not: the default
+ * rules or any OneKey's own (values aside). Such a prompt with no OneKey to send gets a list
+ * that only offers adding one.
+ */
+export function promptField(beforeCursor: string, keys: CompiledOnekey[]): AutofillField | null {
+  if (!beforeCursor.trim()) return null;
+  for (const rules of [...keys.map((k) => k.rules), DEFAULT_RULES]) {
+    for (const field of ["password", "username"] as const) {
+      if (rules[field]?.test(beforeCursor)) return field;
+    }
+  }
+  return null;
+}
+
+/** A free name for a new OneKey: `base`, else `base (2)`, `base (3)` ... (names are unique, any case). */
+export function freeName(base: string, taken: string[]): string {
+  const used = new Set(taken.map((n) => n.trim().toLowerCase()));
+  const name = base.trim() || "OneKey";
+  if (!used.has(name.toLowerCase())) return name;
+  for (let i = 2; ; i++) {
+    const next = `${name} (${i})`;
+    if (!used.has(next.toLowerCase())) return next;
+  }
+}
+
 /** Every value of the OneKeys, for the list opened by hand. */
 export function manualItems(keys: CompiledOnekey[]): OnekeyMatch[] {
   return keys.flatMap((key) => (["username", "password"] as const).filter((f) => hasValue(key, f)).map((field) => ({ key, field })));

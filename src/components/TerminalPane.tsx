@@ -160,6 +160,8 @@ export interface PaneExtras {
   onToggleLock: (paneId: string) => void;
   /** Short message at the bottom of the window. */
   onToast: (message: string) => void;
+  /** Open the credential manager on a new OneKey for this pane (`field`: what its prompt asked for). */
+  onAddOnekey: (paneId: string, field: AutofillField | null) => void;
   /** Register the pane's xterm for app-level shortcuts (copy / find / ...). */
   registerTerminal: (paneId: string, api: PaneApi | null) => void;
   /** Background-tab marks: new output, bell. */
@@ -442,7 +444,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   });
   const openOnekeyRef = useRef(() => {
     xtermRef.current?.focus();
-    if (!featuresRef.current?.openOnekey()) extrasRef.current.onToast(t("onekey.none"));
+    featuresRef.current?.openOnekey();
   });
   /** Saved login picked in the SSH login form instead of typing a password ("" = type it). */
   const [loginCredential, setLoginCredential] = useState("");
@@ -640,6 +642,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         onOnekey: setOnekeyPopup,
         onOnekeySent: setOnekeySent,
         fillOnekey: (id, field) => fillOnekeyRef.current(id, field),
+        onAddOnekey: (field) => extrasRef.current.onAddOnekey(leaf.paneId, field),
         fold: {
           exportStamps: () => timestampsRef.current?.exportStamps() ?? [],
           importStamps: (list, cursorLine) => timestampsRef.current?.importStamps(list, cursorLine),
@@ -1563,7 +1566,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         {
           label: t("onekey.menu"),
           shortcut: k["terminal.onekey"],
-          disabled: !connected || !onekeysRef.current.length,
+          disabled: !connected,
           onClick: () => openOnekeyRef.current(),
         },
         { type: "separator" },

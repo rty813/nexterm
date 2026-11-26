@@ -5,10 +5,12 @@ import {
   REPEAT_WINDOW_MS,
   compileExpect,
   compileOnekeys,
+  freeName,
   decideAction,
   manualItems,
   matchPrompt,
   onekeysFor,
+  promptField,
   rankMatches,
 } from "../utils/onekey";
 
@@ -125,4 +127,26 @@ it("has the same strings in both languages", async () => {
   const keys = (o: object, prefix = ""): string[] =>
     Object.entries(o).flatMap(([k, v]) => (typeof v === "object" ? keys(v as object, `${prefix}${k}/`) : [`${prefix}${k}`]));
   expect(keys(onekeyResources["en-US"]).sort()).toEqual(keys(onekeyResources["zh-CN"]).sort());
+});
+
+describe("login prompts without a OneKey to send", () => {
+  it("are recognised with the default rules, or a OneKey's own", () => {
+    expect(promptField("[sudo] password for me: ", [])).toBe("password");
+    expect(promptField("host login: ", [])).toBe("username");
+    expect(promptField("$ ls", [])).toBeNull();
+    // A OneKey with its own rule but no value for it still marks the prompt.
+    const custom = compileOnekeys([{
+      id: "c", name: "c", username: "", authType: "password", hasPassword: false, hasPassphrase: false,
+      login: false, onekey: true, usedBy: 0,
+      expect: { username: { pattern: "账号[:：]", regex: true, caseSensitive: false, wholeWord: false }, password: DEFAULT_EXPECT.password },
+    }]);
+    expect(matchPrompt("请输入账号：", custom)).toEqual([]);
+    expect(promptField("请输入账号：", custom)).toBe("username");
+  });
+
+  it("get a free name for the OneKey added there", () => {
+    expect(freeName("prod", [])).toBe("prod");
+    expect(freeName("prod", ["PROD", "prod (2)"])).toBe("prod (3)");
+    expect(freeName("  ", [])).toBe("OneKey");
+  });
 });

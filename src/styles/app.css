@@ -6495,3 +6495,10 @@ html.ctxmenu-host #root {
   pointer-events: none;
   white-space: nowrap;
 }
+.onekey-popup .onekey-add {
+  color: var(--accent);
+}
+.onekey-popup .ac-item + .onekey-add {
+  margin-top: 3px;
+  border-top: 1px solid var(--border-subtle);
+}
