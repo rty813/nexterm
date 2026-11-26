@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Keyboard } from "lucide-react";
+import { Keyboard, Plus } from "lucide-react";
 import type { OnekeyPopupState, OnekeySentState } from "../utils/terminalFeatures";
 
 /** OneKeys listed at a prompt (WindTerm OneKeys). Like the completion list, it never takes focus. */
@@ -26,7 +26,13 @@ export const OnekeyPopup: React.FC<{ state: OnekeyPopupState; onPick: (index: nu
       }}
     >
       <div className={`ac-head ${state.repeated ? "warn" : ""}`}>
-        {t(state.repeated ? "onekey.repeated" : state.manual ? "onekey.manualTitle" : "onekey.promptTitle")}
+        {t(
+          state.repeated
+            ? "onekey.repeated"
+            : !state.items.length
+            ? state.manual ? "onekey.noneTitle" : state.field === "username" ? "onekey.usernamePrompt" : "onekey.passwordPrompt"
+            : state.manual ? "onekey.manualTitle" : "onekey.promptTitle"
+        )}
       </div>
       {state.items.map((m, i) => (
         <div
@@ -42,7 +48,16 @@ export const OnekeyPopup: React.FC<{ state: OnekeyPopupState; onPick: (index: nu
           {m.key.username && <span className="ac-detail mono">{m.key.username}</span>}
         </div>
       ))}
-      <div className="ac-hint">{t("onekey.hintKeys")}</div>
+      <div
+        role="option"
+        aria-selected={state.selected === state.items.length}
+        className={`ac-item onekey-add ${state.selected === state.items.length ? "selected" : ""}`}
+        onClick={() => onPick(state.items.length)}
+      >
+        <Plus size={12} className="ac-icon" />
+        <span className="ac-label">{t("onekey.addHere")}</span>
+      </div>
+      <div className="ac-hint">{t(state.items.length ? "onekey.hintKeys" : "onekey.hintAdd")}</div>
     </div>
   );
 };

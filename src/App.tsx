@@ -2443,6 +2443,7 @@ export const App: React.FC = () => {
     onAgentHooks: (leaf, install) => void agentHooks(leaf, install),
     agentHookStatus: (leaf, fresh) => agentHookStatus(leaf, fresh),
     onToast: (message) => setToast(message),
+    onAddOnekey: (paneId) => setCredentialsOpen({ paneId, name: findLeaf(wsRef.current.root, paneId)?.session.label ?? "" }),
     syncChannels,
     syncPaused,
     syncPausedPanes,
@@ -2649,7 +2650,18 @@ export const App: React.FC = () => {
   };
 
   const [managerOpen, setManagerOpen] = useState(false);
-  const [credentialsOpen, setCredentialsOpen] = useState(false);
+  /** true: the manager as is; an object: started from a pane's prompt on a new OneKey. */
+  const [credentialsOpen, setCredentialsOpen] = useState<boolean | { paneId: string; name: string }>(false);
+  /** A OneKey added from a pane's prompt: a session limited to some OneKeys gets it too. */
+  const addPaneOnekey = (paneId: string, id: string) => {
+    const session = findLeaf(wsRef.current.root, paneId)?.session;
+    if (!session?.onekeys?.length || session.onekeys.includes(id)) return;
+    const onekeys = [...session.onekeys, id];
+    setWs((prev) => ({ ...prev, root: updateLeaf(prev.root, paneId, (leaf) => ({ ...leaf, session: { ...leaf.session, onekeys } })) }));
+    if (sessionsRef.current.some((s) => s.id === session.id)) {
+      persistSessions(sessionsRef.current.map((s) => (s.id === session.id ? { ...s, onekeys } : s)));
+    }
+  };
   const openSessionManager = () => setManagerOpen(true);
   const closePalette = useCallback((ran: boolean) => {
     setPaletteOpen(false);
@@ -3184,7 +3196,15 @@ export const App: React.FC = () => {
         />
       )}
 
-      {credentialsOpen && <CredentialManager onClose={() => setCredentialsOpen(false)} />}
+      {credentialsOpen && (
+        <CredentialManager
+          onClose={() => setCredentialsOpen(false)}
+          newOnekey={typeof credentialsOpen === "object" ? { name: credentialsOpen.name } : undefined}
+          onCreated={(id, onekey) => {
+            if (onekey && typeof credentialsOpen === "object") addPaneOnekey(credentialsOpen.paneId, id);
+          }}
+        />
+      )}
 
       {managerOpen && (
         <SessionManager

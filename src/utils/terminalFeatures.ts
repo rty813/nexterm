@@ -10,6 +10,7 @@ import {
   manualItems,
   matchPrompt,
   noteRecentOnekey,
+  promptField,
   rankMatches,
   recentOnekeys,
   type AutoSent,
@@ -30,8 +31,12 @@ interface CursorPlace {
 
 /** OneKeys listed at a prompt (or opened by hand). */
 export interface OnekeyPopupState extends CursorPlace {
+  /** What can be sent; the list always ends with an "Add OneKey" row (index items.length). */
   items: OnekeyMatch[];
+  /** -1: nothing picked. */
   selected: number;
+  /** What the prompt asks for (null: opened by hand). */
+  field: AutofillField | null;
   /** Opened by hand: every value of every OneKey, not tied to a prompt. */
   manual: boolean;
   /** The only match was sent automatically moments ago and the prompt came back. */
@@ -92,6 +97,8 @@ export interface FeatureContext {
   onOnekeySent: (s: OnekeySentState | null) => void;
   /** Have the backend type a OneKey's value (and Enter) into this pane. */
   fillOnekey: (id: string, field: AutofillField) => void;
+  /** Open the credential manager on a new OneKey (`field`: what the prompt asked for). */
+  onAddOnekey: (field: AutofillField | null) => void;
   fold: Omit<FoldHost, "onRemap">;
 }
 
@@ -108,8 +115,8 @@ export interface TerminalFeatures extends IDisposable {
   closeSuggestions: () => void;
   /** Send the listed OneKey value at `index`. */
   acceptOnekey: (index: number) => void;
-  /** List every OneKey of the session at the cursor; false when it has none. */
-  openOnekey: () => boolean;
+  /** List every OneKey of the session at the cursor (just "Add OneKey" when it has none). */
+  openOnekey: () => void;
   /** Settings or theme changed. `baseFontSize` = the font size before this pane's zoom. */
   update: (baseFontSize: number) => void;
   /** Whole buffer as plain text (wrapped rows joined). */
@@ -369,11 +376,13 @@ export function installTerminalFeatures(
     };
   };
 
-  const showOnekey = (items: OnekeyMatch[], line: string, manual: boolean, repeated: boolean) => {
-    const place = placeAtCursor(Math.min(items.length, 8));
+  const showOnekey = (items: OnekeyMatch[], line: string, manual: boolean, repeated: boolean, field: AutofillField | null) => {
+    // One more row: "Add OneKey" at the bottom.
+    const place = placeAtCursor(Math.min(items.length, 8) + 1);
     if (!place) return;
     closeSuggestions();
-    onekey = { ...place, items, selected: 0, manual, repeated };
+    // With nothing to send, nothing is picked: Enter still answers the prompt as usual.
+    onekey = { ...place, items, selected: items.length ? 0 : -1, manual, repeated, field };
     onekeyLine = line;
     emitOnekey();
   };
@@ -397,8 +406,17 @@ export function installTerminalFeatures(
     if (onekey && !onekey.manual && onekeyLine !== prompt?.id) closeOnekey();
     const cfg = onekeyOf(ctx.settings());
     if (!cfg.enabled || !prompt || prompt.id === handledLine || document.activeElement !== term.textarea) return;
-    const matches = matchPrompt(prompt.text, ctx.onekeys());
-    if (!matches.length) return;
+    const keys = ctx.onekeys();
+    const matches = matchPrompt(prompt.text, keys);
+    if (!matches.length) {
+      // A login prompt with no OneKey to send: offer adding one.
+      const field = promptField(prompt.text, keys);
+      if (field) {
+        handledLine = prompt.id;
+        showOnekey([], prompt.id, false, false, field);
+      }
+      return;
+    }
     handledLine = prompt.id;
     const items = ranked(matches);
     const action = decideAction(items, cfg.autoSend, lastAuto, Date.now());
@@ -406,22 +424,26 @@ export function installTerminalFeatures(
       lastAuto = { id: items[0].key.id, field: items[0].field, at: Date.now() };
       sendOnekey(items[0], true);
     } else if (action !== "none") {
-      showOnekey(items, prompt.id, false, action === "repeat");
+      showOnekey(items, prompt.id, false, action === "repeat", items[0].field);
     }
   };
 
+  /** `index` = items.length: the "Add OneKey" row. */
   const acceptOnekey = (index: number) => {
-    const item = onekey?.items[index];
-    if (!item) return;
-    sendOnekey(item, false);
-    term.focus();
+    if (!onekey) return;
+    const item = onekey.items[index];
+    if (item) {
+      sendOnekey(item, false);
+      term.focus();
+    } else if (index === onekey.items.length) {
+      const field = onekey.field;
+      closeOnekey();
+      ctx.onAddOnekey(field);
+    }
   };
 
-  const openOnekey = (): boolean => {
-    const items = ranked(manualItems(ctx.onekeys()));
-    if (!items.length) return false;
-    showOnekey(items, promptLine()?.id ?? "", true, false);
-    return true;
+  const openOnekey = () => {
+    showOnekey(ranked(manualItems(ctx.onekeys())), promptLine()?.id ?? "", true, false, null);
   };
 
   subs.push(
@@ -451,21 +473,26 @@ export function installTerminalFeatures(
     if (ev.type !== "keydown") return true;
 
     const plain = !ev.ctrlKey && !ev.altKey && !ev.metaKey;
-    // OneKey list: arrows pick, Enter / Tab send, Esc closes; anything else is typed as usual
-    // (and closes it).
+    // OneKey list: arrows pick (the last row adds a OneKey), Enter / Tab send, Esc closes;
+    // anything else is typed as usual (and closes it).
     if (onekey && plain) {
-      const n = onekey.items.length;
+      const n = onekey.items.length + 1;
       switch (ev.key) {
         case "ArrowDown":
           onekey.selected = (onekey.selected + 1) % n;
           emitOnekey();
           return consume(ev);
         case "ArrowUp":
-          onekey.selected = (onekey.selected - 1 + n) % n;
+          onekey.selected = onekey.selected < 0 ? n - 1 : (onekey.selected - 1 + n) % n;
           emitOnekey();
           return consume(ev);
         case "Tab":
         case "Enter":
+          // Nothing picked (only "Add" on offer): the key answers the prompt as usual.
+          if (onekey.selected < 0) {
+            closeOnekey();
+            return true;
+          }
           acceptOnekey(onekey.selected);
           return consume(ev);
         case "Escape":

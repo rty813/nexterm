@@ -4,7 +4,7 @@ import { Eye, EyeOff, FolderOpen, Keyboard, KeyRound, Plus, Trash2, X } from "lu
 import { backend } from "../services/backend";
 import { useCredentials } from "../services/credentials";
 import type { CredentialInput, CredentialSummary, Expect, OnekeyExpect } from "../types/domain";
-import { compileExpect, DEFAULT_EXPECT } from "../utils/onekey";
+import { compileExpect, DEFAULT_EXPECT, freeName } from "../utils/onekey";
 import { useCloseGuard } from "./useCloseGuard";
 
 interface Draft {
@@ -71,7 +71,13 @@ const ExpectRow: React.FC<{ value: Expect; onChange: (next: Expect) => void }> =
  * Saved logins that sessions refer to, and OneKeys offered at prompts in the terminal (one
  * credential can be both). Secrets are write-only here: the backend never sends them back.
  */
-export const CredentialManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+export const CredentialManager: React.FC<{
+  onClose: () => void;
+  /** Start on a new OneKey (from a terminal prompt): its suggested name. */
+  newOnekey?: { name: string };
+  /** A new credential was saved (its id and whether it is a OneKey). */
+  onCreated?: (id: string, onekey: boolean) => void;
+}> = ({ onClose, newOnekey, onCreated }) => {
   const { t } = useTranslation();
   const { list, loaded, error: loadError } = useCredentials();
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -99,7 +105,14 @@ export const CredentialManager: React.FC<{ onClose: () => void }> = ({ onClose }
   useEffect(() => {
     if (!loaded || started.current) return;
     started.current = true;
-    if (list.length) show(draftOf(list[0]));
+    if (newOnekey) {
+      show({ ...EMPTY_ONEKEY, name: freeName(newOnekey.name, list.map((c) => c.name)) });
+      // The secret is what is missing: focus it.
+      requestAnimationFrame(() => document.querySelector<HTMLInputElement>("#credential-form input[type=password]")?.focus());
+    } else if (list.length) {
+      show(draftOf(list[0]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, list]);
 
   const saved = draft?.id ? list.find((c) => c.id === draft.id) : undefined;
@@ -145,6 +158,7 @@ export const CredentialManager: React.FC<{ onClose: () => void }> = ({ onClose }
     setBusy(true);
     try {
       const id = await backend.saveCredential(input);
+      if (!draft.id) onCreated?.(id, draft.onekey);
       // The typed secrets are not kept in the page.
       show({
         ...draft,
