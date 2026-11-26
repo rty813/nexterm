@@ -108,6 +108,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     "st.acNames",
     "st.acOptions",
     "st.acQuick",
+    "onekey.settingsTitle",
+    "onekey.settingsOn",
+    "onekey.settingsAutoSend",
   ]),
   ...entries("mouse", [
     "mouse.terminal",

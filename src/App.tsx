@@ -1711,6 +1711,9 @@ export const App: React.FC = () => {
       case "terminal.unfoldAll":
         api?.unfoldAll();
         return Boolean(api);
+      case "terminal.onekey":
+        api?.onekey();
+        return Boolean(api);
       case "terminal.pauseLog":
         if (leaf && logPaths[leaf.paneId]) paneExtrasRef.current.onPauseLog(leaf.paneId, !pausedLogs[leaf.paneId]);
         return Boolean(leaf);

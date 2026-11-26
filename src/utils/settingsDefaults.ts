@@ -4,6 +4,7 @@ import type {
   HistorySettings,
   ModemSettings,
   MouseSettings,
+  OnekeySettings,
   RemoteSettings,
   SyncCategory,
   SyncSettings,
@@ -149,4 +150,10 @@ export function syncOf(s: AppSettings): SyncSettings {
 
 export function xserverOf(s: AppSettings): XServerSettings {
   return { ...DEFAULT_XSERVER, ...(s.xserver ?? {}) };
+}
+
+export const DEFAULT_ONEKEY: OnekeySettings = { enabled: true, autoSend: false };
+
+export function onekeyOf(s: AppSettings): OnekeySettings {
+  return { ...DEFAULT_ONEKEY, ...(s.onekey ?? {}) };
 }

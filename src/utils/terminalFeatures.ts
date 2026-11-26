@@ -1,14 +1,52 @@
 import type { IDisposable, Terminal } from "@xterm/xterm";
 import type { SerializeAddon } from "@xterm/addon-serialize";
-import type { AppSettings, ClipboardPermission, QuickCommand, TerminalOptions } from "../types/domain";
+import type { AppSettings, AutofillField, ClipboardPermission, QuickCommand, TerminalOptions } from "../types/domain";
 import { metaKeyOf } from "../types/domain";
 import { backend } from "../services/backend";
 import { commandHistory } from "./commandHistory";
-import { InputTracker } from "./inputTracker";
+import { InputTracker, logicalStart } from "./inputTracker";
+import {
+  decideAction,
+  manualItems,
+  matchPrompt,
+  noteRecentOnekey,
+  rankMatches,
+  recentOnekeys,
+  type AutoSent,
+  type CompiledOnekey,
+  type OnekeyMatch,
+} from "./onekey";
 import { OutputFolder, type FoldHost } from "./outputFold";
 import { ScreenOverlay } from "./screenOverlay";
 import { computeCandidates, commandOfInput, loadCatalog, loadOptions, type Candidate, type CatalogEntry, type CommandOption } from "./autoComplete";
-import { autoCompleteOf, historyOf, mouseOf } from "./settingsDefaults";
+import { autoCompleteOf, historyOf, mouseOf, onekeyOf } from "./settingsDefaults";
+
+/** Where a popup goes: under (or above) the cursor row, px inside the pane's terminal mount. */
+interface CursorPlace {
+  left: number;
+  top: number;
+  above: boolean;
+}
+
+/** OneKeys listed at a prompt (or opened by hand). */
+export interface OnekeyPopupState extends CursorPlace {
+  items: OnekeyMatch[];
+  selected: number;
+  /** Opened by hand: every value of every OneKey, not tied to a prompt. */
+  manual: boolean;
+  /** The only match was sent automatically moments ago and the prompt came back. */
+  repeated: boolean;
+}
+
+/** Shown for a moment after a OneKey was sent automatically. */
+export interface OnekeySentState extends CursorPlace {
+  name: string;
+  field: AutofillField;
+}
+
+/** Output must be quiet this long before the line at the cursor is taken as a prompt. */
+const PROMPT_QUIET_MS = 250;
+const SENT_NOTICE_MS = 1500;
 
 export interface SuggestionState {
   items: Candidate[];
@@ -46,6 +84,14 @@ export interface FeatureContext {
   /** Ask about a remote clipboard access. "always": allow for the rest of this session. */
   confirmClipboard: (kind: "read" | "write", preview: string) => Promise<"no" | "once" | "always">;
   onSuggestions: (s: SuggestionState | null) => void;
+  /** The OneKeys this pane's session offers, rules compiled. */
+  onekeys: () => CompiledOnekey[];
+  /** The session's user name (ranks OneKeys with the same one first). */
+  sessionUser: () => string;
+  onOnekey: (s: OnekeyPopupState | null) => void;
+  onOnekeySent: (s: OnekeySentState | null) => void;
+  /** Have the backend type a OneKey's value (and Enter) into this pane. */
+  fillOnekey: (id: string, field: AutofillField) => void;
   fold: Omit<FoldHost, "onRemap">;
 }
 
@@ -60,6 +106,10 @@ export interface TerminalFeatures extends IDisposable {
   appOwnsRightClick: (ev: { shiftKey: boolean }) => boolean;
   acceptSuggestion: (index: number) => void;
   closeSuggestions: () => void;
+  /** Send the listed OneKey value at `index`. */
+  acceptOnekey: (index: number) => void;
+  /** List every OneKey of the session at the cursor; false when it has none. */
+  openOnekey: () => boolean;
   /** Settings or theme changed. `baseFontSize` = the font size before this pane's zoom. */
   update: (baseFontSize: number) => void;
   /** Whole buffer as plain text (wrapped rows joined). */
@@ -260,9 +310,129 @@ export function installTerminalFeatures(
   );
   const onBlur = () => window.setTimeout(() => {
     // Clicking the popup keeps it (it takes no focus).
-    if (document.activeElement !== term.textarea) closeSuggestions();
+    if (document.activeElement !== term.textarea) {
+      closeSuggestions();
+      closeOnekey();
+    }
   }, 120);
   term.textarea?.addEventListener("blur", onBlur);
+
+  // ------------------------------------------------------------ OneKeys
+  // A prompt is the logical line at the cursor once output is quiet, the cursor at its end.
+  // Each prompt line (row + text) is handled once: Esc / a send does not bring it back.
+  let onekey: OnekeyPopupState | null = null;
+  /** Id of the prompt line the list was opened for. */
+  let onekeyLine = "";
+  let promptTimer = 0;
+  let sentTimer = 0;
+  let handledLine = "";
+  let lastAuto: AutoSent | null = null;
+
+  const emitOnekey = () => ctx.onOnekey(onekey ? { ...onekey, items: [...onekey.items] } : null);
+  function closeOnekey() {
+    if (onekey) {
+      onekey = null;
+      emitOnekey();
+    }
+  }
+
+  /** The cursor's logical line up to the cursor, and an id for it (start row + text). */
+  const promptLine = (): { text: string; id: string } | null => {
+    const buf = term.buffer.active;
+    if (buf.type !== "normal") return null;
+    const row = buf.baseY + buf.cursorY;
+    const line = buf.getLine(row);
+    // Typing (or a program) has text right of the cursor: not waiting at a prompt.
+    if (!line || line.translateToString(true, buf.cursorX).trim()) return null;
+    const start = logicalStart(buf, row);
+    let text = "";
+    for (let y = start; y < row; y++) text += buf.getLine(y)?.translateToString(false) ?? "";
+    text += line.translateToString(false, 0, buf.cursorX);
+    return { text, id: `${start}:${text}` };
+  };
+
+  const placeAtCursor = (rows: number): CursorPlace | null => {
+    const screen = term.element?.querySelector(".xterm-screen") as HTMLElement | null;
+    if (!screen) return null;
+    const buf = term.buffer.active;
+    const sr = screen.getBoundingClientRect();
+    const mr = mount.getBoundingClientRect();
+    const cw = sr.width / term.cols;
+    const rh = sr.height / term.rows;
+    const height = rows * 24 + 34;
+    const cursorTop = sr.top - mr.top + buf.cursorY * rh;
+    const above = cursorTop + rh + height > mr.height && cursorTop > height;
+    return {
+      left: Math.max(0, Math.min(sr.left - mr.left + buf.cursorX * cw, mr.width - 320)),
+      top: above ? cursorTop : cursorTop + rh,
+      above,
+    };
+  };
+
+  const showOnekey = (items: OnekeyMatch[], line: string, manual: boolean, repeated: boolean) => {
+    const place = placeAtCursor(Math.min(items.length, 8));
+    if (!place) return;
+    closeSuggestions();
+    onekey = { ...place, items, selected: 0, manual, repeated };
+    onekeyLine = line;
+    emitOnekey();
+  };
+
+  const sendOnekey = (m: OnekeyMatch, auto: boolean) => {
+    ctx.fillOnekey(m.key.id, m.field);
+    noteRecentOnekey(ctx.sessionKey(), m.key.id);
+    closeOnekey();
+    if (!auto) return;
+    const place = placeAtCursor(0);
+    window.clearTimeout(sentTimer);
+    ctx.onOnekeySent(place ? { ...place, name: m.key.name, field: m.field } : null);
+    sentTimer = window.setTimeout(() => ctx.onOnekeySent(null), SENT_NOTICE_MS);
+  };
+
+  const ranked = (items: OnekeyMatch[]) => rankMatches(items, { sessionUser: ctx.sessionUser(), recent: recentOnekeys(ctx.sessionKey()) });
+
+  const checkPrompt = () => {
+    const prompt = promptLine();
+    // The prompt the list was opened for is gone (answered by hand, scrolled on).
+    if (onekey && !onekey.manual && onekeyLine !== prompt?.id) closeOnekey();
+    const cfg = onekeyOf(ctx.settings());
+    if (!cfg.enabled || !prompt || prompt.id === handledLine || document.activeElement !== term.textarea) return;
+    const matches = matchPrompt(prompt.text, ctx.onekeys());
+    if (!matches.length) return;
+    handledLine = prompt.id;
+    const items = ranked(matches);
+    const action = decideAction(items, cfg.autoSend, lastAuto, Date.now());
+    if (action === "send") {
+      lastAuto = { id: items[0].key.id, field: items[0].field, at: Date.now() };
+      sendOnekey(items[0], true);
+    } else if (action !== "none") {
+      showOnekey(items, prompt.id, false, action === "repeat");
+    }
+  };
+
+  const acceptOnekey = (index: number) => {
+    const item = onekey?.items[index];
+    if (!item) return;
+    sendOnekey(item, false);
+    term.focus();
+  };
+
+  const openOnekey = (): boolean => {
+    const items = ranked(manualItems(ctx.onekeys()));
+    if (!items.length) return false;
+    showOnekey(items, promptLine()?.id ?? "", true, false);
+    return true;
+  };
+
+  subs.push(
+    term.onWriteParsed(() => {
+      window.clearTimeout(promptTimer);
+      promptTimer = window.setTimeout(checkPrompt, PROMPT_QUIET_MS);
+    }),
+    // Typing or pasting answers the prompt by hand.
+    term.onData(() => closeOnekey()),
+    term.buffer.onBufferChange(() => closeOnekey())
+  );
 
   // ------------------------------------------------------------ keys
   let altSide: "left" | "right" | null = null;
@@ -280,8 +450,33 @@ export function installTerminalFeatures(
     }
     if (ev.type !== "keydown") return true;
 
-    // Suggestion list navigation.
     const plain = !ev.ctrlKey && !ev.altKey && !ev.metaKey;
+    // OneKey list: arrows pick, Enter / Tab send, Esc closes; anything else is typed as usual
+    // (and closes it).
+    if (onekey && plain) {
+      const n = onekey.items.length;
+      switch (ev.key) {
+        case "ArrowDown":
+          onekey.selected = (onekey.selected + 1) % n;
+          emitOnekey();
+          return consume(ev);
+        case "ArrowUp":
+          onekey.selected = (onekey.selected - 1 + n) % n;
+          emitOnekey();
+          return consume(ev);
+        case "Tab":
+        case "Enter":
+          acceptOnekey(onekey.selected);
+          return consume(ev);
+        case "Escape":
+          closeOnekey();
+          return consume(ev);
+        default:
+          break;
+      }
+    }
+
+    // Suggestion list navigation.
     if (suggestions && plain) {
       const n = suggestions.items.length;
       switch (ev.key) {
@@ -536,6 +731,8 @@ export function installTerminalFeatures(
     appOwnsRightClick: (ev) => tracking() && !ev.shiftKey && mouseOf(ctx.settings()).tracking.rightClick,
     acceptSuggestion,
     closeSuggestions,
+    acceptOnekey,
+    openOnekey,
     update,
     plainText,
     rowAt,
@@ -547,6 +744,8 @@ export function installTerminalFeatures(
     },
     dispose: () => {
       window.clearTimeout(frame);
+      window.clearTimeout(promptTimer);
+      window.clearTimeout(sentTimer);
       term.textarea?.removeEventListener("blur", onBlur);
       mount.removeEventListener("mousedown", onMouseDown, true);
       mount.removeEventListener("mousemove", onMouseMove, true);

@@ -4,9 +4,10 @@ import { credentialsFor, resolveLogin } from "../utils/credentials";
 import { findSavedLogin, hasSavedLogin, loginPatch, rememberPaneLogin, withoutSessionSecrets } from "../utils/paneSession";
 import { missingDesktopCredentials } from "../utils/desktopView";
 import { credentialResources } from "../i18n.credentials";
+import { DEFAULT_EXPECT } from "../utils/onekey";
 
 const cred = (id: string, p: Partial<CredentialSummary> = {}): CredentialSummary => ({
-  id, name: id, username: "ops", authType: "password", hasPassword: true, hasPassphrase: false, usedBy: 0, ...p,
+  id, name: id, username: "ops", authType: "password", hasPassword: true, hasPassphrase: false, login: true, onekey: false, expect: DEFAULT_EXPECT, usedBy: 0, ...p,
 });
 const list = [cred("pw"), cred("key", { authType: "privatekey", username: "git" }), cred("anon", { username: "" })];
 const own = { username: "me", authType: "password" as const };
@@ -17,6 +18,7 @@ describe("credentials in the session form", () => {
     expect(credentialsFor("ssh", list).map((c) => c.id)).toEqual(["anon", "key", "pw"]);
     expect(credentialsFor("rdp", list).map((c) => c.id)).toEqual(["anon", "pw"]);
     expect(credentialsFor("telnet", list)).toEqual([]);
+    expect(credentialsFor("ssh", [...list, cred("sudo", { login: false, onekey: true })]).map((c) => c.id)).toEqual(["anon", "key", "pw"]);
   });
 
   it("applies the picked credential", () => {
@@ -49,6 +51,15 @@ describe("sessions with a credential", () => {
     expect(rememberPaneLogin([withCred], withCred, loginPatch({ password: "x" }))[0]).toMatchObject({ password: "x", credentialId: undefined });
     expect(rememberPaneLogin([withCred], withCred, loginPatch({ username: "u" }))[0]).toMatchObject({ username: "u", credentialId: "pw" });
     expect(loginPatch()).toEqual({});
+  });
+
+  it("a credential picked in the login form replaces the typed password", () => {
+    const typed: SessionConfig = { ...ssh, password: "old" };
+    const next = rememberPaneLogin([typed], typed, loginPatch({ credentialId: "pw", username: "ops" }))[0];
+    expect(next).toMatchObject({ credentialId: "pw", username: "ops", password: undefined });
+    expect(hasSavedLogin(next)).toBe(true);
+    // A credential without a user name keeps the session's.
+    expect(loginPatch({ credentialId: "anon" })).toEqual({ credentialId: "anon", password: undefined });
   });
 
   it("keep the reference (not a secret) in workspace snapshots", () => {

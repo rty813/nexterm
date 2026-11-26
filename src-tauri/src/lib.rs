@@ -2050,6 +2050,7 @@ pub fn run() {
             credentials::list_credentials,
             credentials::save_credential,
             credentials::delete_credential,
+            credentials::autofill_credential,
             plugin_http::plugin_grant,
             plugin_http::plugin_allow_origin,
             plugin_http::plugin_revoke,

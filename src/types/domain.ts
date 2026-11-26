@@ -85,9 +85,31 @@ export interface CredentialSummary {
   privateKeyPath?: string | null;
   hasPassword: boolean;
   hasPassphrase: boolean;
-  /** Sessions using it (themselves or their jump host). */
+  /** Usable as a session login (SSH / RDP / VNC). */
+  login: boolean;
+  /** Usable as a OneKey: sent into a pane when its output shows a matching prompt. */
+  onekey: boolean;
+  expect: OnekeyExpect;
+  /** Sessions using it (themselves, their jump host, or their OneKey list). */
   usedBy: number;
 }
+
+/** A OneKey prompt rule: the text before the cursor must end with a match (Rust `credentials::Expect`). */
+export interface Expect {
+  /** "": never matched automatically. */
+  pattern: string;
+  regex: boolean;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+}
+
+export interface OnekeyExpect {
+  username: Expect;
+  password: Expect;
+}
+
+/** What a OneKey sends into a pane. */
+export type AutofillField = "username" | "password";
 
 /** A secret left out keeps the saved one; "" clears it. */
 export interface CredentialInput {
@@ -98,6 +120,9 @@ export interface CredentialInput {
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
+  login: boolean;
+  onekey: boolean;
+  expect: OnekeyExpect;
 }
 
 export interface SessionConfig {
@@ -147,6 +172,8 @@ export interface SessionConfig {
   termOptions?: TerminalOptions;
   /** Default tab color for this session. */
   tabColor?: string | null;
+  /** OneKeys offered in this session's prompts (credential ids); empty / missing = all of them. */
+  onekeys?: string[];
 }
 
 /** A keyword / pattern painted in one pane's output (TerminalLeafNode.highlightRules). */
@@ -464,6 +491,8 @@ export interface AppSettings {
   history?: HistorySettings;
   /** Auto completion popup (terminal.autoComplete.*). */
   autoComplete?: AutoCompleteSettings;
+  /** OneKeys offered at prompts in the terminal (WindTerm OneKeys). */
+  onekey?: OnekeySettings;
   /** Fold markers beside each command's output. */
   foldMargin?: boolean;
 
@@ -624,6 +653,13 @@ export interface HistorySettings {
   size: number;
   /** Completion and the history panel use the current session's commands only. */
   perSession: boolean;
+}
+
+export interface OnekeySettings {
+  /** List the matching OneKeys when a prompt shows up. */
+  enabled: boolean;
+  /** Send right away when exactly one OneKey matches. */
+  autoSend: boolean;
 }
 
 export interface AutoCompleteSettings {

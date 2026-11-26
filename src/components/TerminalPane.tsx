@@ -77,7 +77,11 @@ import { canInjectShellIntegration, CommandTracker, type RunningCommand } from "
 import { anyInstalled, posixHookCommand, type HookStatus } from "../utils/agentHooks";
 import { TerminalSearch, type SearchOptionsState } from "./TerminalSearch";
 import type { MenuItem } from "./ContextMenu";
-import { installTerminalFeatures, type SuggestionState, type TerminalFeatures } from "../utils/terminalFeatures";
+import { installTerminalFeatures, type OnekeyPopupState, type OnekeySentState, type SuggestionState, type TerminalFeatures } from "../utils/terminalFeatures";
+import { OnekeyPopup, OnekeySentNotice } from "./OnekeyPopup";
+import { useCredentials } from "../services/credentials";
+import { compileOnekeys, onekeysFor } from "../utils/onekey";
+import { credentialsFor } from "../utils/credentials";
 import { modemOf, mouseOf } from "../utils/settingsDefaults";
 import { zmodemDrop } from "../utils/zmodemDrop";
 import { historyKeyOf } from "../utils/commandHistory";
@@ -89,7 +93,7 @@ import { installTriggerLinks } from "../utils/triggerLinks";
 import { runTriggerScript } from "../services/triggerScript";
 import { ambiguousIsWide, WIDE_AMBIGUOUS_VERSION } from "../utils/ambiguousWidth";
 import { registerUnicodeWidths } from "../services/unicodeWidth";
-import type { AdbDeviceInfo, QuickCommand } from "../types/domain";
+import type { AdbDeviceInfo, AutofillField, QuickCommand } from "../types/domain";
 import { adb } from "../services/adb";
 import { adbDeviceLabel } from "../utils/adbSession";
 
@@ -237,11 +241,15 @@ export interface PaneApi {
   unfoldAll: () => void;
   /** Send as if typed (Sender, sync input). */
   sendText: (text: string) => void;
+  /** List the session's OneKeys at the cursor. */
+  onekey: () => void;
 }
 
 export interface ReconnectCredentials {
   username?: string;
   password?: string;
+  /** A saved login credential picked in the login form instead of a password. */
+  credentialId?: string;
   remember?: boolean;
 }
 
@@ -414,6 +422,32 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const serializeRef = useRef<SerializeAddon | null>(null);
   const foldGutterRef = useRef<HTMLDivElement | null>(null);
   const [suggestions, setSuggestions] = useState<SuggestionState | null>(null);
+  // OneKeys: saved user names / passwords offered at prompts (utils/onekey.ts).
+  const { list: credentials } = useCredentials();
+  const [onekeyPopup, setOnekeyPopup] = useState<OnekeyPopupState | null>(null);
+  const [onekeySent, setOnekeySent] = useState<OnekeySentState | null>(null);
+  const compiledOnekeys = useMemo(
+    () => compileOnekeys(onekeysFor(credentials, leaf.session)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [credentials, (leaf.session.onekeys ?? []).join("\n")]
+  );
+  const onekeysRef = useRef(compiledOnekeys);
+  onekeysRef.current = compiledOnekeys;
+  /** The secret goes from the backend's store straight to the connection. */
+  const fillOnekeyRef = useRef((id: string, field: AutofillField) => {
+    backend.autofillCredential(leaf.paneId, id, field).catch((e) => {
+      const code = String(e);
+      extrasRef.current.onToast(code === "ai-locked" ? t("ai.keyboardLocked") : t(`credentials.err.${code}`, { defaultValue: code }));
+    });
+  });
+  const openOnekeyRef = useRef(() => {
+    xtermRef.current?.focus();
+    if (!featuresRef.current?.openOnekey()) extrasRef.current.onToast(t("onekey.none"));
+  });
+  /** Saved login picked in the SSH login form instead of typing a password ("" = type it). */
+  const [loginCredential, setLoginCredential] = useState("");
+  const loginCredentials = credentialsFor("ssh", credentials);
+  const pickedLogin = loginCredentials.find((c) => c.id === loginCredential);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -601,6 +635,11 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
         },
         confirmClipboard: (kind, preview) => extrasRef.current.onClipboardRequest(leaf.paneId, kind, preview),
         onSuggestions: setSuggestions,
+        onekeys: () => onekeysRef.current,
+        sessionUser: () => sessionRef.current.username,
+        onOnekey: setOnekeyPopup,
+        onOnekeySent: setOnekeySent,
+        fillOnekey: (id, field) => fillOnekeyRef.current(id, field),
         fold: {
           exportStamps: () => timestampsRef.current?.exportStamps() ?? [],
           importStamps: (list, cursorLine) => timestampsRef.current?.importStamps(list, cursorLine),
@@ -861,6 +900,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
       foldAll: () => featuresRef.current?.folder.foldAll(),
       unfoldAll: () => featuresRef.current?.folder.unfoldAll(),
       sendText: (text) => onUserInputRef.current(leaf.paneId, text),
+      onekey: () => openOnekeyRef.current(),
     });
     fitAddonRef.current = fitAddon;
 
@@ -1189,6 +1229,16 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
 
   const handlePasswordSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pickedLogin) {
+      setAwaitingPassword(false);
+      // The credential's user name, or the one typed when it has none.
+      onReconnectPane(leaf.paneId, {
+        credentialId: pickedLogin.id,
+        username: pickedLogin.username || usernameInput.trim() || undefined,
+        remember: rememberPwd,
+      });
+      return;
+    }
     if (needsUsername && !usernameInput.trim()) return;
     setAwaitingPassword(false);
     onReconnectPane(leaf.paneId, {
@@ -1510,6 +1560,12 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           onClick: () => extras.onInjectShellIntegration(leaf.paneId),
         },
         tmux && { label: t("menu.tmux"), shortcut: k["terminal.tmux"], onClick: () => extras.onTmux(leaf) },
+        {
+          label: t("onekey.menu"),
+          shortcut: k["terminal.onekey"],
+          disabled: !connected || !onekeysRef.current.length,
+          onClick: () => openOnekeyRef.current(),
+        },
         { type: "separator" },
         {
           label: logPath ? t("menu.stopLog") : t("menu.startLog"),
@@ -1943,7 +1999,22 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
                 {t("pane.sshAuthTitle")} — {targetSummary}
               </span>
             </div>
-            {needsUsername && (
+            {asksPassword && loginCredentials.length > 0 && (
+              <select
+                className="text-input"
+                aria-label={t("credentials.login")}
+                value={pickedLogin ? loginCredential : ""}
+                onChange={(e) => setLoginCredential(e.target.value)}
+              >
+                <option value="">{t("onekey.loginTyped")}</option>
+                {loginCredentials.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.username ? `${c.name} (${c.username})` : c.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {needsUsername && !pickedLogin?.username && (
               <input
                 type="text"
                 autoFocus
@@ -1954,7 +2025,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
                 required
               />
             )}
-            {asksPassword && (
+            {asksPassword && !pickedLogin && (
               <input
                 type="password"
                 autoFocus={!needsUsername}
@@ -2044,6 +2115,10 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
           {suggestions && isActive && (
             <AutoCompletePopup state={suggestions} onPick={(i) => featuresRef.current?.acceptSuggestion(i)} />
           )}
+          {onekeyPopup && isActive && (
+            <OnekeyPopup state={onekeyPopup} onPick={(i) => featuresRef.current?.acceptOnekey(i)} />
+          )}
+          {onekeySent && <OnekeySentNotice state={onekeySent} />}
           {isBinary && interpOpen && (
             <DataInterpreter selection={byteSelection} onClose={() => setInterpOpen(false)} />
           )}

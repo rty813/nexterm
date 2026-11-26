@@ -5,11 +5,11 @@ export function takesCredential(protocol: ProtocolType): boolean {
   return protocol === "ssh" || protocol === "rdp" || protocol === "vnc";
 }
 
-/** The credentials a session of this protocol can use, by name: remote desktops only take passwords. */
+/** The login credentials a session of this protocol can use, by name: remote desktops only take passwords. */
 export function credentialsFor(protocol: ProtocolType, list: CredentialSummary[]): CredentialSummary[] {
   if (!takesCredential(protocol)) return [];
   return list
-    .filter((c) => protocol === "ssh" || c.authType !== "privatekey")
+    .filter((c) => c.login !== false && (protocol === "ssh" || c.authType !== "privatekey"))
     .sort((a, b) => a.name.localeCompare(b.name, "zh"));
 }
 

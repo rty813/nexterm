@@ -268,6 +268,7 @@ export const LogcatPane: React.FC<LogcatPaneProps> = ({ leaf, visible, isActive,
       foldAll: noop,
       unfoldAll: noop,
       sendText: noop,
+      onekey: noop,
     };
     extras.registerTerminal(paneId, api);
     return () => extras.registerTerminal(paneId, null);
