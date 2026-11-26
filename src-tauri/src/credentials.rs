@@ -2,8 +2,14 @@
 //! by id. Stored whole-file encrypted in `credentials.json` (`local_secrets`, like sessions)
 //! and synced with the `sessions` category. Secrets never go to the frontend: it gets
 //! [`CredentialSummary`], and [`apply`] fills them in right before connecting.
+//!
+//! A credential has one or both uses: a session login, and a OneKey (WindTerm's OneKeys): a
+//! user name / password typed into a pane when its output shows a prompt matching the
+//! OneKey's Expect rules (sudo, su, nested ssh, telnet login ...). The frontend matches the
+//! rules; [`autofill_credential`] sends the secret straight to the pane.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::models::{AuthType, ProtocolType, SessionConfig};
@@ -25,6 +31,52 @@ pub struct Credential {
     pub private_key_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passphrase: Option<String>,
+    /// Usable as a session login (older credentials all are).
+    #[serde(default = "yes")]
+    pub login: bool,
+    /// Usable as a OneKey in terminal prompts.
+    #[serde(default)]
+    pub onekey: bool,
+    #[serde(default)]
+    pub expect: OnekeyExpect,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// A prompt rule: the pane's text before the cursor must end with a match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Expect {
+    /// Empty: never matched (the value can still be sent by hand).
+    pub pattern: String,
+    pub regex: bool,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+}
+
+impl Default for Expect {
+    fn default() -> Self {
+        Self { pattern: String::new(), regex: true, case_sensitive: false, whole_word: false }
+    }
+}
+
+/// The OneKey's two rules, defaults as in WindTerm.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OnekeyExpect {
+    pub username: Expect,
+    pub password: Expect,
+}
+
+impl Default for OnekeyExpect {
+    fn default() -> Self {
+        Self {
+            username: Expect { pattern: "username:|login:".into(), ..Expect::default() },
+            password: Expect { pattern: r"Password:|Password for \S+:".into(), ..Expect::default() },
+        }
+    }
 }
 
 /// What the frontend sees: no secrets.
@@ -38,7 +90,10 @@ pub struct CredentialSummary {
     private_key_path: Option<String>,
     has_password: bool,
     has_passphrase: bool,
-    /// Sessions using it (themselves or their jump host).
+    login: bool,
+    onekey: bool,
+    expect: OnekeyExpect,
+    /// Sessions using it (themselves, their jump host, or their OneKey list).
     used_by: usize,
 }
 
@@ -54,9 +109,16 @@ impl CredentialSummary {
             private_key_path: c.private_key_path.clone(),
             has_password: set(&c.password),
             has_passphrase: set(&c.passphrase),
+            login: c.login,
+            onekey: c.onekey,
+            expect: c.expect.clone(),
             used_by: sessions
                 .iter()
-                .filter(|s| uses(&s.credential_id) || s.jump_host.as_ref().is_some_and(|j| uses(&j.credential_id)))
+                .filter(|s| {
+                    uses(&s.credential_id)
+                        || s.jump_host.as_ref().is_some_and(|j| uses(&j.credential_id))
+                        || session_onekeys(s).any(|id| id == c.id)
+                })
                 .count(),
         }
     }
@@ -79,6 +141,17 @@ pub struct CredentialInput {
     private_key_path: Option<String>,
     #[serde(default)]
     passphrase: Option<String>,
+    #[serde(default = "yes")]
+    login: bool,
+    #[serde(default)]
+    onekey: bool,
+    #[serde(default)]
+    expect: OnekeyExpect,
+}
+
+/// Ids of the OneKeys a session is limited to (frontend field `onekeys`, kept in `extra`).
+fn session_onekeys(s: &SessionConfig) -> impl Iterator<Item = &str> {
+    s.extra.get("onekeys").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str)
 }
 
 // Error codes the frontend translates (`credentials.err.<code>`).
@@ -87,6 +160,13 @@ const NAME_TAKEN: &str = "credentialNameTaken";
 const PASSWORD_REQUIRED: &str = "credentialPasswordRequired";
 const KEY_REQUIRED: &str = "credentialKeyRequired";
 const NOT_FOUND: &str = "credentialNotFound";
+const USAGE_REQUIRED: &str = "credentialUsageRequired";
+const ONEKEY_PASSWORD: &str = "credentialOnekeyPassword";
+const ONEKEY_EMPTY: &str = "credentialOnekeyEmpty";
+const NOT_ONEKEY: &str = "credentialNotOnekey";
+const FIELD_EMPTY: &str = "credentialFieldEmpty";
+// Expect rules are JavaScript regular expressions (lookaround, backreferences ...) run by the
+// frontend, which refuses to save one that does not compile: Rust's `regex` can't judge them.
 
 /// Add or update a credential in `list`; returns its id.
 fn upsert(list: &mut Vec<Credential>, input: CredentialInput) -> Result<String, String> {
@@ -101,6 +181,12 @@ fn upsert(list: &mut Vec<Credential>, input: CredentialInput) -> Result<String, 
     if list.iter().enumerate().any(|(i, c)| Some(i) != index && c.name.to_lowercase() == name.to_lowercase()) {
         return Err(NAME_TAKEN.into());
     }
+    if !input.login && !input.onekey {
+        return Err(USAGE_REQUIRED.into());
+    }
+    if input.onekey && input.auth_type == AuthType::PrivateKey {
+        return Err(ONEKEY_PASSWORD.into());
+    }
     let old = index.map(|i| &list[i]);
     let merge = |new: Option<String>, old: Option<String>| new.or(old).filter(|v| !v.is_empty());
     let mut next = Credential {
@@ -111,6 +197,9 @@ fn upsert(list: &mut Vec<Credential>, input: CredentialInput) -> Result<String, 
         password: None,
         private_key_path: None,
         passphrase: None,
+        login: input.login,
+        onekey: input.onekey,
+        expect: input.expect,
     };
     // Only the secrets of the chosen kind are kept.
     if next.auth_type == AuthType::PrivateKey {
@@ -122,8 +211,12 @@ fn upsert(list: &mut Vec<Credential>, input: CredentialInput) -> Result<String, 
     } else {
         next.auth_type = AuthType::Password;
         next.password = merge(input.password, old.and_then(|c| c.password.clone()));
-        if next.password.is_none() {
+        if next.login && next.password.is_none() {
             return Err(PASSWORD_REQUIRED.into());
+        }
+        // A OneKey alone may hold just a password (sudo) or just a user name (login:).
+        if next.password.is_none() && next.username.is_empty() {
+            return Err(ONEKEY_EMPTY.into());
         }
     }
     let id = next.id.clone();
@@ -147,11 +240,11 @@ pub fn needed(session: &SessionConfig) -> bool {
 fn find<'a>(list: &'a [Credential], id: &Option<String>) -> Result<Option<&'a Credential>, String> {
     match id.as_deref().filter(|id| !id.is_empty()) {
         None => Ok(None),
-        Some(id) => list
-            .iter()
-            .find(|c| c.id == id)
-            .map(Some)
-            .ok_or_else(|| "会话使用的凭据不存在（可能已被删除），请在会话设置里重新选择".to_string()),
+        Some(id) => match list.iter().find(|c| c.id == id) {
+            None => Err("会话使用的凭据不存在（可能已被删除），请在会话设置里重新选择".to_string()),
+            Some(c) if !c.login => Err(format!("凭据「{}」不是登录凭据，请在凭据管理器里勾选“会话登录”或重新选择", c.name)),
+            Some(c) => Ok(Some(c)),
+        },
     }
 }
 
@@ -227,6 +320,13 @@ fn update_sessions(sessions: &mut [SessionConfig], id: &str, credential: Option<
                 None => changed |= j.credential_id.take().is_some(),
             }
         }
+        if credential.is_none() {
+            if let Some(Value::Array(ids)) = s.extra.get_mut("onekeys") {
+                let before = ids.len();
+                ids.retain(|v| v.as_str() != Some(id));
+                changed |= ids.len() != before;
+            }
+        }
     }
     changed
 }
@@ -245,6 +345,47 @@ fn notify(app: &AppHandle, sessions_changed: bool) {
     if sessions_changed {
         let _ = app.emit("sessions-changed", ());
     }
+}
+
+/// What a OneKey sends into a pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AutofillField {
+    Username,
+    Password,
+}
+
+fn autofill_value(c: &Credential, field: AutofillField) -> Option<&str> {
+    let value = match field {
+        AutofillField::Username => Some(c.username.as_str()),
+        AutofillField::Password => c.password.as_deref(),
+    };
+    value.filter(|v| !v.is_empty())
+}
+
+/// Type a OneKey's user name or password into a pane, followed by Enter. The secret goes
+/// from the store to the connection: the page never sees it, it is not added to command
+/// history and not broadcast to synced panes.
+#[tauri::command]
+pub fn autofill_credential(
+    ctx: State<'_, crate::AppContext>,
+    instance_id: String,
+    credential_id: String,
+    field: AutofillField,
+) -> Result<(), String> {
+    let line = {
+        let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
+        let list = storage.load_credentials().map_err(|e| e.to_string())?;
+        let c = list.iter().find(|c| c.id == credential_id).ok_or(NOT_FOUND)?;
+        if !c.onekey {
+            return Err(NOT_ONEKEY.into());
+        }
+        format!("{}\r", autofill_value(c, field).ok_or(FIELD_EMPTY)?)
+    };
+    if !crate::mcp::user_write_allowed(&instance_id, line.as_bytes()) {
+        return Err("ai-locked".into());
+    }
+    ctx.connections.write(&instance_id, line.as_bytes()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -379,6 +520,56 @@ mod tests {
         apply(&mut telnet, &store()).unwrap();
         assert_eq!((telnet.username.as_str(), telnet.password.as_deref()), ("ops", Some("pw")));
         assert!(apply(&mut session(json!({"protocol": "telnet", "credentialId": "k"})), &store()).is_err());
+    }
+
+    #[test]
+    fn older_credentials_are_logins_with_default_rules() {
+        let c = &store()[0];
+        assert!(c.login && !c.onekey);
+        assert_eq!(c.expect, OnekeyExpect::default());
+        assert_eq!(c.expect.password.pattern, r"Password:|Password for \S+:");
+        let text = serde_json::to_string(&CredentialSummary::new(c, &[])).unwrap();
+        assert!(text.contains("\"login\":true") && text.contains("\"onekey\":false") && !text.contains("\"pw\""));
+    }
+
+    #[test]
+    fn onekeys_may_hold_only_a_password_or_a_user_name() {
+        let mut list = store();
+        let sudo = upsert(&mut list, input(json!({"name": "sudo", "authType": "password", "password": "s", "login": false, "onekey": true}))).unwrap();
+        let user = upsert(&mut list, input(json!({"name": "tel", "username": "admin", "authType": "password", "login": false, "onekey": true}))).unwrap();
+        let find = |id: &str| list.iter().find(|c| c.id == id).unwrap().clone();
+        assert_eq!(autofill_value(&find(&sudo), AutofillField::Password), Some("s"));
+        assert_eq!(autofill_value(&find(&sudo), AutofillField::Username), None);
+        assert_eq!(autofill_value(&find(&user), AutofillField::Username), Some("admin"));
+        assert_eq!(autofill_value(&find(&user), AutofillField::Password), None);
+
+        let mut err = |v| upsert(&mut list, input(v)).unwrap_err();
+        assert_eq!(err(json!({"name": "a", "authType": "password", "password": "x", "login": false})), USAGE_REQUIRED);
+        assert_eq!(err(json!({"name": "a", "authType": "password", "login": false, "onekey": true})), ONEKEY_EMPTY);
+        assert_eq!(err(json!({"name": "a", "authType": "privatekey", "privateKeyPath": "k", "onekey": true})), ONEKEY_PASSWORD);
+        // JavaScript-only syntax (lookbehind) is kept as given; a rule left out gets its default.
+        upsert(&mut list, input(json!({"name": "b", "authType": "password", "password": "x", "onekey": true,
+            "expect": {"password": {"pattern": "(?<!new )password:", "regex": true}}}))).unwrap();
+        let b = list.last().unwrap();
+        assert_eq!(b.expect.password.pattern, "(?<!new )password:");
+        assert_eq!(b.expect.username, OnekeyExpect::default().username);
+    }
+
+    #[test]
+    fn sessions_cannot_log_in_with_a_onekey_only_credential() {
+        let mut list = store();
+        list[0].login = false;
+        assert!(apply(&mut session(json!({"credentialId": "p"})), &list).is_err());
+    }
+
+    #[test]
+    fn deleting_a_credential_drops_it_from_session_onekey_lists() {
+        let mut list = vec![session(json!({"onekeys": ["p", "k"]}))];
+        let store = store();
+        assert_eq!(CredentialSummary::new(&store[0], &list).used_by, 1);
+        assert!(!update_sessions(&mut list, "p", Some(&store[0])));
+        assert!(update_sessions(&mut list, "p", None));
+        assert_eq!(list[0].extra["onekeys"], json!(["k"]));
     }
 
     #[test]

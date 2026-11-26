@@ -272,6 +272,7 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
       foldAll: noop,
       unfoldAll: noop,
       sendText: typeText,
+      onekey: () => undefined,
     };
     extras.registerTerminal(paneId, api);
     return () => extras.registerTerminal(paneId, null);

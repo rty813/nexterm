@@ -10,8 +10,14 @@ export function hasSavedLogin(session: Pick<SessionConfig, "password" | "credent
   return Boolean(session.credentialId) || hasSavedPassword(session);
 }
 
-/** What a login form changes in the session: a typed password replaces its credential. */
-export function loginPatch(creds?: { username?: string; password?: string }): Partial<Pick<SessionConfig, "username" | "password" | "credentialId">> {
+/**
+ * What a login form changes in the session: a typed password replaces its credential, a picked
+ * credential replaces the password (`username`: the credential's own user name, when it has one).
+ */
+export function loginPatch(creds?: { username?: string; password?: string; credentialId?: string }): Partial<Pick<SessionConfig, "username" | "password" | "credentialId">> {
+  if (creds?.credentialId) {
+    return { ...(creds.username ? { username: creds.username } : {}), credentialId: creds.credentialId, password: undefined };
+  }
   return {
     ...(creds?.username !== undefined ? { username: creds.username } : {}),
     ...(creds?.password !== undefined ? { password: creds.password, credentialId: undefined } : {}),

@@ -20,6 +20,7 @@ import type {
   McpClient,
   McpScreenSnapshot,
   QuickCommand,
+  AutofillField,
   CredentialInput,
   CredentialSummary,
   SessionConfig,
@@ -532,6 +533,12 @@ export const backend = {
 
   async deleteCredential(id: string): Promise<void> {
     await invoke("delete_credential", { id });
+  },
+
+  /** Type a OneKey's user name or password (and Enter) into a pane; the secret never comes to the page. */
+  async autofillCredential(instanceId: string, credentialId: string, field: AutofillField): Promise<void> {
+    if (!isTauriRuntime()) return;
+    await invoke("autofill_credential", { instanceId, credentialId, field });
   },
 
   /** Any window saved or deleted a credential. */

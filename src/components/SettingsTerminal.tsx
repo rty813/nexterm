@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { FolderOpen, Monitor, Play, Square } from "lucide-react";
 import type { AppSettings, ClipboardPermission, MouseSettings, SessionConfig, TabMouseAction } from "../types/domain";
 import { backend, type XServerStatus } from "../services/backend";
-import { autoCompleteOf, historyOf, logRotationOf, modemOf, mouseOf, sftpOf, xserverOf } from "../utils/settingsDefaults";
+import { autoCompleteOf, historyOf, logRotationOf, modemOf, mouseOf, onekeyOf, sftpOf, xserverOf } from "../utils/settingsDefaults";
 import { commandHistory } from "../utils/commandHistory";
 import { confirmAsk } from "../utils/confirm";
 import { StorageLocationSettings } from "./StorageLocation";
@@ -38,6 +38,7 @@ export const TerminalSettings: React.FC<Props & { sessions: SessionConfig[] }> =
   const { t } = useTranslation();
   const history = historyOf(draft);
   const ac = autoCompleteOf(draft);
+  const ok = onekeyOf(draft);
   const set = (patch: Partial<AppSettings>) => onChange({ ...draft, ...patch });
   const setAc = (patch: Partial<typeof ac>) => set({ autoComplete: { ...ac, ...patch } });
   const ids = new Set(draft.startupSessionIds ?? []);
@@ -85,6 +86,13 @@ export const TerminalSettings: React.FC<Props & { sessions: SessionConfig[] }> =
         <Check checked={ac.preselect} disabled={!ac.enabled} onChange={(v) => setAc({ preselect: v })} label={t("st.acPreselect")} />
       </div>
       <p className="adv-hint">{t("st.acHint")}</p>
+
+      <h4 className="section-heading">{t("onekey.settingsTitle")}</h4>
+      <div className="form-grid-2">
+        <Check checked={ok.enabled} onChange={(v) => set({ onekey: { ...ok, enabled: v } })} label={t("onekey.settingsOn")} />
+        <Check checked={ok.autoSend} disabled={!ok.enabled} onChange={(v) => set({ onekey: { ...ok, autoSend: v } })} label={t("onekey.settingsAutoSend")} />
+      </div>
+      <p className="adv-hint">{t("onekey.settingsHint")}</p>
 
       <h4 className="section-heading">{t("st.display")}</h4>
       <div className="form-grid-2">

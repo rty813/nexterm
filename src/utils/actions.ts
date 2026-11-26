@@ -42,6 +42,7 @@ export const ACTIONS: ActionDef[] = [
   { id: "terminal.foldAll", group: "terminal", defaultKey: "Alt+[" },
   { id: "terminal.unfoldAll", group: "terminal", defaultKey: "Alt+]" },
   { id: "terminal.pauseLog", group: "terminal", defaultKey: "" },
+  { id: "terminal.onekey", group: "terminal", defaultKey: "" },
 
   { id: "tab.newShell", group: "tab", defaultKey: "Ctrl+Shift+T" },
   { id: "tab.close", group: "tab", defaultKey: "Ctrl+Shift+W" },
