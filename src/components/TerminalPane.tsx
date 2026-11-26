@@ -431,7 +431,7 @@ const TerminalPaneImpl: React.FC<TerminalPaneProps> = ({
   const compiledOnekeys = useMemo(
     () => compileOnekeys(onekeysFor(credentials, leaf.session)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [credentials, (leaf.session.onekeys ?? []).join("\n")]
+    [credentials, leaf.session.id, leaf.session.group, leaf.session.onekeys ? leaf.session.onekeys.join("\n") : null]
   );
   const onekeysRef = useRef(compiledOnekeys);
   onekeysRef.current = compiledOnekeys;

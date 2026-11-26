@@ -94,6 +94,8 @@ export interface CredentialSummary {
   /** Usable as a OneKey: sent into a pane when its output shows a matching prompt. */
   onekey: boolean;
   expect: OnekeyExpect;
+  /** Sessions it is offered in; null / missing = every session. */
+  appliesTo?: OnekeyTargets | null;
   /** Sessions using it (themselves, their jump host, or their OneKey list). */
   usedBy: number;
 }
@@ -105,6 +107,12 @@ export interface Expect {
   regex: boolean;
   caseSensitive: boolean;
   wholeWord: boolean;
+}
+
+/** Where a OneKey is offered: these sessions, and every session in these groups ("A>B" covers "A>B>C"). */
+export interface OnekeyTargets {
+  sessions: string[];
+  groups: string[];
 }
 
 export interface OnekeyExpect {
@@ -127,6 +135,7 @@ export interface CredentialInput {
   login: boolean;
   onekey: boolean;
   expect: OnekeyExpect;
+  appliesTo?: OnekeyTargets | null;
 }
 
 export interface SessionConfig {
@@ -176,7 +185,7 @@ export interface SessionConfig {
   termOptions?: TerminalOptions;
   /** Default tab color for this session. */
   tabColor?: string | null;
-  /** OneKeys offered in this session's prompts (credential ids); empty / missing = all of them. */
+  /** The only OneKeys offered in this session (credential ids); missing = all that apply to it, [] = none. */
   onekeys?: string[];
 }
 

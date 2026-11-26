@@ -40,6 +40,8 @@ interface SessionModalProps {
   initial?: SessionConfig | null;
   /** `initial` only prefills the form of a new session (e.g. from a quick connect address). */
   isNew?: boolean;
+  /** Saved sessions (where OneKeys are offered, in the credential manager). */
+  sessions?: SessionConfig[];
   /** Groups of the saved sessions, offered while typing a group. */
   groups?: string[];
   onClose: () => void;
@@ -73,6 +75,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   initial,
   isNew = false,
   groups = [],
+  sessions = [],
   onClose,
   onSave,
   onConnect,
@@ -892,7 +895,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                 </div>
                 {antiIdleSecs > 0 && <p className="adv-hint field-hint-inline">{t("sessionModal.antiIdleTip")}</p>}
 
-                <SessionAdvanced protocol={protocol} value={advanced} onChange={setAdvanced} />
+                <SessionAdvanced protocol={protocol} value={advanced} onChange={setAdvanced} session={{ id: initial?.id ?? newId, group }} />
 
                 <label className="checkbox-row">
                   <input type="checkbox" checked={autoLog} onChange={(e) => setAutoLog(e.target.checked)} />
@@ -948,7 +951,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       </div>
     </div>
     {/* A sibling, not a child: its form and backdrop must not act on this one. */}
-    {credentialsOpen && <CredentialManager onClose={() => setCredentialsOpen(false)} />}
+    {credentialsOpen && <CredentialManager sessions={sessions} onClose={() => setCredentialsOpen(false)} />}
     </>
   );
 };

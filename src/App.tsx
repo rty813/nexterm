@@ -2655,7 +2655,7 @@ export const App: React.FC = () => {
   /** A OneKey added from a pane's prompt: a session limited to some OneKeys gets it too. */
   const addPaneOnekey = (paneId: string, id: string) => {
     const session = findLeaf(wsRef.current.root, paneId)?.session;
-    if (!session?.onekeys?.length || session.onekeys.includes(id)) return;
+    if (!session || !Array.isArray(session.onekeys) || session.onekeys.includes(id)) return;
     const onekeys = [...session.onekeys, id];
     setWs((prev) => ({ ...prev, root: updateLeaf(prev.root, paneId, (leaf) => ({ ...leaf, session: { ...leaf.session, onekeys } })) }));
     if (sessionsRef.current.some((s) => s.id === session.id)) {
@@ -3122,6 +3122,7 @@ export const App: React.FC = () => {
           key={settingsPane.paneId}
           initial={paneFormSession(settingsPane, sessions.find((session) => session.id === settingsPane.session.id))}
           groups={Array.from(new Set(sessions.map((session) => session.group).filter(Boolean))).sort()}
+          sessions={sessions}
           onClose={() => setSettingsPaneId(null)}
           onSave={() => {}}
           pane={{
@@ -3150,6 +3151,7 @@ export const App: React.FC = () => {
           initial={sessionModalState.editing}
           isNew={sessionModalState.isNew}
           groups={Array.from(new Set(sessions.map((x) => x.group).filter(Boolean))).sort()}
+          sessions={sessions}
           onClose={() => setSessionModalState({ open: false, editing: null })}
           onSave={handleSaveSessionModal}
           onConnect={(session) => {
@@ -3198,6 +3200,7 @@ export const App: React.FC = () => {
 
       {credentialsOpen && (
         <CredentialManager
+          sessions={sessions}
           onClose={() => setCredentialsOpen(false)}
           newOnekey={typeof credentialsOpen === "object" ? { name: credentialsOpen.name } : undefined}
           onCreated={(id, onekey) => {

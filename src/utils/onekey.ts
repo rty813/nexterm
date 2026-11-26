@@ -40,11 +40,39 @@ export function compileExpect(e: Expect): { re: RegExp | null; error: string | n
   return { re: new RegExp(`(?:${built.re.source})\\s*$`, built.re.flags.replace("g", "")), error: null };
 }
 
-/** The OneKeys a session offers: all of them, or the ones it is limited to. */
-export function onekeysFor(list: CredentialSummary[], session: Pick<SessionConfig, "onekeys">): CredentialSummary[] {
-  const keys = list.filter((c) => c.onekey);
-  const only = session.onekeys?.length ? new Set(session.onekeys) : null;
-  return only ? keys.filter((c) => only.has(c.id)) : keys;
+/** A session group path as "A>B" (blanks around the separators dropped). */
+export function normalizeGroup(group: string | undefined): string {
+  return (group || "").split(">").map((part) => part.trim()).filter(Boolean).join(">");
+}
+
+/** Whether a session is in a group or one of its subgroups. */
+export function inGroup(sessionGroup: string | undefined, group: string): boolean {
+  const s = normalizeGroup(sessionGroup);
+  const g = normalizeGroup(group);
+  return Boolean(g) && (s === g || s.startsWith(`${g}>`));
+}
+
+/** The OneKey is offered in this session (its own targets; no targets = every session). */
+export function appliesTo(key: Pick<CredentialSummary, "appliesTo">, session: Pick<SessionConfig, "id" | "group">): boolean {
+  const t = key.appliesTo;
+  if (!t) return true;
+  return t.sessions.includes(session.id) || t.groups.some((g) => inGroup(session.group, g));
+}
+
+/** OneKeys that may be used in this session, before its own choice. */
+export function applicableOnekeys(list: CredentialSummary[], session: Pick<SessionConfig, "id" | "group">): CredentialSummary[] {
+  return list.filter((c) => c.onekey && appliesTo(c, session));
+}
+
+/**
+ * The OneKeys a session offers: those offered in it, all of them or only the ones the session
+ * picked (`onekeys`; [] = none).
+ */
+export function onekeysFor(list: CredentialSummary[], session: Pick<SessionConfig, "id" | "group" | "onekeys">): CredentialSummary[] {
+  const keys = applicableOnekeys(list, session);
+  if (!Array.isArray(session.onekeys)) return keys;
+  const only = new Set(session.onekeys);
+  return keys.filter((c) => only.has(c.id));
 }
 
 export function compileOnekeys(list: CredentialSummary[]): CompiledOnekey[] {

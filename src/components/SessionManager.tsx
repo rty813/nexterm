@@ -7,19 +7,22 @@ import {
   Download,
   Edit2,
   FolderInput,
+  Keyboard,
   Play,
   Plus,
   Search,
   Trash2,
   X,
 } from "lucide-react";
-import type { ProtocolType, SessionConfig } from "../types/domain";
+import { isDesktopProtocol, type ProtocolType, type SessionConfig } from "../types/domain";
 import { sessionTargetSummary } from "../utils/sessionSummary";
 import { compactMenu, useContextMenu } from "./ContextMenu";
 import { ProtocolBadge } from "./ProtocolBadge";
 import { SessionModal } from "./SessionModal";
 import { MoveGroupDialog } from "./MoveGroupDialog";
 import { hasSavedPassword } from "../utils/paneSession";
+import { onekeyChoiceLabel, SessionOnekeyDialog } from "./OnekeyPickers";
+import { useCredentials } from "../services/credentials";
 
 type SortKey = "label" | "group" | "protocol" | "target";
 
@@ -57,6 +60,10 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
   });
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  /** Sessions whose OneKeys are being set. */
+  const [onekeyFor, setOnekeyFor] = useState<SessionConfig[] | null>(null);
+  const { list: credentials } = useCredentials();
+  const onekeyNames = useMemo(() => new Map(credentials.filter((c) => c.onekey).map((c) => [c.id, c.name])), [credentials]);
   const [notice, setNotice] = useState<string | null>(null);
   const lastClicked = useRef<string | null>(null);
 
@@ -184,7 +191,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
   // Keyboard: Escape, Delete, Ctrl+A, Enter
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (editing.open || e.defaultPrevented) return;
+      if (editing.open || onekeyFor || e.defaultPrevented) return;
       if (e.key === "Escape") {
         e.preventDefault();
         // An open question first, then the dialog.
@@ -225,6 +232,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
         },
         { label: t("sidebar.duplicate"), onClick: () => duplicate(targets) },
         { label: t("manager.moveTo"), onClick: () => setMoveOpen(true) },
+        { label: t("onekey.managerMenu"), onClick: () => setOnekeyFor(targets) },
         { type: "separator" },
         {
           label: t("manager.deleteN", { count: targets.length }),
@@ -286,6 +294,14 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
           onClick={() => setMoveOpen(true)}
         >
           <FolderInput size={13} /> {t("manager.moveTo")}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={selected.size === 0}
+          onClick={() => setOnekeyFor(selectedSessions)}
+        >
+          <Keyboard size={13} /> OneKey
         </button>
         <button
           type="button"
@@ -368,6 +384,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
                 {t("manager.colTarget")} {sortIcon("target")}
               </th>
               <th>{t("manager.colAuth")}</th>
+              <th>OneKey</th>
             </tr>
           </thead>
           <tbody>
@@ -402,11 +419,25 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
                       : t("manager.authPwd")
                     : "—"}
                 </td>
+                {isDesktopProtocol(s.protocol) ? (
+                  <td className="muted">—</td>
+                ) : (
+                  <td
+                    className={`onekey-cell ${Array.isArray(s.onekeys) ? "" : "muted"}`}
+                    title={t("onekey.managerMenu")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOnekeyFor(selected.has(s.id) ? selectedSessions : [s]);
+                    }}
+                  >
+                    {onekeyChoiceLabel(s, onekeyNames, t)}
+                  </td>
+                )}
               </tr>
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="manager-empty">
+                <td colSpan={7} className="manager-empty">
                   {t("sidebar.empty")}
                 </td>
               </tr>
@@ -423,6 +454,20 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
     </div>
 
     {/* A sibling, not a child: its backdrop clicks must not close the manager too. */}
+    {onekeyFor && (
+      <SessionOnekeyDialog
+        sessions={onekeyFor.filter((s) => !isDesktopProtocol(s.protocol))}
+        onClose={() => setOnekeyFor(null)}
+        onSave={(value) => {
+          const ids = new Set(onekeyFor.filter((s) => !isDesktopProtocol(s.protocol)).map((s) => s.id));
+          persist(
+            sessions.map((s) => (ids.has(s.id) ? { ...s, onekeys: value ?? undefined } : s)),
+            t("onekey.managerSaved", { count: ids.size })
+          );
+          setOnekeyFor(null);
+        }}
+      />
+    )}
     {moveOpen && (
       <MoveGroupDialog
         count={selected.size}
@@ -436,6 +481,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
       <SessionModal
         initial={editing.session}
         groups={groups.filter(Boolean)}
+        sessions={sessions}
         onClose={() => setEditing({ open: false, session: null })}
         onSave={saveEdited}
       />
