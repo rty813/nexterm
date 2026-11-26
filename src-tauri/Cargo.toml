@@ -65,6 +65,7 @@ ironrdp-dvc = "0.10"
 ironrdp-displaycontrol = "0.10"
 ironrdp-cliprdr = "0.9"
 ironrdp-cliprdr-native = "0.9"
+ironrdp-rdpdr = "0.9"
 ironrdp-rdpsnd = "0.11"
 ironrdp-rdpsnd-native = "0.8"
 ironrdp-tokio = "0.12"
@@ -72,6 +73,18 @@ ironrdp-tls = { version = "0.3", features = ["native-tls"] }
 x509-cert = { version = "0.3", default-features = false, features = ["std"] }
 smallvec = "1"
 vnc-rs = "0.6"
+
+# 0.11.0 acknowledges only the training payload, not the packet size. Strict
+# servers then withhold audio. Drop these overrides once #2294 is released.
+[patch.crates-io]
+ironrdp-rdpsnd = { git = "https://github.com/Devolutions/IronRDP", rev = "f86e3c49f349127b7e7f3c737ca10de49cc20f8d" }
+
+# Keep the patched crate's public types identical to the registry ones.
+[patch."https://github.com/Devolutions/IronRDP"]
+ironrdp-core = { version = "0.3", registry = "crates-io" }
+ironrdp-dvc = { version = "0.10", registry = "crates-io" }
+ironrdp-pdu = { version = "0.11", registry = "crates-io" }
+ironrdp-svc = { version = "0.10", registry = "crates-io" }
 
 [dev-dependencies]
 bcrypt-pbkdf = "0.11"

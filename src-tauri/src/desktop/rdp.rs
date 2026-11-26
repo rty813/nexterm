@@ -8,7 +8,7 @@
 //! - Clipboard: IronRDP's Windows backend syncs the system clipboard (text, images and,
 //!   unless turned off, files and folders in both directions).
 //! - Audio: played locally through WASAPI (`ironrdp-rdpsnd-native`) when asked for, on the
-//!   dynamic audio channels Windows uses and the static rdpsnd channel older servers use.
+//!   dynamic audio channels or the static rdpsnd/rdpdr pair.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -33,6 +33,8 @@ use smallvec::SmallVec;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::Instant;
+
+use crate::models::{DesktopConfig, SessionConfig};
 
 use super::frame::Rect;
 use super::{certs, keymap, Control, InputEvent, SessionCtx, SyncStream};
@@ -118,8 +120,6 @@ pub(super) async fn run(ctx: &SessionCtx, mut rx: UnboundedReceiver<Control>) ->
     } else {
         None
     };
-    #[cfg(not(windows))]
-    let clipboard: Option<()> = None;
     drop(clip_tx);
 
     let (mut width, mut height) = (ctx.width, ctx.height);
@@ -132,9 +132,10 @@ pub(super) async fn run(ctx: &SessionCtx, mut rx: UnboundedReceiver<Control>) ->
         // Borrowed only while building (the factory is not Sync, so no reference may live
         // across an await).
         #[cfg(windows)]
-        let connector = build_connector(ctx, width, height, ms_account, clipboard.as_ref().map(|c| c.factory.as_ref()));
+        let factory = clipboard.as_ref().map(|c| c.factory.as_ref());
         #[cfg(not(windows))]
-        let connector = build_connector(ctx, width, height, ms_account, clipboard.and(None));
+        let factory = None;
+        let connector = build_connector(&ctx.session, &ctx.desktop, DesktopSize { width, height }, ctx.scale, ms_account, factory);
         let (result, framed) = match boxed(connect(ctx, stream, connector)).await {
             Ok(ok) => ok,
             Err(err) if !ms_account && may_be_ms_account(ctx, &format!("{err:#}")) => {
@@ -169,14 +170,13 @@ fn may_be_ms_account(ctx: &SessionCtx, error: &str) -> bool {
 }
 
 fn build_connector(
-    ctx: &SessionCtx,
-    width: u16,
-    height: u16,
+    s: &SessionConfig,
+    d: &DesktopConfig,
+    desktop_size: DesktopSize,
+    scale: u32,
     ms_account: bool,
     clipboard: Option<&(dyn CliprdrBackendFactory + Send)>,
 ) -> ironrdp_connector::ClientConnector {
-    let s = &ctx.session;
-    let d = &ctx.desktop;
     let color_depth = if d.color_depth == 16 { 16 } else { 32 };
     let codecs = client_codecs_capabilities(&[]).unwrap_or_default();
     let local_audio = d.audio == "local";
@@ -204,9 +204,9 @@ fn build_connector(
         keyboard_functional_keys_count: 12,
         ime_file_name: String::new(),
         dig_product_id: String::new(),
-        desktop_size: DesktopSize { width, height },
+        desktop_size,
         monitor_layout: None,
-        desktop_scale_factor: if ctx.desktop.resize == "fixed" { 0 } else { ctx.scale },
+        desktop_scale_factor: if d.resize == "fixed" { 0 } else { scale },
         desktop_physical_size: None,
         desktop_orientation: None,
         device_scale_factor: None,
@@ -239,9 +239,7 @@ fn build_connector(
     };
     let mut drdynvc = ironrdp_dvc::DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
     if local_audio {
-        // Windows 8 and later send audio on these dynamic channels only (formats negotiated on
-        // AUDIO_PLAYBACK_DVC, AAC on the lossy one, both driving one state); they open the
-        // static rdpsnd channel only next to device redirection (rdpdr), which we don't offer.
+        // The two playback DVCs share the formats negotiated on the reliable channel.
         // Factories, because the server closes and reopens them (e.g. on a device change).
         let start = std::time::Instant::now();
         let audio = RdpsndDvcState::new(Box::new(ironrdp_rdpsnd_native::cpal::RdpsndBackend::new()))
@@ -254,8 +252,13 @@ fn build_connector(
     let client_addr: SocketAddr = ([0, 0, 0, 0], 0).into();
     let mut connector = ironrdp_connector::ClientConnector::new(config, client_addr).with_static_channel(drdynvc);
     if local_audio {
-        // Older servers (xrdp, pre-Windows 8) use the static channel. Its backend opens the
-        // device only on the first wave block, so the two never play at once.
+        // Windows sends nothing on static rdpsnd unless rdpdr was advertised too
+        // ([MS-RDPEA] 2.1, product note 1). Do not redirect any local devices.
+        let computer_name = connector.config.client_name.clone();
+        connector.attach_static_channel(ironrdp_rdpdr::Rdpdr::new(
+            Box::new(ironrdp_rdpdr::NoopRdpdrBackend),
+            computer_name,
+        ));
         connector = connector.with_static_channel(ironrdp_rdpsnd::client::Rdpsnd::new(Box::new(
             ironrdp_rdpsnd_native::cpal::RdpsndBackend::new(),
         )));
@@ -700,6 +703,47 @@ mod clip {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn audio_connector(mode: &str) -> ironrdp_connector::ClientConnector {
+        let desktop = DesktopConfig { audio: mode.to_owned(), ..DesktopConfig::default() };
+        build_connector(&SessionConfig::default(), &desktop, DesktopSize { width: 1024, height: 768 }, 100, false, None)
+    }
+
+    #[test]
+    fn local_playback_advertises_the_paired_static_channels_only_when_enabled() {
+        for (mode, enabled) in [("local", true), ("off", false), ("remote", false)] {
+            let mut client = audio_connector(mode);
+            assert_eq!(client.config.enable_audio_playback, enabled);
+            assert_eq!(client.get_static_channel_processor::<ironrdp_rdpsnd::client::Rdpsnd>().is_some(), enabled);
+            assert_eq!(client.get_static_channel_processor::<ironrdp_rdpdr::Rdpdr>().is_some(), enabled);
+        }
+    }
+
+    #[test]
+    fn audio_training_echoes_the_size_of_the_whole_packet() {
+        use ironrdp_rdpsnd::pdu::{AudioFormat, ServerAudioFormatPdu, ServerAudioOutputPdu, Version, WaveFormat};
+        use ironrdp_svc::SvcProcessor as _;
+
+        let mut client = audio_connector("local");
+        let sound = client.get_static_channel_processor_mut::<ironrdp_rdpsnd::client::Rdpsnd>().unwrap();
+        let formats = ServerAudioOutputPdu::AudioFormat(ServerAudioFormatPdu {
+            version: Version::V8,
+            formats: vec![AudioFormat {
+                format: WaveFormat::PCM, n_channels: 2, n_samples_per_sec: 44100,
+                n_avg_bytes_per_sec: 176400, n_block_align: 4, bits_per_sample: 16, data: None,
+            }],
+        });
+        sound.process(&ironrdp_core::encode_vec(&formats).unwrap()).unwrap();
+
+        // MS-RDPEA 4.1.3: a 1024-byte probe including 8 header bytes.
+        let mut training = vec![6, 0x23, 0xfc, 3, 0xda, 0x89, 0, 4];
+        training.resize(1024, 0);
+        let replies = sound.process(&training).unwrap();
+        assert_eq!(replies.len(), 1);
+        let confirm = replies[0].encode_unframed_pdu().unwrap();
+        assert_eq!(confirm[0], 6);
+        assert_eq!(&confirm[4..], &training[4..8], "echo the timestamp and wPackSize, not 1016");
+    }
 
     #[test]
     fn credssp_failures_get_a_hint() {
