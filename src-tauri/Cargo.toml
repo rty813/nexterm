@@ -23,6 +23,7 @@ russh = { version = "0.65", default-features = false, features = ["ring", "flate
 portable-pty = "0.9"
 base64 = "0.22"
 aes = "0.9"
+blowfish = "0.10"
 cbc = "0.2"
 pbkdf2 = "0.13"
 sha3 = "0.12"

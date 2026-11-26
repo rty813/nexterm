@@ -8,7 +8,10 @@
 //! - the XML written by "Tools > Export Settings": nested `<key name="...">` elements below
 //!   `<key name="Sessions">`, values as `<string name="...">` / `<dword name="...">` (decimal).
 //!
-//! Saved passwords are encrypted by SecureCRT and not imported.
+//! Saved passwords are decrypted (`crypto`): "Password V2" is AES-256-CBC keyed by the
+//! SHA-256 of the config passphrase (empty by default), the legacy "Password" is the
+//! double-Blowfish scheme. A set config passphrase or any other failure leaves the password
+//! out (counted in `passwords_skipped`).
 
 use std::collections::HashMap;
 use std::fs;
@@ -199,6 +202,8 @@ pub fn session_from_fields(
     };
     let mut had_password = false;
     let mut key_missing = false;
+    // Saved password: decrypted when it can be, otherwise counted as skipped.
+    let password = crypto::session_password(fields);
     match protocol.as_str() {
         "SSH2" => {
             if host.is_empty() {
@@ -207,7 +212,8 @@ pub fn session_from_fields(
             s.protocol = ProtocolType::Ssh;
             s.host = host;
             s.port = port("[SSH2] Port", 22);
-            had_password = get("Password V2").or_else(|| get("Password")).is_some();
+            s.password = password.value.clone();
+            had_password = password.skipped;
             // "Identity Filename V2" is `<path>::rawkey` / `<path>::openssh...`; an empty one
             // with "Use Global Public Key" means the global key, which is not imported.
             let key = get("Identity Filename V2").or_else(|| get("Identity Filename")).and_then(|k| resolve_key(k, config_dir));
@@ -265,6 +271,23 @@ pub fn session_from_fields(
             };
             s.serial = Some(serial);
         }
+        "RDP" => {
+            if host.is_empty() {
+                return None;
+            }
+            s.protocol = ProtocolType::Rdp;
+            s.host = host;
+            s.port = port("[RDP] Port", 3389);
+            s.auth_type = AuthType::None;
+            s.keep_alive_secs = 0;
+            s.password = password.value.clone();
+            had_password = password.skipped;
+            let mut desktop = crate::models::DesktopConfig::default();
+            if let Some(domain) = get("[RDP] Domain").or_else(|| get("Domain")) {
+                desktop.domain = domain.to_string();
+            }
+            s.desktop = Some(desktop);
+        }
         _ => return None,
     }
     Some(ParsedSession { session: s, had_password, key_missing })
@@ -296,6 +319,207 @@ fn resolve_key(raw: &str, config_dir: Option<&Path>) -> Option<String> {
     }
     let path = crate::importer::expand_tilde(&path);
     Path::new(&path).is_file().then_some(path)
+}
+
+// ------------------------------------------------------------------ passwords
+
+/// A session's saved password: `value` when it was decrypted, `skipped` when one was stored
+/// but could not be read (a config passphrase is set, or anything unexpected).
+#[derive(Default)]
+pub struct Password {
+    pub value: Option<String>,
+    pub skipped: bool,
+}
+
+/// SecureCRT's two password schemes. The config passphrase is assumed empty (the default);
+/// with one set, V2's checksum fails and the password is simply left out.
+mod crypto {
+    use super::Password;
+    use std::collections::HashMap;
+    use aes::cipher::{block_padding::NoPadding, BlockModeDecrypt, KeyIvInit};
+
+    // Legacy "Password": the two hard-coded Blowfish keys.
+    const V1_KEY1: [u8; 16] = [0x24, 0xA6, 0x3D, 0xDE, 0x5B, 0xD3, 0xB3, 0x82, 0x9C, 0x7E, 0x06, 0xF4, 0x08, 0x16, 0xAA, 0x07];
+    const V1_KEY2: [u8; 16] = [0x5F, 0xB0, 0x45, 0xA2, 0x94, 0x17, 0xD9, 0x16, 0xC6, 0xC6, 0xA2, 0xFF, 0x06, 0x41, 0x82, 0xB7];
+
+    /// The decrypted saved password of a session. "Password V2" wins over the legacy "Password".
+    pub fn session_password(fields: &HashMap<String, String>) -> Password {
+        let field = |k: &str| fields.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
+        if let Some(v2) = field("Password V2") {
+            // Stored as `02:<hex>`; the `NN:` prefix is the format tag.
+            let hex = v2.split_once(':').map(|(_, rest)| rest).unwrap_or(v2);
+            return stored(decrypt_v2(hex));
+        }
+        if let Some(v1) = field("Password") {
+            return stored(decrypt_v1(v1));
+        }
+        Password::default()
+    }
+
+    /// A password field was present: `None` means it could not be read, so it is skipped.
+    fn stored(value: Option<String>) -> Password {
+        Password { skipped: value.is_none(), value }
+    }
+
+    #[cfg(test)]
+    pub fn test_encrypt_v2(password: &str) -> String {
+        encrypt::v2(password)
+    }
+    #[cfg(test)]
+    pub fn test_encrypt_v1(password: &str) -> String {
+        encrypt::v1(password)
+    }
+
+    fn unhex(s: &str) -> Option<Vec<u8>> {
+        let s = s.trim();
+        if s.is_empty() || s.len() % 2 != 0 {
+            return None;
+        }
+        (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()).collect()
+    }
+
+    /// AES-256-CBC, key = SHA-256(passphrase), IV = 0. The plaintext is a 4-byte little-endian
+    /// length, the UTF-8 password, its SHA-256 (verified) and then padding.
+    fn decrypt_v2(hex: &str) -> Option<String> {
+        let mut data = unhex(hex)?;
+        if data.is_empty() || data.len() % 16 != 0 {
+            return None;
+        }
+        let key = ring::digest::digest(&ring::digest::SHA256, b"");
+        let plain = cbc::Decryptor::<aes::Aes256>::new_from_slices(key.as_ref(), &[0u8; 16])
+            .ok()?
+            .decrypt_padded::<NoPadding>(&mut data)
+            .ok()?;
+        let len = u32::from_le_bytes(plain.get(..4)?.try_into().ok()?) as usize;
+        let body = plain.get(4..)?;
+        let pw = body.get(..len)?;
+        let digest = body.get(len..len + 32)?;
+        (ring::digest::digest(&ring::digest::SHA256, pw).as_ref() == digest)
+            .then(|| String::from_utf8(pw.to_vec()).ok())
+            .flatten()
+    }
+
+    /// Legacy "Password": Blowfish-CBC (IV = 0, big-endian) under Key1 wraps `[4 random
+    /// bytes][Blowfish-CBC(Key2, password)][4 random bytes]`. The inner plaintext is the
+    /// UTF-16-LE password terminated by a NUL code unit.
+    fn decrypt_v1(hex: &str) -> Option<String> {
+        let mut data = unhex(hex)?;
+        if data.len() <= 8 || data.len() % 8 != 0 {
+            return None;
+        }
+        let outer = blowfish_dec(&V1_KEY1, &mut data)?.to_vec();
+        let mut inner = outer.get(4..outer.len().checked_sub(4)?)?.to_vec();
+        if inner.is_empty() || inner.len() % 8 != 0 {
+            return None;
+        }
+        let plain = blowfish_dec(&V1_KEY2, &mut inner)?;
+        // UTF-16-LE, NUL-terminated.
+        let units: Vec<u16> = plain
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .take_while(|&u| u != 0)
+            .collect();
+        String::from_utf16(&units).ok()
+    }
+
+    fn blowfish_dec<'a>(key: &[u8], data: &'a mut [u8]) -> Option<&'a [u8]> {
+        cbc::Decryptor::<blowfish::Blowfish>::new_from_slices(key, &[0u8; 8])
+            .ok()?
+            .decrypt_padded::<NoPadding>(data)
+            .ok()
+    }
+
+    #[cfg(test)]
+    mod encrypt {
+        //! Encryption, for round-trip tests only (SecureCRT itself never reads these back).
+        use super::*;
+        use aes::cipher::{BlockModeEncrypt, KeyIvInit};
+
+        pub fn v2(password: &str) -> String {
+            let mut plain = (password.len() as u32).to_le_bytes().to_vec();
+            plain.extend_from_slice(password.as_bytes());
+            plain.extend_from_slice(ring::digest::digest(&ring::digest::SHA256, password.as_bytes()).as_ref());
+            plain.resize(plain.len().div_ceil(16) * 16, 0);
+            let key = ring::digest::digest(&ring::digest::SHA256, b"");
+            let ct = cbc::Encryptor::<aes::Aes256>::new_from_slices(key.as_ref(), &[0u8; 16])
+                .unwrap()
+                .encrypt_padded::<NoPadding>(&mut plain.clone(), plain.len())
+                .unwrap()
+                .to_vec();
+            format!("02:{}", hex(&ct))
+        }
+
+        pub fn v1(password: &str) -> String {
+            // UTF-16-LE with a NUL terminator, zero-padded to the Blowfish block.
+            let mut plain: Vec<u8> = password.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            plain.extend_from_slice(&[0, 0]);
+            plain.resize(plain.len().div_ceil(8) * 8, 0);
+            let inner = bf_enc(&V1_KEY2, plain);
+            let mut framed = vec![0u8; 4];
+            framed.extend_from_slice(&inner);
+            framed.extend_from_slice(&[0u8; 4]);
+            hex(&bf_enc(&V1_KEY1, framed))
+        }
+
+        fn bf_enc(key: &[u8], mut data: Vec<u8>) -> Vec<u8> {
+            let n = data.len();
+            cbc::Encryptor::<blowfish::Blowfish>::new_from_slices(key, &[0u8; 8])
+                .unwrap()
+                .encrypt_padded::<NoPadding>(&mut data, n)
+                .unwrap()
+                .to_vec()
+        }
+
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn fields(key: &str, value: &str) -> HashMap<String, String> {
+            HashMap::from([(key.to_string(), value.to_string())])
+        }
+
+        #[test]
+        fn v2_round_trip() {
+            for pw in ["hunter2", "", "пароль🔒", "x".repeat(40).as_str()] {
+                let p = session_password(&fields("Password V2", &encrypt::v2(pw)));
+                assert_eq!(p.value.as_deref(), Some(pw), "V2 {pw:?}");
+                assert!(!p.skipped);
+            }
+        }
+
+        #[test]
+        fn v1_round_trip() {
+            for pw in ["hunter2", "a", "exactly-eight!!"] {
+                let p = session_password(&fields("Password", &encrypt::v1(pw)));
+                assert_eq!(p.value.as_deref(), Some(pw), "V1 {pw:?}");
+            }
+        }
+
+        #[test]
+        fn known_answer_vectors() {
+            // Ciphertext produced by an independent OpenSSL implementation (aes-256-cbc /
+            // bf-cbc), not by this crate — a real cross-check of the decrypt, not a round-trip.
+            let v2 = "02:a946feca74f2916b52e36e1458fa1a6647b1af207ac92ee8b3273d4f6e54f8c85d5a0dcd7431cd38b8cab7f85133bddf";
+            assert_eq!(decrypt_v2(v2.split_once(':').unwrap().1).as_deref(), Some("hunter2"));
+            let v1 = "1966e6b30a27b2c25c50ba9c27d68b524f672c4994101e7d";
+            assert_eq!(decrypt_v1(v1).as_deref(), Some("hunter2"));
+        }
+
+        #[test]
+        fn undecryptable_is_skipped() {
+            // A config passphrase: the key is SHA-256(passphrase), so the checksum fails here.
+            let p = session_password(&fields("Password V2", "02:9f3a"));
+            assert!(p.value.is_none() && p.skipped);
+            // No password field at all is not a skip.
+            let none = session_password(&HashMap::new());
+            assert!(none.value.is_none() && !none.skipped);
+        }
+    }
 }
 
 // ------------------------------------------------------------------ XML export
@@ -591,5 +815,44 @@ Z:\"Description\"=00000002\r\n line one\r\n line two\r\nB:\"Blob\"=00000002\r\n 
         assert_eq!(s.auth_type, AuthType::PrivateKey);
         assert!(s.private_key_path.as_deref().unwrap().ends_with("id_lab"));
         assert_eq!(r.keys_missing, 0);
+    }
+
+    #[test]
+    fn test_rdp_session() {
+        let mut f = HashMap::new();
+        for (k, v) in [
+            ("Protocol Name", "RDP"),
+            ("Hostname", "win.example.com"),
+            ("[RDP] Port", "3390"),
+            ("Username", "admin"),
+            ("[RDP] Domain", "CORP"),
+        ] {
+            f.insert(k.to_string(), v.to_string());
+        }
+        f.insert("Password V2".into(), crypto::test_encrypt_v2("s3cret"));
+        let p = session_from_fields(&f, &[], "win", None).unwrap();
+        assert_eq!(p.session.protocol, ProtocolType::Rdp);
+        assert_eq!((p.session.host.as_str(), p.session.port, p.session.username.as_str()), ("win.example.com", 3390, "admin"));
+        assert_eq!(p.session.auth_type, AuthType::None);
+        assert_eq!(p.session.password.as_deref(), Some("s3cret"));
+        assert_eq!(p.session.desktop.as_ref().unwrap().domain, "CORP");
+        assert!(!p.had_password);
+    }
+
+    #[test]
+    fn test_imports_saved_password() {
+        let mut f = parse_session_ini("S:\"Protocol Name\"=SSH2\r\nS:\"Hostname\"=db.cn\r\nS:\"Username\"=root\r\n");
+        // Legacy "Password" (double Blowfish) also decrypts.
+        f.insert("Password".into(), crypto::test_encrypt_v1("p@ss w0rd"));
+        let p = session_from_fields(&f, &[], "db", None).unwrap();
+        assert_eq!(p.session.auth_type, AuthType::Password);
+        assert_eq!(p.session.password.as_deref(), Some("p@ss w0rd"));
+        assert!(!p.had_password);
+
+        // A key wins over the password for the auth method, but the password is still kept.
+        f.insert("Identity Filename V2".into(), "${VDS_CONFIG_PATH}\\Keys\\gone::rawkey".into());
+        let p = session_from_fields(&f, &[], "db", None).unwrap();
+        assert_eq!(p.session.auth_type, AuthType::PrivateKey);
+        assert!(p.key_missing && p.session.password.as_deref() == Some("p@ss w0rd"));
     }
 }

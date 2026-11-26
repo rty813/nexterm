@@ -3831,6 +3831,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "base64 0.22.1",
+ "blowfish",
  "cbc",
  "chrono",
  "dirs 5.0.1",
