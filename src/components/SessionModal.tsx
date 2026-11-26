@@ -623,6 +623,17 @@ export const SessionModal: React.FC<SessionModalProps> = ({
                     <input type="checkbox" checked={desktop.clipboard} onChange={(e) => setDesktop({ clipboard: e.target.checked })} />
                     <span>{t("desktop.clipboard")}</span>
                   </label>
+                  {protocol === "rdp" && (
+                    <label className="checkbox-row" title={t("desktop.clipboardFilesTip")}>
+                      <input
+                        type="checkbox"
+                        checked={desktop.clipboard && desktop.clipboardFiles}
+                        disabled={!desktop.clipboard}
+                        onChange={(e) => setDesktop({ clipboardFiles: e.target.checked })}
+                      />
+                      <span>{t("desktop.clipboardFiles")}</span>
+                    </label>
+                  )}
                   {protocol === "vnc" && (
                     <label className="checkbox-row">
                       <input type="checkbox" checked={desktop.viewOnly} onChange={(e) => setDesktop({ viewOnly: e.target.checked })} />
