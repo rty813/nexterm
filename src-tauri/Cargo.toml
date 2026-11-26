@@ -36,7 +36,7 @@ chrono = { version = "0.4", features = ["serde"] }
 serialport = { version = "4", default-features = false }
 tauri-plugin-single-instance = "2"
 tauri-plugin-clipboard-manager = "2"
-windows-sys = { version = "0.52", features = ["Win32_Globalization", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_Threading"] }
+windows-sys = { version = "0.52", features = ["Win32_Globalization", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_Threading", "Win32_System_Com"] }
 windows = { version = "0.62", features = ["UI_Notifications", "Data_Xml_Dom", "Foundation"] }
 tauri-plugin-window-state = "2"
 ring = "0.17"

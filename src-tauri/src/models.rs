@@ -185,6 +185,9 @@ pub struct DesktopConfig {
     /// Text clipboard sync with the remote side.
     #[serde(default = "default_true")]
     pub clipboard: bool,
+    /// RDP: files and folders go through the clipboard too, both ways (needs `clipboard`).
+    #[serde(default = "default_true")]
+    pub clipboard_files: bool,
     /// VNC: show only, never send input.
     #[serde(default)]
     pub view_only: bool,
@@ -204,6 +207,7 @@ impl Default for DesktopConfig {
             color_depth: default_color_depth(),
             nla: true,
             clipboard: true,
+            clipboard_files: true,
             view_only: false,
             audio: default_audio(),
         }
@@ -527,4 +531,18 @@ pub struct TerminalStatePayload {
     pub instance_id: String,
     pub status: String,
     pub message: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_files_default_on_for_older_sessions() {
+        let old: DesktopConfig = serde_json::from_str(r#"{"clipboard":true}"#).unwrap();
+        assert!(old.clipboard_files);
+        let off: DesktopConfig = serde_json::from_str(r#"{"clipboardFiles":false}"#).unwrap();
+        assert!(!off.clipboard_files);
+        assert!(DesktopConfig::default().clipboard_files);
+    }
 }

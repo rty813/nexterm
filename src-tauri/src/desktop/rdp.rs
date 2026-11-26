@@ -5,8 +5,10 @@
 //!   certificate is trusted on first use (`certs.rs`).
 //! - Picture: decoded into IronRDP's RGBA image, changed rectangles copied to `FrameOut`.
 //! - Resize: "fit-window" sessions follow the pane through the display control channel.
-//! - Clipboard: IronRDP's Windows backend syncs the system clipboard (text, images, ...).
-//! - Audio: played locally through WASAPI (`ironrdp-rdpsnd-native`) when asked for.
+//! - Clipboard: IronRDP's Windows backend syncs the system clipboard (text, images and,
+//!   unless turned off, files and folders in both directions).
+//! - Audio: played locally through WASAPI (`ironrdp-rdpsnd-native`) when asked for, on the
+//!   dynamic audio channels Windows uses and the static rdpsnd channel older servers use.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -23,6 +25,7 @@ use ironrdp_input::{Database, MouseButton, MousePosition, Operation, Scancode, W
 use ironrdp_pdu::input::fast_path::FastPathInputEvent;
 use ironrdp_pdu::rdp::capability_sets::{client_codecs_capabilities, MajorPlatformType};
 use ironrdp_pdu::rdp::client_info::{CompressionType, PerformanceFlags, TimezoneInfo};
+use ironrdp_rdpsnd::client::{RdpsndDvcState, DVC_CHANNEL_NAME, LOSSY_DVC_CHANNEL_NAME};
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_tokio::{single_sequence_step_read, split_tokio_framed, FramedWrite as _, TokioFramed};
@@ -105,7 +108,7 @@ pub(super) async fn run(ctx: &SessionCtx, mut rx: UnboundedReceiver<Control>) ->
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<ClipboardMessage>();
     #[cfg(windows)]
     let clipboard = if ctx.desktop.clipboard {
-        match clip::start(clip_tx.clone()) {
+        match clip::start(clip_tx.clone(), ctx.desktop.clipboard_files) {
             Ok(c) => Some(c),
             Err(err) => {
                 eprintln!("[rdp] clipboard unavailable: {err:#}");
@@ -234,10 +237,25 @@ fn build_connector(
         alternate_shell: String::new(),
         work_dir: String::new(),
     };
-    let drdynvc = ironrdp_dvc::DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    let mut drdynvc = ironrdp_dvc::DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    if local_audio {
+        // Windows 8 and later send audio on these dynamic channels only (formats negotiated on
+        // AUDIO_PLAYBACK_DVC, AAC on the lossy one, both driving one state); they open the
+        // static rdpsnd channel only next to device redirection (rdpdr), which we don't offer.
+        // Factories, because the server closes and reopens them (e.g. on a device change).
+        let start = std::time::Instant::now();
+        let audio = RdpsndDvcState::new(Box::new(ironrdp_rdpsnd_native::cpal::RdpsndBackend::new()))
+            .with_clock(Box::new(move || start.elapsed()));
+        let lossy = audio.clone();
+        drdynvc = drdynvc
+            .with_dynamic_channel_factory(DVC_CHANNEL_NAME, move || audio.channel())
+            .with_dynamic_channel_factory(LOSSY_DVC_CHANNEL_NAME, move || lossy.lossy_channel());
+    }
     let client_addr: SocketAddr = ([0, 0, 0, 0], 0).into();
     let mut connector = ironrdp_connector::ClientConnector::new(config, client_addr).with_static_channel(drdynvc);
     if local_audio {
+        // Older servers (xrdp, pre-Windows 8) use the static channel. Its backend opens the
+        // device only on the first wave block, so the two never play at once.
         connector = connector.with_static_channel(ironrdp_rdpsnd::client::Rdpsnd::new(Box::new(
             ironrdp_rdpsnd_native::cpal::RdpsndBackend::new(),
         )));
@@ -384,7 +402,7 @@ async fn active(
                     Vec::new()
                 }
             },
-            Some(message) = clip_rx.recv() => clipboard_message(&mut stage, message)?,
+            Some(message) = clip_rx.recv() => clipboard_message(&mut stage, message),
             _ = async {
                 match resize_at {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -409,13 +427,15 @@ async fn active(
                 }
             }
             _ = timeouts.tick() => {
+                // Expires file locks and stalled file transfers.
                 match stage.get_svc_processor_mut::<ironrdp_cliprdr::CliprdrClient>() {
-                    Some(clip) => match clip.drive_timeouts() {
-                        Ok(messages) => {
-                            let frame = stage.process_svc_processor_messages(messages).map_err(friendly)?;
-                            if frame.is_empty() { Vec::new() } else { vec![ActiveStageOutput::ResponseFrame(frame)] }
+                    Some(clip) => match clip.drive_timeouts().map(|m| stage.process_svc_processor_messages(m)) {
+                        Ok(Ok(frame)) if !frame.is_empty() => vec![ActiveStageOutput::ResponseFrame(frame)],
+                        Ok(Err(err)) => {
+                            eprintln!("[rdp] clipboard: {}", chain(&err));
+                            Vec::new()
                         }
-                        Err(_) => Vec::new(),
+                        _ => Vec::new(),
                     },
                     None => Vec::new(),
                 }
@@ -496,26 +516,37 @@ async fn active(
     }
 }
 
-fn clipboard_message(stage: &mut ActiveStage, message: ClipboardMessage) -> Result<Vec<ActiveStageOutput>> {
+/// One message from the clipboard thread. A clipboard operation that fails (the channel not
+/// ready yet, a server that did not negotiate file streams, ...) is logged; the session goes on.
+fn clipboard_message(stage: &mut ActiveStage, message: ClipboardMessage) -> Vec<ActiveStageOutput> {
     let Some(clip) = stage.get_svc_processor_mut::<ironrdp_cliprdr::CliprdrClient>() else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let messages = match message {
         ClipboardMessage::SendInitiateCopy(formats) => clip.initiate_copy(&formats),
+        ClipboardMessage::SendInitiateFileCopy(files) => clip.initiate_file_copy(files),
         ClipboardMessage::SendFormatData(response) => clip.submit_format_data(response),
         ClipboardMessage::SendInitiatePaste(format) => clip.initiate_paste(format),
         ClipboardMessage::SendFileContentsRequest(request) => clip.request_file_contents(request),
         ClipboardMessage::SendFileContentsResponse(response) => clip.submit_file_contents(response),
         ClipboardMessage::Error(err) => {
             eprintln!("[rdp] clipboard: {err}");
-            return Ok(Vec::new());
+            return Vec::new();
         }
         #[allow(unreachable_patterns)]
-        _ => return Ok(Vec::new()),
+        _ => return Vec::new(),
+    };
+    let frame = messages
+        .map_err(|e| chain(&e))
+        .and_then(|messages| stage.process_svc_processor_messages(messages).map_err(|e| chain(&e)));
+    match frame {
+        Ok(frame) if !frame.is_empty() => vec![ActiveStageOutput::ResponseFrame(frame)],
+        Ok(_) => Vec::new(),
+        Err(err) => {
+            eprintln!("[rdp] clipboard: {err}");
+            Vec::new()
+        }
     }
-    .map_err(friendly)?;
-    let frame = stage.process_svc_processor_messages(messages).map_err(friendly)?;
-    Ok(vec![ActiveStageOutput::ResponseFrame(frame)])
 }
 
 fn mouse_button(button: u8) -> Option<MouseButton> {
@@ -590,10 +621,14 @@ fn to_fast_path(db: &mut Database, events: Vec<InputEvent>) -> SmallVec<[FastPat
 
 /// IronRDP's Windows clipboard backend needs a thread with a message loop (it watches the
 /// clipboard through a hidden window). One per session; stopped when dropped.
+///
+/// With file transfer on, remote files go on the local clipboard as an OLE data object, which
+/// the backend only sets up on a single-threaded apartment: the thread enters one first.
 #[cfg(windows)]
 mod clip {
     use super::*;
     use ironrdp_cliprdr::backend::ClipboardMessageProxy;
+    use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, PostThreadMessageW, TranslateMessage, MSG, WM_QUIT};
 
@@ -620,15 +655,23 @@ mod clip {
         }
     }
 
-    pub fn start(tx: UnboundedSender<ClipboardMessage>) -> Result<ClipThread> {
+    /// `files`: also copy files and folders through the clipboard, both ways.
+    pub fn start(tx: UnboundedSender<ClipboardMessage>, files: bool) -> Result<ClipThread> {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
             .name("rdp-clipboard".into())
             .spawn(move || {
-                let clipboard = match ironrdp_cliprdr_native::WinClipboard::new(Proxy(tx)) {
+                // SAFETY: a fresh thread with no COM yet; balanced below on this thread, after
+                // the clipboard (and the OLE it initialized) is gone.
+                let com = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0;
+                let clipboard = match ironrdp_cliprdr_native::WinClipboard::with_file_transfer(Proxy(tx), files) {
                     Ok(c) => c,
                     Err(err) => {
                         let _ = ready_tx.send(Err(anyhow!("{err}")));
+                        if com {
+                            // SAFETY: balances the successful CoInitializeEx above.
+                            unsafe { CoUninitialize() };
+                        }
                         return;
                     }
                 };
@@ -643,6 +686,10 @@ mod clip {
                     }
                 }
                 drop(clipboard);
+                if com {
+                    // SAFETY: balances the successful CoInitializeEx above, on the same thread.
+                    unsafe { CoUninitialize() };
+                }
             })
             .context("无法启动剪贴板线程")?;
         let (factory, thread_id) = ready_rx.recv().context("剪贴板线程未启动")??;

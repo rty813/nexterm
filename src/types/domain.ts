@@ -33,6 +33,8 @@ export interface DesktopConfig {
   nla: boolean;
   /** Text clipboard sync. */
   clipboard: boolean;
+  /** RDP: files and folders go through the clipboard too (needs `clipboard`). */
+  clipboardFiles: boolean;
   /** VNC: never send input. */
   viewOnly: boolean;
   /** RDP audio: play here, leave on the remote computer, or off. */
@@ -48,6 +50,7 @@ export const DEFAULT_DESKTOP: DesktopConfig = {
   colorDepth: 32,
   nla: true,
   clipboard: true,
+  clipboardFiles: true,
   viewOnly: false,
   audio: "local",
 };
