@@ -1,11 +1,11 @@
 import type { AuthType, CredentialSummary, ProtocolType } from "../types/domain";
 
-/** Protocols whose login can come from the credential manager (Rust `credentials::takes_login`). */
+/** Protocols whose login can come from the credential manager (Rust `credentials::takes_login`); Telnet answers the login prompts with it. */
 export function takesCredential(protocol: ProtocolType): boolean {
-  return protocol === "ssh" || protocol === "rdp" || protocol === "vnc";
+  return protocol === "ssh" || protocol === "telnet" || protocol === "rdp" || protocol === "vnc";
 }
 
-/** The credentials a session of this protocol can use, by name: remote desktops only take passwords. */
+/** The credentials a session of this protocol can use, by name: only SSH takes private keys. */
 export function credentialsFor(protocol: ProtocolType, list: CredentialSummary[]): CredentialSummary[] {
   if (!takesCredential(protocol)) return [];
   return list

@@ -477,6 +477,31 @@ export const SessionModal: React.FC<SessionModalProps> = ({
               </>
             )}
 
+            {protocol === "telnet" && (
+              <>
+                {picker(false)}
+                <div className="form-grid-2">
+                  <label className="field">
+                    <span>{t("sessionModal.username")}</span>
+                    <input
+                      type="text"
+                      className="text-input"
+                      value={login.username}
+                      disabled={login.usernameLocked}
+                      onChange={(e) => setUsername(e.target.value)}
+                    />
+                  </label>
+                  {!login.credentialId && (
+                    <label className="field">
+                      <span>{t("sessionModal.telnetPwdLabel")}</span>
+                      <input type="password" className="text-input" value={password} onChange={(e) => setPassword(e.target.value)} />
+                    </label>
+                  )}
+                </div>
+                <p className="adv-hint">{t("sessionModal.telnetLoginTip")}</p>
+              </>
+            )}
+
             {isDesktop && (
               <>
                 {picker(false)}

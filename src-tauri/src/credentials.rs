@@ -135,7 +135,7 @@ fn upsert(list: &mut Vec<Credential>, input: CredentialInput) -> Result<String, 
 }
 
 fn takes_login(session: &SessionConfig) -> bool {
-    matches!(session.protocol, ProtocolType::Ssh | ProtocolType::Rdp | ProtocolType::Vnc)
+    matches!(session.protocol, ProtocolType::Ssh | ProtocolType::Telnet | ProtocolType::Rdp | ProtocolType::Vnc)
 }
 
 /// Whether connecting this session needs the credential store.
@@ -163,7 +163,7 @@ pub fn apply(session: &mut SessionConfig, list: &[Credential]) -> Result<(), Str
     if let Some(c) = find(list, &session.credential_id)? {
         let ssh = session.protocol == ProtocolType::Ssh;
         if !ssh && c.auth_type == AuthType::PrivateKey {
-            return Err(format!("凭据「{}」是私钥，远程桌面只能使用密码凭据", c.name));
+            return Err(format!("凭据「{}」是私钥，只有 SSH 能使用私钥凭据", c.name));
         }
         // A VNC user name selects macOS ARD authentication: that stays the session's choice.
         if !c.username.is_empty() && session.protocol != ProtocolType::Vnc {
@@ -375,13 +375,17 @@ mod tests {
         apply(&mut vnc, &store()).unwrap();
         assert_eq!((vnc.username.as_str(), vnc.password.as_deref()), ("", Some("pw")));
         assert!(apply(&mut session(json!({"protocol": "rdp", "credentialId": "k"})), &store()).is_err());
+        let mut telnet = session(json!({"protocol": "telnet", "port": 23, "credentialId": "p"}));
+        apply(&mut telnet, &store()).unwrap();
+        assert_eq!((telnet.username.as_str(), telnet.password.as_deref()), ("ops", Some("pw")));
+        assert!(apply(&mut session(json!({"protocol": "telnet", "credentialId": "k"})), &store()).is_err());
     }
 
     #[test]
     fn missing_credentials_are_an_error() {
         assert!(apply(&mut session(json!({"credentialId": "gone"})), &store()).is_err());
         // Other protocols have no login to fill in.
-        assert!(apply(&mut session(json!({"protocol": "telnet", "credentialId": "gone"})), &store()).is_ok());
+        assert!(apply(&mut session(json!({"protocol": "tcp", "credentialId": "gone"})), &store()).is_ok());
     }
 
     #[test]
