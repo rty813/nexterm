@@ -1,6 +1,6 @@
 [package]
 name = "nexterm"
-version = "0.1.14"
+version = "0.1.15"
 license = "MIT OR Apache-2.0"
 description = "Nexterm - Modern SSH & Local Terminal Client"
 authors = ["Nexterm Contributors"]
