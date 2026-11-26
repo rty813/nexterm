@@ -3,6 +3,7 @@ export type ProtocolType =
   | "powershell"
   | "cmd"
   | "wsl"
+  | "gitbash"
   | "custom"
   | "tcp"
   | "serial"

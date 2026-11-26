@@ -50,6 +50,21 @@ export function parseQuickConnectInput(raw: string): SessionConfig | null {
     };
   }
 
+  if (lower === "gitbash" || lower === "git-bash" || lower === "git bash") {
+    return {
+      id: makeId(),
+      label: "Git Bash",
+      group: "Quick Connect",
+      protocol: "gitbash",
+      host: "",
+      port: 0,
+      username: "",
+      authType: "none",
+      term: "xterm-256color",
+      keepAliveSecs: 0,
+    };
+  }
+
   if (lower === "wsl" || lower === "wsl.exe") {
     return {
       id: makeId(),

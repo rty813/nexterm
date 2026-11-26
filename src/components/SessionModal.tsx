@@ -30,11 +30,11 @@ const BAUD_RATES = [
   921600, 1000000, 1500000, 2000000, 3000000,
 ];
 
-const PROTOCOLS: ProtocolType[] = ["ssh", "rdp", "vnc", "adb", "powershell", "cmd", "wsl", "serial", "telnet", "tcp", "custom"];
+const PROTOCOLS: ProtocolType[] = ["ssh", "rdp", "vnc", "adb", "powershell", "cmd", "wsl", "gitbash", "serial", "telnet", "tcp", "custom"];
 const REMOTE: ProtocolType[] = ["ssh", "tcp", "telnet", "rdp", "vnc"];
 /** Default port per network protocol: switching protocol replaces a port left at another's default. */
 const DEFAULT_PORTS: Partial<Record<ProtocolType, number>> = { ssh: 22, telnet: 23, rdp: 3389, vnc: 5900, adb: 5555 };
-const LOCAL: ProtocolType[] = ["powershell", "cmd", "wsl", "custom"];
+const LOCAL: ProtocolType[] = ["powershell", "cmd", "wsl", "gitbash", "custom"];
 
 interface SessionModalProps {
   initial?: SessionConfig | null;

@@ -6,6 +6,7 @@ import { bestScore } from "../utils/fuzzy";
 import { looksLikeAddress, parseQuickConnectInput } from "../utils/quickConnect";
 import { sessionTargetSummary } from "../utils/sessionSummary";
 import { ProtocolBadge } from "./ProtocolBadge";
+import { useGitBashFound } from "../hooks/useGitBash";
 
 export interface PaletteTab {
   paneId: string;
@@ -64,8 +65,8 @@ interface Item {
   run: () => void;
 }
 
-const SHELLS: ProtocolType[] = ["powershell", "cmd", "wsl"];
-const LIMIT: Record<Section, number> = { connect: 1, tabs: 8, sessions: 8, shells: 3, actions: 40 };
+const SHELLS: ProtocolType[] = ["powershell", "cmd", "wsl", "gitbash"];
+const LIMIT: Record<Section, number> = { connect: 1, tabs: 8, sessions: 8, shells: 4, actions: 40 };
 
 /**
  * One box for everything: switch to an open tab, open a saved session, start a shell,
@@ -88,6 +89,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onClose,
 }) => {
   const { t } = useTranslation();
+  const gitBashFound = useGitBashFound();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -140,6 +142,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         }
       }
       for (const p of SHELLS) {
+        if (p === "gitbash" && !gitBashFound) continue;
         const label = t(`palette.newShell.${p}`);
         push("shells", { key: `sh-${p}`, label, icon: <ProtocolBadge protocol={p} size={14} />, run: done(() => onOpenShell(p)) }, [label, p]);
       }
@@ -155,7 +158,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (q) list.sort((a, b) => b.score - a.score);
       return list.slice(0, q || sec !== "actions" ? LIMIT[sec] : LIMIT.actions);
     });
-  }, [query, actions, sessions, pluginSessions, recentSessionIds, tabs, quickHistory, t, onClose, onQuickConnect, onFocusTab, onOpenSession, onOpenPluginSession, onOpenShell, onRunAction]);
+  }, [query, actions, sessions, pluginSessions, recentSessionIds, tabs, quickHistory, t, onClose, onQuickConnect, onFocusTab, onOpenSession, onOpenPluginSession, onOpenShell, onRunAction, gitBashFound]);
 
   useEffect(() => setIndex(0), [query]);
   useEffect(() => {

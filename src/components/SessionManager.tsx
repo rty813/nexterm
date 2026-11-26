@@ -23,7 +23,7 @@ import { hasSavedPassword } from "../utils/paneSession";
 
 type SortKey = "label" | "group" | "protocol" | "target";
 
-const PROTOCOLS: ProtocolType[] = ["ssh", "serial", "powershell", "cmd", "wsl", "custom", "tcp"];
+const PROTOCOLS: ProtocolType[] = ["ssh", "serial", "powershell", "cmd", "wsl", "gitbash", "custom", "tcp"];
 
 function uid(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto

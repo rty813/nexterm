@@ -507,6 +507,9 @@ function backdropColor(): [number, number, number] | undefined {
 
 let appVersionPromise: Promise<string> | undefined;
 
+/** One lookup per window: installing Git while Nexterm runs needs a restart to show up. */
+let gitBashLookup: Promise<string | null> | undefined;
+
 export const backend = {
   async loadInitialState(): Promise<AppStateSnapshot> {
     if (!isTauriRuntime()) {
@@ -812,6 +815,13 @@ export const backend = {
   async sshExec(instanceId: string, command: string): Promise<string> {
     if (!isTauriRuntime()) throw new Error("Browser preview mode");
     return invoke<string>("ssh_exec", { instanceId, command });
+  },
+
+  /** Git for Windows' bin\bash.exe that a Git Bash pane starts; null when not installed. */
+  findGitBash(): Promise<string | null> {
+    if (!isTauriRuntime()) return Promise.resolve(null);
+    gitBashLookup ??= invoke<string | null>("find_git_bash").catch(() => null);
+    return gitBashLookup;
   },
 
   /** Execute agent hook setup in the WSL session's default distribution. */
