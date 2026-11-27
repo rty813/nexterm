@@ -12,7 +12,6 @@ import {
   requestedSize,
   toRemote,
   wheelUnits,
-  type Box,
   type ScaleMode,
 } from "../utils/desktopView";
 import type { PaneApi, PaneExtras, ReconnectCredentials } from "./TerminalPane";
@@ -21,6 +20,9 @@ interface DesktopPaneProps {
   leaf: TerminalLeafNode;
   visible: boolean;
   isActive: boolean;
+  fullscreen: boolean;
+  windowFullscreen: boolean;
+  onFullscreenPane: (paneId: string | null) => void;
   extras: PaneExtras;
   onActivate: (paneId: string) => void;
   onReconnectPane: (paneId: string, creds?: ReconnectCredentials) => void;
@@ -49,7 +51,9 @@ function cursorCss(rgba: Uint8ClampedArray<ArrayBuffer>, width: number, height: 
  * changed parts of the remote screen; this draws them on a canvas the size of the remote
  * desktop (scaled by CSS) and returns keyboard and mouse input.
  */
-export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActive, extras, onActivate, onReconnectPane }) => {
+export const DesktopPane: React.FC<DesktopPaneProps> = ({
+  leaf, visible, isActive, fullscreen, windowFullscreen, onFullscreenPane, extras, onActivate, onReconnectPane,
+}) => {
   const { t } = useTranslation();
   const paneId = leaf.paneId;
   const desktop = { ...DEFAULT_DESKTOP, ...(leaf.session.desktop ?? {}) };
@@ -59,12 +63,9 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [remote, setRemote] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  const remoteRef = useRef(remote);
-  remoteRef.current = remote;
   const [view, setView] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [scale, setScale] = useState<ScaleMode>(desktop.scale);
   const [cursor, setCursor] = useState("default");
-  const [fullscreen, setFullscreen] = useState(false);
   const [focused, setFocused] = useState(false);
 
   // ---- credentials: NLA signs in before the session exists, so ask before connecting.
@@ -86,9 +87,7 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
   };
 
   const dpr = window.devicePixelRatio || 1;
-  const box: Box = imageBox(view.w, view.h, remote.w, remote.h, scale, dpr);
-  const boxRef = useRef(box);
-  boxRef.current = box;
+  const box = imageBox(view.w, view.h, remote.w, remote.h, scale, dpr);
 
   // ---- frames from the backend
   const onFrame = useCallback(
@@ -103,7 +102,7 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
           setRemote({ w: frame.width, h: frame.height });
           break;
         case "batch": {
-          const ctx = canvas.getContext("2d");
+          const ctx = canvas.getContext("2d", { alpha: false });
           if (ctx) {
             for (const r of frame.rects) {
               if (r.w === 0 || r.h === 0) continue;
@@ -136,11 +135,15 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
     const w = el?.clientWidth || 1280;
     const h = el?.clientHeight || 800;
     const size = requestedSize(w, h, window.devicePixelRatio || 1);
-    void backend.desktopConnect(paneId, leaf.session, size.width, size.height, size.scale, onFrame).catch((err) => {
+    let current = true;
+    void backend.desktopConnect(paneId, leaf.session, size.width, size.height, size.scale, (buf) => {
+      // A closing connection may still deliver a cursor/resize/batch (and stale ACKs).
+      if (current) onFrame(buf);
+    }).catch((err) => {
       console.warn("desktop connect failed", err);
     });
-    // The pane closing disconnects through `disconnect_terminal` (App), which also ends
-    // desktop sessions; nothing to do on unmount.
+    // The app owns the disconnect.
+    return () => { current = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneId, leaf.reconnectCount, authOpen]);
 
@@ -167,38 +170,25 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
     if (!viewOnly) backend.desktopInput(paneId, events);
   }, [paneId, viewOnly]);
 
-  const pendingMove = useRef<{ x: number; y: number } | null>(null);
-  const moveFrame = useRef(0);
-  const flushMove = useCallback(() => {
-    moveFrame.current = 0;
-    const p = pendingMove.current;
-    pendingMove.current = null;
-    if (p) send([{ type: "move", x: p.x, y: p.y }]);
-  }, [send]);
-
-  const remotePoint = (e: { clientX: number; clientY: number }) => {
+  const remotePoint = useCallback((e: { clientX: number; clientY: number }) => {
     const canvas = canvasRef.current;
-    const r = remoteRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    return toRemote(e.clientX - rect.left, e.clientY - rect.top, { x: 0, y: 0, w: rect.width, h: rect.height }, r.w, r.h);
-  };
+    return toRemote(e.clientX - rect.left, e.clientY - rect.top, { x: 0, y: 0, w: rect.width, h: rect.height }, canvas.width, canvas.height);
+  }, []);
 
   const onPointerMove = (e: React.PointerEvent) => {
-    pendingMove.current = remotePoint(e);
-    // One move per frame is plenty; mouse input never happens while the window is hidden.
-    if (!moveFrame.current) moveFrame.current = requestAnimationFrame(flushMove);
+    // WebView2 already coalesces pointermove. Never make input wait for the next canvas repaint.
+    send([{ type: "move", ...remotePoint(e) }]);
   };
 
   const onPointerButton = (down: boolean) => (e: React.PointerEvent) => {
     if (down) {
-      containerRef.current?.focus();
+      containerRef.current?.focus({ preventScroll: true });
       onActivate(paneId);
-      (e.target as Element).setPointerCapture?.(e.pointerId);
-    }
-    if (moveFrame.current) {
-      cancelAnimationFrame(moveFrame.current);
-      flushMove();
+      // Capture is best-effort (WebView2 can cancel it during a native fullscreen
+      // transition); failure must not prevent the actual button event.
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* no active pointer */ }
     }
     const p = remotePoint(e);
     send([{ type: "button", x: p.x, y: p.y, button: e.button, down }]);
@@ -218,21 +208,22 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [send, scale]);
+  }, [send, scale, remotePoint]);
 
+  const acceptsKeys = visible && isActive && !viewOnly && !authOpen && leaf.status === "connected";
   const onKey = (down: boolean) => (e: React.KeyboardEvent) => {
-    // Typing in the sign-in card is not remote input.
-    if (authOpen || (e.target as HTMLElement).closest?.("input, textarea, select")) return;
+    // Toolbar buttons and credential fields keep their local keyboard semantics.
+    if (!acceptsKeys || e.target !== e.currentTarget) return;
     // A local input method is composing: its result is typed on the remote side through
     // the remote's own input method instead.
-    if (e.nativeEvent.isComposing || e.key === "Process") return;
+    if (down && (e.nativeEvent.isComposing || e.key === "Process")) return;
     e.preventDefault();
     e.stopPropagation();
     send([{ type: "key", code: e.code, key: e.key, down }]);
   };
 
-  const onFocus = () => {
+  const onFocus = (e: React.FocusEvent) => {
+    if (e.target !== e.currentTarget) return;
     setFocused(true);
     // VNC has no clipboard sync of its own: offer the local text when the pane is entered.
     if (isVnc && desktop.clipboard && !viewOnly) {
@@ -240,19 +231,22 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
     }
   };
 
-  const onBlur = (e: React.FocusEvent) => {
+  const releaseInput = useCallback(() => {
     send([{ type: "releaseAll" }]);
-    // Focus moving to the toolbar or the sign-in card stays inside the pane.
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
+  }, [send]);
+
+  const onBlur = (e: React.FocusEvent) => {
+    if (e.target !== e.currentTarget) return;
+    setFocused(false);
+    releaseInput();
   };
 
   // Windows key combinations (Win+X, Alt+Tab, ...) never reach the page: while the pane has
   // focus the backend takes them with a keyboard hook and sends them to the session.
   const captureKeys =
     focused &&
-    !viewOnly &&
-    !authOpen &&
-    (desktop.windowsKeys === "remote" || (desktop.windowsKeys === "fullscreen" && fullscreen));
+    acceptsKeys &&
+    (desktop.windowsKeys === "remote" || (desktop.windowsKeys === "fullscreen" && windowFullscreen));
   useEffect(() => {
     if (!captureKeys) return;
     backend.desktopCaptureKeys(paneId, true);
@@ -272,12 +266,6 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
   useEffect(() => {
     if (isActive && visible && !authOpen) containerRef.current?.focus({ preventScroll: true });
   }, [isActive, visible, authOpen]);
-
-  useEffect(() => {
-    const onChange = () => setFullscreen(document.fullscreenElement === containerRef.current);
-    document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
-  }, []);
 
   // The app's pane commands (focus, paste, sync input) reach this pane too.
   useEffect(() => {
@@ -351,13 +339,14 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
   };
 
   const toggleFullscreen = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void el.requestFullscreen().then(() => el.focus());
+    onActivate(paneId);
+    onFullscreenPane(fullscreen ? null : paneId);
+    containerRef.current?.focus({ preventScroll: true });
   };
 
   const nextScale = () => setScale((s) => (s === "fit" ? "actual" : s === "actual" ? "stretch" : "fit"));
+  // An RDP desktop that follows the pane is drawn 1:1 whatever the mode: nothing to switch.
+  const scalable = isVnc || desktop.resize === "fixed";
 
   const failed = leaf.status === "disconnected" || leaf.status === "error";
   const connecting = !authOpen && leaf.status === "connecting" && remote.w === 0;
@@ -367,6 +356,7 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
       ref={containerRef}
       className={`desktop-pane ${scale === "actual" ? "desktop-scroll" : ""}`}
       tabIndex={0}
+      data-desktop-input={acceptsKeys ? "" : undefined}
       onKeyDown={onKey(true)}
       onKeyUp={onKey(false)}
       onFocus={onFocus}
@@ -388,12 +378,19 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
         onPointerMove={onPointerMove}
         onPointerDown={onPointerButton(true)}
         onPointerUp={onPointerButton(false)}
+        onPointerCancel={releaseInput}
+        onLostPointerCapture={(e) => { if (e.buttons) releaseInput(); }}
       />
 
       <div
         className={`desktop-toolbar-wrap${barPinned ? " pinned" : ""}${barDragging ? " dragging" : ""}`}
         style={{ "--bar-x": `${barX * 100}%` } as React.CSSProperties}
-        onMouseDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          // Mouse-operated toolbar controls should not silently disarm the Win-key hook.
+          // Tabbing to the buttons still gives them normal keyboard focus.
+          if (document.activeElement === containerRef.current) e.preventDefault();
+          e.stopPropagation();
+        }}
       >
         <div className="desktop-toolbar">
           {!isVnc || !viewOnly ? (
@@ -401,9 +398,11 @@ export const DesktopPane: React.FC<DesktopPaneProps> = ({ leaf, visible, isActiv
               <Keyboard size={13} />
             </button>
           ) : null}
-          <button type="button" className="btn-ghost btn-xs" title={t(`desktop.scale.${scale}`)} onClick={nextScale}>
-            <Scan size={13} />
-          </button>
+          {scalable && (
+            <button type="button" className="btn-ghost btn-xs" title={t(`desktop.scale.${scale}`)} onClick={nextScale}>
+              <Scan size={13} />
+            </button>
+          )}
           <button type="button" className="btn-ghost btn-xs" title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} onClick={toggleFullscreen}>
             {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
           </button>

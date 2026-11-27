@@ -20,6 +20,7 @@ use ironrdp_connector::sspi::generator::NetworkRequest;
 use ironrdp_connector::{ConnectionResult, ConnectorResult, Credentials, DesktopSize, ServerName};
 use ironrdp_core::WriteBuf;
 use ironrdp_displaycontrol::client::DisplayControlClient;
+use ironrdp_egfx::client::{GraphicsPipelineClient, GraphicsPipelineHandler};
 use ironrdp_graphics::image_processing::PixelFormat;
 use ironrdp_input::{Database, MouseButton, MousePosition, Operation, Scancode, WheelRotations};
 use ironrdp_pdu::input::fast_path::FastPathInputEvent;
@@ -36,7 +37,7 @@ use tokio::time::Instant;
 
 use crate::models::{DesktopConfig, SessionConfig};
 
-use super::frame::Rect;
+use super::frame::{Rect, Region};
 use super::{certs, keymap, Control, InputEvent, SessionCtx, SyncStream};
 
 trait AsyncReadWrite: AsyncRead + AsyncWrite {}
@@ -169,6 +170,15 @@ fn may_be_ms_account(ctx: &SessionCtx, error: &str) -> bool {
         && user.contains('@')
 }
 
+// ActiveStage drains this client's compositor after EndFrame. No external H.264
+// decoder is installed: only advertise codecs IronRDP can actually decode.
+struct GraphicsHandler;
+impl GraphicsPipelineHandler for GraphicsHandler {}
+
+fn graphics_pipeline() -> GraphicsPipelineClient {
+    GraphicsPipelineClient::new(Box::new(GraphicsHandler), None)
+}
+
 fn build_connector(
     s: &SessionConfig,
     d: &DesktopConfig,
@@ -217,7 +227,7 @@ fn build_connector(
         remote_application_mode: false,
         rail_support_level: ironrdp_pdu::rdp::capability_sets::RailSupportLevel::empty(),
         enable_audio_capture: false,
-        support_dyn_vc_gfx_protocol: false,
+        support_dyn_vc_gfx_protocol: color_depth == 32,
         bitmap: Some(ironrdp_connector::BitmapConfig { lossy_compression: true, color_depth, codecs }),
         client_build: 0,
         client_name,
@@ -232,12 +242,15 @@ fn build_connector(
         pointer_software_rendering: false,
         multitransport_flags: None,
         compression_type: Some(CompressionType::K64),
-        performance_flags: PerformanceFlags::default(),
+        performance_flags: PerformanceFlags::default() - PerformanceFlags::DISABLE_FULLWINDOWDRAG,
         timezone_info: TimezoneInfo::default(),
         alternate_shell: String::new(),
         work_dir: String::new(),
     };
     let mut drdynvc = ironrdp_dvc::DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+    if color_depth == 32 {
+        drdynvc = drdynvc.with_dynamic_channel_factory(ironrdp_egfx::CHANNEL_NAME, graphics_pipeline);
+    }
     if local_audio {
         // The two playback DVCs share the formats negotiated on the reliable channel.
         // Factories, because the server closes and reopens them (e.g. on a device change).
@@ -344,6 +357,16 @@ struct PendingResize {
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(400);
 
+fn paint_deadline(framed: bool, first: bool, start: Instant, now: Instant) -> Instant {
+    if framed {
+        start
+    } else if first {
+        (now + Duration::from_millis(100)).min(start + Duration::from_millis(750))
+    } else {
+        start + Duration::from_millis(16)
+    }
+}
+
 async fn active(
     ctx: &SessionCtx,
     framed: Upgraded,
@@ -367,6 +390,14 @@ async fn active(
         pointer_software_rendering: result.pointer_software_rendering,
     }
     .build();
+    // Servers often send a repaint as many narrow bitmap strips. Collect damage against
+    // the decoded image, not a separate RGBA copy / IPC message for each incoming PDU.
+    let mut damage = Region::default();
+    let mut first_paint = true;
+    let mut paint_started = Instant::now();
+    let mut image_size = (image.width(), image.height());
+    let paint_timer = tokio::time::sleep(Duration::ZERO);
+    tokio::pin!(paint_timer);
     let mut input = Database::new();
     let mut pending: Option<PendingResize> = None;
     let mut timeouts = tokio::time::interval(Duration::from_secs(5));
@@ -377,7 +408,13 @@ async fn active(
         let outputs: Vec<ActiveStageOutput> = tokio::select! {
             frame = boxed(reader.read_pdu()) => {
                 let (action, payload) = frame.context("RDP 连接已断开")?;
-                stage.process(&mut image, action, &payload, None).map_err(friendly)?
+                // Without the transport timestamp IronRDP reports zero measured bandwidth.
+                stage.process(&mut image, action, &payload, reader.last_read_at()).map_err(friendly)?
+            }
+            _ = &mut paint_timer, if !damage.is_empty() => {
+                ctx.frames.present(damage.take(), image.data(), usize::from(image.width()) * 4);
+                first_paint = false;
+                continue;
             }
             control = rx.recv() => match control {
                 None | Some(Control::Close) => {
@@ -445,11 +482,20 @@ async fn active(
             }
         };
 
-        let mut painted = false;
+        // RDPEGFX can reset the output without a DeactivateAll. Mouse coordinates and
+        // the IPC framebuffer must use the new dimensions too, not the original handshake.
+        if image_size != (image.width(), image.height()) {
+            image_size = (image.width(), image.height());
+            damage.clear();
+            first_paint = true;
+            ctx.frames.resize(u32::from(image_size.0), u32::from(image_size.1));
+        }
         for out in outputs {
             match out {
                 ActiveStageOutput::ResponseFrame(frame) => {
-                    boxed(writer.write_all(&frame)).await.context("RDP 写入失败")?;
+                    if !frame.is_empty() {
+                        boxed(writer.write_all(&frame)).await.context("RDP 写入失败")?;
+                    }
                 }
                 ActiveStageOutput::GraphicsUpdate(r) => {
                     let rect = Rect::new(
@@ -458,8 +504,16 @@ async fn active(
                         u32::from(r.right.saturating_sub(r.left)) + 1,
                         u32::from(r.bottom.saturating_sub(r.top)) + 1,
                     );
-                    ctx.frames.put(rect, image.data(), usize::from(image.width()) * 4, 0, 0);
-                    painted = true;
+                    let now = Instant::now();
+                    if damage.is_empty() {
+                        paint_started = now;
+                    }
+                    // EGFX output is already frame-complete. Legacy bitmap PDUs have no
+                    // such boundary: on a new surface allow a burst to finish, but never
+                    // block input or wait forever for a server that paints sparsely.
+                    let framed = stage.get_dvc::<GraphicsPipelineClient>().is_some_and(|g| g.processor().is_active());
+                    paint_timer.as_mut().reset(paint_deadline(framed, first_paint, paint_started, now));
+                    damage.add(rect);
                 }
                 ActiveStageOutput::PointerDefault => ctx.frames.cursor_default(),
                 ActiveStageOutput::PointerHidden => ctx.frames.cursor_hidden(),
@@ -469,7 +523,7 @@ async fn active(
                     u32::from(p.hotspot_y),
                     u32::from(p.width),
                     u32::from(p.height),
-                    &p.bitmap_data,
+                    &visible_pointer(usize::from(p.width), usize::from(p.height), &p.bitmap_data),
                 ),
                 ActiveStageOutput::DeactivateAll => {
                     // Deactivation-reactivation (e.g. after a resize): new desktop size.
@@ -491,8 +545,11 @@ async fn active(
                             ..
                         } = activation.connection_activation_state()
                         {
+                            damage.clear(); // old coordinates / pixels no longer apply
                             image = DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
-                            ctx.frames.resize(u32::from(desktop_size.width), u32::from(desktop_size.height));
+                            image_size = (desktop_size.width, desktop_size.height);
+                            first_paint = true;
+                            ctx.frames.resize(u32::from(image_size.0), u32::from(image_size.1));
                             if !stage.reactivate(
                                 activation.io_channel_id(),
                                 activation.user_channel_id(),
@@ -513,10 +570,40 @@ async fn active(
                 _ => {}
             }
         }
-        if painted {
-            ctx.frames.flush();
+    }
+}
+
+/// IronRDP decodes a pointer's "inverted" pixels (AND and XOR mask both set: the text I-beam,
+/// crosshairs) as transparent white, because a cursor image cannot invert what is under it.
+/// A pointer made only of those would be invisible: draw them black with a white outline.
+/// Pointers with any visible pixel are left alone (their transparent white is just transparent).
+fn visible_pointer(width: usize, height: usize, rgba: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    const INVERTED: [u8; 4] = [0xFF, 0xFF, 0xFF, 0x00];
+    let len = width * height * 4;
+    if len == 0 || rgba.len() < len {
+        return rgba.into();
+    }
+    let pixels = || rgba[..len].chunks_exact(4);
+    if pixels().any(|p| p[3] != 0) || !pixels().any(|p| p == INVERTED) {
+        return rgba.into();
+    }
+    let inverted = |x: usize, y: usize| rgba[(y * width + x) * 4..][..4] == INVERTED;
+    let mut out = vec![0u8; len];
+    for y in 0..height {
+        for x in 0..width {
+            let color = if inverted(x, y) {
+                [0x00, 0x00, 0x00, 0xFF]
+            } else if (y.saturating_sub(1)..(y + 2).min(height))
+                .any(|ny| (x.saturating_sub(1)..(x + 2).min(width)).any(|nx| inverted(nx, ny)))
+            {
+                [0xFF, 0xFF, 0xFF, 0xFF]
+            } else {
+                continue;
+            };
+            out[(y * width + x) * 4..][..4].copy_from_slice(&color);
         }
     }
+    out.into()
 }
 
 /// One message from the clipboard thread. A clipboard operation that fails (the channel not
@@ -571,8 +658,14 @@ fn to_fast_path(db: &mut Database, events: Vec<InputEvent>) -> SmallVec<[FastPat
         match event {
             InputEvent::Key { code, down, .. } => {
                 if let Some((extended, sc)) = keymap::scancode(&code) {
-                    let sc = Scancode::from_u8(extended, sc);
-                    ops.push(if down { Operation::KeyPressed(sc) } else { Operation::KeyReleased(sc) });
+                    let scan = Scancode::from_u8(extended, sc);
+                    // Database turns a repeated press into break + make. That's useful for
+                    // text keys, but a held Shift would become repeated Sticky Keys taps.
+                    let modifier = matches!((extended, sc), (_, 0x1D | 0x38) | (false, 0x2A | 0x36) | (true, 0x5B | 0x5C));
+                    out.extend(db.apply(ops.drain(..)));
+                    if !down || !modifier || !db.is_key_pressed(scan) {
+                        out.extend(db.apply([if down { Operation::KeyPressed(scan) } else { Operation::KeyReleased(scan) }]));
+                    }
                 }
             }
             InputEvent::Text { text } => {
@@ -710,6 +803,78 @@ mod tests {
     }
 
     #[test]
+    fn inverted_only_pointer_becomes_visible() {
+        const T: [u8; 4] = [0, 0, 0, 0];
+        const I: [u8; 4] = [0xFF, 0xFF, 0xFF, 0x00];
+        const B: [u8; 4] = [0, 0, 0, 0xFF];
+        const W: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+        // A 4x3 pointer with one inverted pixel: black, outlined in white, the rest untouched.
+        let beam = [T, T, T, T, T, I, T, T, T, T, T, T].concat();
+        assert_eq!(visible_pointer(4, 3, &beam).as_ref(), [W, W, W, T, W, B, W, T, W, W, W, T].concat());
+        // Any visible pixel: an ordinary pointer, where transparent white is only transparent.
+        let arrow = [B, I, T, T].concat();
+        assert_eq!(visible_pointer(2, 2, &arrow).as_ref(), arrow);
+        // Nothing to show stays hidden; a short buffer is passed through for `FrameOut` to reject.
+        let blank = [T, T, T, T].concat();
+        assert_eq!(visible_pointer(2, 2, &blank).as_ref(), blank);
+        assert_eq!(visible_pointer(2, 2, &I).as_ref(), I);
+    }
+
+    #[test]
+    fn gfx_channel_matches_the_advertised_color_depth() {
+        for (color_depth, gfx) in [(32, true), (16, false)] {
+            let desktop = DesktopConfig { color_depth, ..DesktopConfig::default() };
+            let mut client = build_connector(&SessionConfig::default(), &desktop, DesktopSize { width: 800, height: 600 }, 100, false, None);
+            assert_eq!(client.config.support_dyn_vc_gfx_protocol, gfx);
+            assert_eq!(client.get_static_channel_processor::<ironrdp_dvc::DrdynvcClient>().unwrap()
+                .has_registered_dvc::<GraphicsPipelineClient>(), gfx);
+        }
+    }
+
+    #[test]
+    fn gfx_resize_and_two_separate_strips_are_committed_at_end_frame() {
+        use ironrdp_dvc::DvcProcessor as _;
+        use ironrdp_egfx::pdu::*;
+        use ironrdp_pdu::geometry::ExclusiveRectangle;
+        let mut gfx = graphics_pipeline();
+        let send = |gfx: &mut GraphicsPipelineClient, pdu| {
+            let raw = ironrdp_core::encode_vec(&pdu).unwrap();
+            gfx.process(1, &ironrdp_graphics::zgfx::wrap_uncompressed(&raw)).unwrap()
+        };
+        gfx.start(1).unwrap();
+        send(&mut gfx, GfxPdu::CapabilitiesConfirm(CapabilitiesConfirmPdu::from_typed(&CapabilitySet::V8 { flags: CapabilitiesV8Flags::SMALL_CACHE })));
+        send(&mut gfx, GfxPdu::ResetGraphics(ResetGraphicsPdu { width: 64, height: 128, monitors: vec![] }));
+        let mut image = DecodedImage::new(ironrdp_graphics::image_processing::PixelFormat::RgbA32, 32, 32);
+        let drain = |gfx: &mut GraphicsPipelineClient, image: &mut DecodedImage|
+            ironrdp_session::composite_graphics_pipeline(gfx, image).unwrap();
+        assert!(drain(&mut gfx, &mut image).reset);
+        assert_eq!((image.width(), image.height()), (64, 128));
+        send(&mut gfx, GfxPdu::CreateSurface(CreateSurfacePdu { surface_id: 1, width: 64, height: 128, pixel_format: PixelFormat::XRgb }));
+        send(&mut gfx, GfxPdu::MapSurfaceToOutput(MapSurfaceToOutputPdu { surface_id: 1, output_origin_x: 0, output_origin_y: 0 }));
+        send(&mut gfx, GfxPdu::StartFrame(StartFramePdu { frame_id: 1, timestamp: Timestamp { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 } }));
+        for top in [0, 64] {
+            send(&mut gfx, GfxPdu::SolidFill(SolidFillPdu {
+                surface_id: 1, fill_pixel: Color { r: 100, g: 50, b: 25, xa: 255 },
+                rectangles: vec![ExclusiveRectangle { left: 0, top, right: 64, bottom: top + 64 }],
+            }));
+            assert!(drain(&mut gfx, &mut image).region.is_none(), "don't expose half a desktop");
+        }
+        assert_eq!(send(&mut gfx, GfxPdu::EndFrame(EndFramePdu { frame_id: 1 })).len(), 1, "frame acknowledgement");
+        assert!(drain(&mut gfx, &mut image).region.is_some());
+        for px in image.data().chunks_exact(4) { assert_eq!(&px[..3], &[100, 50, 25]); }
+    }
+
+    #[test]
+    fn legacy_repaint_is_bounded_and_framed_damage_never_waits_for_more_tiles() {
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        assert_eq!(paint_deadline(false, true, start, start + ms(60)), start + ms(160));
+        assert_eq!(paint_deadline(false, true, start, start + ms(740)), start + ms(750));
+        assert_eq!(paint_deadline(false, false, start, start + ms(8)), start + ms(16));
+        assert_eq!(paint_deadline(true, true, start, start), start);
+    }
+
+    #[test]
     fn local_playback_advertises_the_paired_static_channels_only_when_enabled() {
         for (mode, enabled) in [("local", true), ("off", false), ("remote", false)] {
             let mut client = audio_connector(mode);
@@ -760,6 +925,21 @@ mod tests {
         assert_eq!(split_user("alice", " CORP "), ("alice".into(), Some("CORP".into())));
         assert_eq!(split_user("alice@corp.example", ""), ("alice@corp.example".into(), None));
         assert_eq!(split_user("bob", ""), ("bob".into(), None));
+    }
+
+    #[test]
+    fn modifier_repeat_is_not_a_series_of_taps() {
+        let key = |code: &str, down| InputEvent::Key { code: code.into(), key: String::new(), down };
+        for code in ["ShiftLeft", "ShiftRight", "ControlRight", "AltLeft", "MetaLeft"] {
+            let mut db = Database::new();
+            let mut events = vec![key(code, true); 8];
+            events.push(key(code, false));
+            assert_eq!(to_fast_path(&mut db, events).len(), 2, "{code}: exactly one make and one break");
+            assert!(db.release_all().is_empty());
+            assert_eq!(to_fast_path(&mut db, vec![key(code, true), InputEvent::ReleaseAll]).len(), 2);
+        }
+        let mut db = Database::new();
+        assert_eq!(to_fast_path(&mut db, vec![key("KeyA", true); 2]).len(), 3, "text still repeats");
     }
 
     #[test]

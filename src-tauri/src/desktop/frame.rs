@@ -279,8 +279,8 @@ impl FrameOut {
         st.dirty.clear();
         let (w, h) = (st.fb.width, st.fb.height);
         self.sink.send(encode_resize(w, h));
-        st.dirty.add(Rect::new(0, 0, w, h));
-        self.flush_locked(&mut st);
+        // The resize message clears the canvas. A full black pixel batch would only
+        // consume IPC bandwidth and an ACK slot before any real pixels arrive.
     }
 
     /// Pixels changed (see [`Framebuffer::put`]); sent by the next [`FrameOut::flush`].
@@ -288,6 +288,16 @@ impl FrameOut {
         let mut st = self.lock();
         let written = st.fb.put(rect, src, src_stride, src_x, src_y);
         st.dirty.add(written);
+    }
+
+    /// Publish the latest decoded RDP pixels for one paint interval as a single batch.
+    pub fn present(&self, rects: Vec<Rect>, image: &[u8], stride: usize) {
+        let mut st = self.lock();
+        for rect in rects {
+            let written = st.fb.put(rect, image, stride, 0, 0);
+            st.dirty.add(written);
+        }
+        self.flush_locked(&mut st);
     }
 
     pub fn copy_within(&self, src: Rect, dst_x: u32, dst_y: u32) {
@@ -448,11 +458,28 @@ mod tests {
     }
 
     #[test]
+    fn present_merges_scan_lines_and_resize_discards_unsent_pixels() {
+        let sink = Collect::default();
+        let out = FrameOut::new(Box::new(sink.clone()));
+        out.resize(2, 2);
+        let lines = vec![Rect::new(0, 0, 2, 1), Rect::new(0, 1, 2, 1)];
+        out.present(lines.clone(), &[7; 16], 8);
+        assert_eq!(sink.kinds(), vec![MSG_RESIZE, MSG_BATCH]);
+        assert_eq!(&sink.0.lock().unwrap()[1][5..15], &[1, 0, 0, 0, 0, 0, 2, 0, 2, 0]);
+        out.present(lines.clone(), &[8; 16], 8);
+        out.present(lines, &[9; 16], 8); // window full: still pending
+        out.resize(1, 1);
+        out.ack(2);
+        assert_eq!(sink.kinds(), vec![MSG_RESIZE, MSG_BATCH, MSG_BATCH, MSG_RESIZE]);
+    }
+
+    #[test]
     fn flow_control_holds_updates_until_acked() {
         let sink = Collect::default();
         let out = FrameOut::new(Box::new(sink.clone()));
-        out.resize(8, 8); // resize + full batch #1
-        assert_eq!(sink.kinds(), vec![MSG_RESIZE, MSG_BATCH]);
+        out.resize(8, 8);
+        assert_eq!(sink.kinds(), vec![MSG_RESIZE]);
+        out.present(vec![Rect::new(0, 0, 8, 8)], &[0; 8 * 8 * 4], 8 * 4); // actual batch #1
         let px = [1u8; 4];
         out.put(Rect::new(0, 0, 1, 1), &px, 4, 0, 0);
         out.flush(); // batch #2: window now full

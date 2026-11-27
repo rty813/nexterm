@@ -5736,6 +5736,11 @@ html.ctxmenu-host #root {
 }
 
 /* ---- RDP / VNC panes (DesktopPane.tsx) ---- */
+.desktop-fullscreen-workspace {
+  position: fixed;
+  inset: 0;
+  z-index: 25; /* above window chrome, below dialogs and the lock screen */
+}
 .desktop-pane {
   position: relative;
   flex: 1;

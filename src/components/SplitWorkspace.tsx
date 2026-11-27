@@ -132,6 +132,8 @@ interface SplitWorkspaceProps {
   /** Group shown alone (maximized), or null. */
   zoomedGroupId: string | null;
   focusMode: boolean;
+  fullscreenPaneId: string | null;
+  onFullscreenPane: (paneId: string | null) => void;
   theme: ThemeDefinition;
   settings: AppSettings;
   extras: PaneExtras;
@@ -164,6 +166,8 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
   activeGroupId,
   zoomedGroupId,
   focusMode,
+  fullscreenPaneId,
+  onFullscreenPane,
   theme,
   settings,
   extras,
@@ -403,6 +407,9 @@ export const SplitWorkspace: React.FC<SplitWorkspaceProps> = ({
             ) : isDesktopProtocol(leaf.session.protocol) ? (
               <DesktopPane
                 leaf={leaf}
+                fullscreen={fullscreenPaneId === leaf.paneId}
+                windowFullscreen={focusMode}
+                onFullscreenPane={onFullscreenPane}
                 visible={visible}
                 isActive={visible && slot.group.id === activeGroupId}
                 extras={extras}

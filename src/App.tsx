@@ -494,14 +494,8 @@ export const App: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [ws, sessions]);
 
-  // Explicit Focus Mode toggle (zero background watchdog timer bugs!)
-  const toggleFocusMode = useCallback(() => {
-    setFocusMode((prev) => {
-      const next = !prev;
-      void backend.setWindowFullscreen(next);
-      return next;
-    });
-  }, []);
+  const toggleFocusMode = useCallback(() => setFocusMode((prev) => !prev), []);
+  const [fullscreenPaneId, setFullscreenPaneId] = useState<string | null>(null);
 
   const sessionsRef = useRef<SessionConfig[]>([]);
   sessionsRef.current = sessions;
@@ -860,6 +854,20 @@ export const App: React.FC = () => {
   );
 
   const activeLeaf = useMemo(() => activeLeafOf(activeGroup) ?? null, [activeGroup]);
+
+  // Use the existing native window, not WebView2's separate HTML fullscreen presentation.
+  // Keep the same canvas/focus/input surface while resizing, including in split layouts.
+  const desktopFullscreen = fullscreenPaneId !== null && fullscreenPaneId === activeLeaf?.paneId
+    && !locked && !plugins.active.tab;
+  useEffect(() => {
+    if (!desktopFullscreen) setFullscreenPaneId(null);
+  }, [desktopFullscreen, fullscreenPaneId]);
+  const nativeFullscreen = focusMode || desktopFullscreen;
+  useEffect(() => {
+    if (!nativeFullscreen) return;
+    void backend.setWindowFullscreen(true);
+    return () => { void backend.setWindowFullscreen(false); };
+  }, [nativeFullscreen]);
 
   const persistSessions = (next: SessionConfig[]) => {
     // Saving over data that failed to load would lose it.
@@ -1793,7 +1801,8 @@ export const App: React.FC = () => {
       const target = e.target as HTMLElement | null;
       const inXterm = Boolean(target?.closest?.(".xterm"));
       const inField = !inXterm && Boolean(target?.closest?.("input, textarea, select, [contenteditable]"));
-      if (inField || locked) return;
+      // Capture phase runs before DesktopPane: don't execute a local action for a remote keystroke.
+      if (inField || locked || target?.matches("[data-desktop-input]")) return;
       // Alt+1..9: tab N of the active group.
       if (e.altKey && !e.ctrlKey && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
         const ws0 = wsRef.current;
@@ -2943,12 +2952,14 @@ export const App: React.FC = () => {
         {!focusMode && isMainWindow && <PluginViews location="sidebar" />}
         <main className="center-column">
           {isMainWindow && <PluginViews location="tab" />}
-          <div className="plugin-terminal-workspace" hidden={isMainWindow && Boolean(plugins.active.tab)}>
+          <div className={`plugin-terminal-workspace${desktopFullscreen ? " desktop-fullscreen-workspace" : ""}`} hidden={isMainWindow && Boolean(plugins.active.tab)}>
           <SplitWorkspace
             root={ws.root}
-            activeGroupId={activeGroup?.id ?? null}
-            zoomedGroupId={zoomedGroupId}
-            focusMode={focusMode}
+            activeGroupId={locked || (isMainWindow && plugins.active.tab) ? null : activeGroup?.id ?? null}
+            zoomedGroupId={desktopFullscreen ? activeGroup!.id : zoomedGroupId}
+            focusMode={nativeFullscreen}
+            fullscreenPaneId={desktopFullscreen ? fullscreenPaneId : null}
+            onFullscreenPane={setFullscreenPaneId}
             theme={activeTheme}
             settings={settings}
             extras={paneExtras}
@@ -3404,7 +3415,7 @@ export const App: React.FC = () => {
         downloadDir={settings.zmodemDownloadDir ?? ""}
         onDownloadDirChange={(dir) => saveSettings({ ...settings, zmodemDownloadDir: dir })}
       />
-      {zoomedGroupId && (
+      {zoomedGroupId && !desktopFullscreen && (
         <button type="button" className="zoom-indicator" onClick={() => setZoomedGroupId(null)}>
           {t("menu.unzoom")} ({keymap["split.zoom"] || "Alt+Z"})
         </button>

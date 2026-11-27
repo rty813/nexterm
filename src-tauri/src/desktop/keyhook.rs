@@ -10,6 +10,11 @@
 //!
 //! The hook lives on a thread of its own with a message loop, installed only while a pane
 //! captures and removed as soon as it stops.
+//!
+//! Windows does not call a process's own low-level keyboard hook while a window of that
+//! process is in front and registered for raw keyboard input, which tao does by default:
+//! `lib.rs` turns that off (`device_event_filter`). Without it the hook sees every key
+//! except the ones typed into this app.
 
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -156,7 +161,10 @@ mod win {
                     let _ = tx.send(None);
                     return;
                 }
-                let _ = tx.send(Some(GetCurrentThreadId()));
+                if tx.send(Some(GetCurrentThreadId())).is_err() {
+                    UnhookWindowsHookEx(hook);
+                    return;
+                }
                 // Low-level hooks are called from this loop.
                 while GetMessageW(&mut msg, 0, 0, 0) > 0 {}
                 UnhookWindowsHookEx(hook);
@@ -194,20 +202,21 @@ mod win {
         }
         let ctrl = unsafe { GetAsyncKeyState(i32::from(VK_CONTROL)) } < 0;
         let alt = info.flags & LLKHF_ALTDOWN != 0;
-        if !c.grabber.take(info.vkCode, down, ctrl, alt) {
-            return false;
-        }
+        let Some(code) = event_code(info) else { return false };
+        c.grabber.take(info.vkCode, down, ctrl, alt)
+            && c.tx.send(Control::Input(vec![InputEvent::Key { code: code.to_string(), key: String::new(), down }])).is_ok()
+    }
+
+    /// The key as a `KeyboardEvent.code`. Resolved before the key is taken: a key the
+    /// remote side has no code for must not disappear from both sides.
+    fn event_code(info: &KBDLLHOOKSTRUCT) -> Option<&'static str> {
         let extended = info.flags & LLKHF_EXTENDED != 0;
-        let code = match info.vkCode {
+        match info.vkCode {
             VK_LWIN => Some("MetaLeft"),
             VK_RWIN => Some("MetaRight"),
             VK_SNAPSHOT => Some("PrintScreen"),
             _ => u8::try_from(info.scanCode).ok().and_then(|sc| keymap::code_for_scancode(extended, sc)),
-        };
-        if let Some(code) = code {
-            let _ = c.tx.send(Control::Input(vec![InputEvent::Key { code: code.to_string(), key: String::new(), down }]));
         }
-        true
     }
 }
 

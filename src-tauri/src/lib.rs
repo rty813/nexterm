@@ -1633,7 +1633,8 @@ fn desktop_capture_keys(window: tauri::WebviewWindow, ctx: State<'_, AppContext>
     ctx.desktops.capture_keys(&instance_id, hwnd, on);
 }
 
-#[tauri::command]
+// An ACK may encode a large pending batch. Keep this copy off the WebView UI thread.
+#[tauri::command(async)]
 fn desktop_ack(ctx: State<'_, AppContext>, instance_id: String, seq: u32) {
     ctx.desktops.ack(&instance_id, seq);
 }
@@ -1862,6 +1863,10 @@ async fn execute_import(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // tao registers the focused window for raw keyboard input by default, and Windows then
+        // stops calling this process's own low-level keyboard hook (`desktop/keyhook.rs`) exactly
+        // while the window is in front. Nothing here uses device events.
+        .device_event_filter(tauri::DeviceEventFilter::Always)
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Launching the exe again brings back the (possibly hidden) running window.
             show_main_window(app);
