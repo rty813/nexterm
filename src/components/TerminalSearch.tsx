@@ -469,7 +469,7 @@ export const TerminalSearch: React.FC<{
         >
           <Highlighter size={13} />
         </button>
-        <button type="button" className="icon-btn-xs" onClick={close} title={t("search.close")}>
+        <button type="button" className="icon-btn-xs search-close" onClick={close} title={t("search.close")}>
           <X size={14} />
         </button>
       </div>

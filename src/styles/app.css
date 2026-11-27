@@ -2881,7 +2881,7 @@ html.ctxmenu-host #root {
   max-width: calc(100% - 32px);
 }
 .terminal-search-wrap .terminal-search-bar {
-  position: static;
+  position: relative;
 }
 .terminal-search-bar input.invalid,
 .text-input.invalid {
@@ -3153,19 +3153,29 @@ html.ctxmenu-host #root {
   border-top: 1px solid var(--border-subtle);
 }
 
-/* Search bar: keep the input usable in narrow panes; wrap the buttons instead. */
+/* Search bar: keep the input usable in narrow panes; wrap the buttons instead. The
+   input's flex basis is its width, so the bar's shrink-to-fit width (taken from the
+   items' widths) is what the line needs, and nothing wraps while there is room. */
 .terminal-search-wrap .terminal-search-bar {
   flex-wrap: wrap;
   max-width: 100%;
   row-gap: 2px;
+  padding-right: 32px;
 }
 .terminal-search-wrap .terminal-search-bar input {
-  flex: 1 1 140px;
+  flex: 1 1 auto;
   min-width: 120px;
-  width: auto;
+  width: 180px;
+  height: 22px;
 }
 .terminal-search-wrap .terminal-search-bar > *:not(input) {
   flex-shrink: 0;
+}
+/* The close button stays at the end of the first row, also when the buttons wrap. */
+.terminal-search-wrap .terminal-search-bar .search-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
 }
 
 /* ---------- Terminal scrollbar + overview ruler (14px, like WindTerm) ---------- */
