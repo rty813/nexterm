@@ -7,6 +7,7 @@ import {
   Download,
   Edit2,
   FolderInput,
+  KeyRound,
   Keyboard,
   Play,
   Plus,
@@ -23,6 +24,8 @@ import { MoveGroupDialog } from "./MoveGroupDialog";
 import { hasSavedPassword } from "../utils/paneSession";
 import { onekeyChoiceLabel, SessionOnekeyDialog } from "./OnekeyPickers";
 import { useCredentials } from "../services/credentials";
+import { takesCredential } from "../utils/credentials";
+import { BatchLoginDialog } from "./BatchLoginDialog";
 
 type SortKey = "label" | "group" | "protocol" | "target";
 
@@ -62,6 +65,8 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
   const [moveOpen, setMoveOpen] = useState(false);
   /** Sessions whose OneKeys are being set. */
   const [onekeyFor, setOnekeyFor] = useState<SessionConfig[] | null>(null);
+  /** Sessions whose login is being changed. */
+  const [loginFor, setLoginFor] = useState<SessionConfig[] | null>(null);
   const { list: credentials } = useCredentials();
   const onekeyNames = useMemo(() => new Map(credentials.filter((c) => c.onekey).map((c) => [c.id, c.name])), [credentials]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -101,6 +106,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
   }, [sessions, query, protoFilter, groupFilter, sort]);
 
   const selectedSessions = sessions.filter((s) => selected.has(s.id));
+  const canChangeLogin = (list: SessionConfig[]) => list.some((s) => takesCredential(s.protocol));
   const allVisibleSelected = visible.length > 0 && visible.every((s) => selected.has(s.id));
 
   const toggleSort = (key: SortKey) =>
@@ -191,7 +197,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
   // Keyboard: Escape, Delete, Ctrl+A, Enter
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (editing.open || onekeyFor || e.defaultPrevented) return;
+      if (editing.open || onekeyFor || loginFor || e.defaultPrevented) return;
       if (e.key === "Escape") {
         e.preventDefault();
         // An open question first, then the dialog.
@@ -232,6 +238,7 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
         },
         { label: t("sidebar.duplicate"), onClick: () => duplicate(targets) },
         { label: t("manager.moveTo"), onClick: () => setMoveOpen(true) },
+        canChangeLogin(targets) && { label: t("manager.loginMenu"), onClick: () => setLoginFor(targets) },
         { label: t("onekey.managerMenu"), onClick: () => setOnekeyFor(targets) },
         { type: "separator" },
         {
@@ -302,6 +309,15 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
           onClick={() => setOnekeyFor(selectedSessions)}
         >
           <Keyboard size={13} /> OneKey
+        </button>
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={!canChangeLogin(selectedSessions)}
+          onClick={() => setLoginFor(selectedSessions)}
+          title={t("manager.loginMenu")}
+        >
+          <KeyRound size={13} /> {t("manager.loginBtn")}
         </button>
         <button
           type="button"
@@ -465,6 +481,20 @@ export const SessionManager: React.FC<SessionManagerProps> = ({ sessions, onChan
             t("onekey.managerSaved", { count: ids.size })
           );
           setOnekeyFor(null);
+        }}
+      />
+    )}
+    {loginFor && (
+      <BatchLoginDialog
+        sessions={loginFor}
+        onClose={() => setLoginFor(null)}
+        onSave={(changed) => {
+          const byId = new Map(changed.map((s) => [s.id, s]));
+          persist(
+            sessions.map((s) => byId.get(s.id) ?? s),
+            t("manager.loginSaved", { count: changed.length })
+          );
+          setLoginFor(null);
         }}
       />
     )}

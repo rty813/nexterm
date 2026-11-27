@@ -6672,6 +6672,17 @@ html.ctxmenu-host #root {
 .onekey-dialog {
   width: min(560px, calc(100vw - 32px));
 }
+.batch-login-kind {
+  display: flex;
+  gap: 18px;
+}
+.batch-login-kind label,
+.batch-login-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
 .onekey-dialog .modal-body {
   display: flex;
   flex-direction: column;

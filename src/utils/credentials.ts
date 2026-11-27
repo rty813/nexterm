@@ -1,4 +1,4 @@
-import type { AuthType, CredentialSummary, ProtocolType } from "../types/domain";
+import type { AuthType, CredentialSummary, ProtocolType, SessionConfig } from "../types/domain";
 
 /** Protocols whose login can come from the credential manager (Rust `credentials::takes_login`); Telnet answers the login prompts with it. */
 export function takesCredential(protocol: ProtocolType): boolean {
@@ -44,4 +44,61 @@ export function resolveLogin(
     authType: protocol === "ssh" && credential ? credential.authType : own.authType,
     usernameLocked,
   };
+}
+
+/** A login change applied to several sessions at once (session manager). */
+export type BatchLogin =
+  | { kind: "credential"; credentialId: string }
+  | {
+      kind: "own";
+      /** Empty: each session keeps its user name. */
+      username: string;
+      /** SSH sessions only; "keep": each keeps its own. */
+      authType: "keep" | "password" | "privatekey";
+      /** Empty: the saved password is kept (or removed with `clearSecret`). */
+      password: string;
+      /** SSH with a private key; empty: kept. */
+      privateKeyPath: string;
+      passphrase: string;
+      /** Remove the saved password (private key: the saved passphrase). */
+      clearSecret: boolean;
+    };
+
+/**
+ * One session with the batch login applied, or null when it can't take it (a protocol
+ * without a login, or a credential it can't use). Mirrors what the session form saves.
+ */
+export function applyBatchLogin<S extends SessionConfig>(session: S, change: BatchLogin, list: CredentialSummary[]): S | null {
+  const { protocol } = session;
+  if (!takesCredential(protocol)) return null;
+  if (change.kind === "credential") {
+    const credential = list.find((c) => c.id === change.credentialId);
+    if (!credential || !credentialsFor(protocol, [credential]).length) return null;
+    const login = resolveLogin(protocol, credential.id, { username: session.username, authType: session.authType }, list);
+    return {
+      ...session,
+      credentialId: credential.id,
+      username: login.username,
+      authType: login.authType,
+      password: undefined,
+      privateKeyPath: undefined,
+      passphrase: undefined,
+    };
+  }
+  const next: S = { ...session, credentialId: undefined };
+  // A VNC user name selects macOS ARD authentication: never set it in bulk.
+  const username = change.username.trim();
+  if (username && protocol !== "vnc") next.username = username;
+  const usesKey = protocol === "ssh" && (change.authType === "keep" ? session.authType : change.authType) === "privatekey";
+  if (protocol === "ssh" && change.authType !== "keep") next.authType = change.authType;
+  if (usesKey) {
+    if (change.privateKeyPath.trim()) next.privateKeyPath = change.privateKeyPath.trim();
+    if (change.passphrase) next.passphrase = change.passphrase;
+    else if (change.clearSecret) next.passphrase = undefined;
+  } else if (change.password) {
+    next.password = change.password;
+  } else if (change.clearSecret) {
+    next.password = undefined;
+  }
+  return next;
 }

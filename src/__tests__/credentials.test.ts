@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CredentialSummary, SessionConfig } from "../types/domain";
-import { credentialsFor, resolveLogin } from "../utils/credentials";
+import { applyBatchLogin, credentialsFor, resolveLogin, type BatchLogin } from "../utils/credentials";
 import { findSavedLogin, hasSavedLogin, loginPatch, rememberPaneLogin, withoutSessionSecrets } from "../utils/paneSession";
 import { missingDesktopCredentials } from "../utils/desktopView";
 import { credentialResources } from "../i18n.credentials";
@@ -66,6 +66,53 @@ describe("sessions with a credential", () => {
 
   it("keep the reference (not a secret) in workspace snapshots", () => {
     expect(withoutSessionSecrets(withCred).credentialId).toBe("pw");
+  });
+});
+
+describe("changing the login of several sessions", () => {
+  const own = (p: Partial<Extract<BatchLogin, { kind: "own" }>> = {}): BatchLogin => ({
+    kind: "own", username: "", authType: "keep", password: "", privateKeyPath: "", passphrase: "", clearSecret: false, ...p,
+  });
+  const saved: SessionConfig = { ...ssh, password: "old", credentialId: undefined };
+  const keyed: SessionConfig = { ...ssh, authType: "privatekey", privateKeyPath: "~/.ssh/a", passphrase: "pp" };
+  const rdp: SessionConfig = { ...ssh, protocol: "rdp", password: "r" };
+  const vnc: SessionConfig = { ...ssh, protocol: "vnc", username: "" };
+  const serial: SessionConfig = { ...ssh, protocol: "serial" };
+
+  it("picks a credential, dropping the session's own secrets", () => {
+    expect(applyBatchLogin(keyed, { kind: "credential", credentialId: "pw" }, list)).toMatchObject({
+      credentialId: "pw", username: "ops", authType: "password", password: undefined, privateKeyPath: undefined, passphrase: undefined,
+    });
+    expect(applyBatchLogin(saved, { kind: "credential", credentialId: "anon" }, list)).toMatchObject({ credentialId: "anon", username: "me" });
+    // VNC keeps its own (empty) user name; a key can't log in to RDP; serial has no login.
+    expect(applyBatchLogin(vnc, { kind: "credential", credentialId: "pw" }, list)).toMatchObject({ credentialId: "pw", username: "" });
+    expect(applyBatchLogin(rdp, { kind: "credential", credentialId: "key" }, list)).toBeNull();
+    expect(applyBatchLogin(serial, { kind: "credential", credentialId: "pw" }, list)).toBeNull();
+    expect(applyBatchLogin(saved, { kind: "credential", credentialId: "gone" }, list)).toBeNull();
+  });
+
+  it("keeps what is left empty", () => {
+    const withCred: SessionConfig = { ...saved, credentialId: "pw" };
+    expect(applyBatchLogin(withCred, own(), list)).toEqual({ ...saved, credentialId: undefined });
+    expect(applyBatchLogin(keyed, own(), list)).toEqual({ ...keyed, credentialId: undefined });
+  });
+
+  it("sets the user name, auth type and secrets", () => {
+    expect(applyBatchLogin(saved, own({ username: " root ", password: "new" }), list)).toMatchObject({ username: "root", password: "new" });
+    expect(applyBatchLogin(saved, own({ authType: "privatekey", privateKeyPath: " ~/.ssh/b " }), list)).toMatchObject({
+      authType: "privatekey", privateKeyPath: "~/.ssh/b", password: "old",
+    });
+    expect(applyBatchLogin(keyed, own({ authType: "password", password: "p" }), list)).toMatchObject({ authType: "password", password: "p" });
+    // Desktops and Telnet take the password; the auth type is SSH's only.
+    expect(applyBatchLogin(rdp, own({ authType: "privatekey", password: "x", username: "adm" }), list)).toMatchObject({ authType: "password", password: "x", username: "adm" });
+    expect(applyBatchLogin(vnc, own({ username: "adm" }), list)!.username).toBe("");
+    expect(applyBatchLogin(serial, own({ username: "adm" }), list)).toBeNull();
+  });
+
+  it("removes the saved password, or the key passphrase", () => {
+    expect(applyBatchLogin(saved, own({ clearSecret: true }), list)!.password).toBeUndefined();
+    expect(applyBatchLogin(keyed, own({ clearSecret: true }), list)).toMatchObject({ passphrase: undefined, privateKeyPath: "~/.ssh/a" });
+    expect(applyBatchLogin(saved, own({ clearSecret: true, password: "typed" }), list)!.password).toBe("typed");
   });
 });
 
