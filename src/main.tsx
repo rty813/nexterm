@@ -16,7 +16,22 @@ for (const type of ["dragover", "drop"] as const) {
   });
 }
 
-const isMenuHost = window.location.hash === "#ctxmenu";
+// Right-clicking where no component shows its own menu would bring up WebView2's browser menu
+// (Back / Refresh / Save as / Print / More tools). Keep the native menu only in text fields,
+// where it offers cut / copy / paste; xterm.js's hidden textarea is not one of them.
+const TEXT_INPUT_TYPES = new Set(["text", "search", "url", "tel", "email", "password", "number"]);
+function keepsNativeMenu(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.classList.contains("xterm-helper-textarea")) return false;
+  if (target instanceof HTMLTextAreaElement) return !target.disabled;
+  if (target instanceof HTMLInputElement) return !target.disabled && TEXT_INPUT_TYPES.has(target.type);
+  return target.isContentEditable;
+}
+window.addEventListener("contextmenu", (e) => {
+  if (!keepsNativeMenu(e.target)) e.preventDefault();
+});
+
+const isMenuHost =window.location.hash === "#ctxmenu";
 if (isMenuHost) document.documentElement.classList.add("ctxmenu-host");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

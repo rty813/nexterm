@@ -40,6 +40,13 @@ function bridge(dismissOnEscape = false) {
       port.postMessage({kind: "call", id, method, value});
     });
   }
+  // Same as the app: no WebView2 browser menu (Back / Refresh / Print ...) outside text fields.
+  if (typeof document !== "undefined") window.addEventListener("contextmenu", event => {
+    const el = event.target as HTMLElement | null;
+    const text = !!el && (el instanceof HTMLTextAreaElement || el.isContentEditable
+      || (el instanceof HTMLInputElement && ["text", "search", "url", "tel", "email", "password", "number"].includes(el.type)));
+    if (!text) event.preventDefault();
+  });
   if (dismissOnEscape && typeof document !== "undefined") window.addEventListener("keydown", event => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     event.preventDefault();
