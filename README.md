@@ -6,7 +6,7 @@ English | [简体中文](README.zh-CN.md)
 
 **Nexterm** is a fast, modern Windows terminal client built with Rust, Tauri v2, React, and [xterm.js](https://xtermjs.org), supporting **SSH, local shells (PowerShell / CMD / WSL), Telnet, raw TCP, serial ports, Android (ADB)**, and embedded **RDP / VNC** remote desktops.
 
-It keeps WindTerm's productive workflow (session tree, nested splits, quick commands, one-click migration) and adds deep tooling for daily engineering, ops, and AI agents. Windows 10 / 11 only · v`0.1.16` ([Download Releases](https://github.com/rty813/nexterm/releases)).
+It keeps WindTerm's productive workflow (session tree, nested splits, quick commands, one-click migration) and adds deep tooling for daily engineering, ops, and AI agents. Windows 10 / 11 only · v`0.1.17` ([Download Releases](https://github.com/rty813/nexterm/releases)).
 
 ![Nexterm main window: session tree, split panes running htop and Claude Code, SFTP file browser, quick-command bar](docs/media/screenshot.jpg)
 
