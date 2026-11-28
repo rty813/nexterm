@@ -51,6 +51,7 @@ pub mod telnet_conn;
 pub mod term_capture;
 pub mod transfer;
 pub mod update;
+pub mod window_at;
 pub mod window_opacity;
 pub mod http_proxy;
 pub mod xserver;
@@ -1466,6 +1467,13 @@ fn mouse_primary_down() -> bool {
     }
 }
 
+/// The terminal window topmost under the screen point (physical px), not one of
+/// `exclude`. A window covered there by another program does not count.
+#[tauri::command]
+fn terminal_window_at(app: AppHandle, x: i32, y: i32, exclude: Vec<String>) -> Option<String> {
+    window_at::terminal_window_at(&app, x, y, &exclude)
+}
+
 /// Windows toast; a click comes back as the `notification-clicked` event with `tag`.
 #[tauri::command]
 fn show_notification(app: AppHandle, title: String, body: String, tag: String) -> Result<(), String> {
@@ -2213,6 +2221,7 @@ pub fn run() {
             stash_pane_transfer,
             take_pane_transfer,
             mouse_primary_down,
+            terminal_window_at,
             agent_hooks_read_local,
             show_notification,
             agent_hooks_write_local,

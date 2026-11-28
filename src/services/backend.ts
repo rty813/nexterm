@@ -1321,22 +1321,18 @@ export const backend = {
     return invoke<boolean>("mouse_primary_down");
   },
 
-  /** Client areas (physical px) of the visible terminal windows, main first. */
-  async terminalWindowBounds(exclude: string[] = []): Promise<{ label: string; x: number; y: number; w: number; h: number }[]> {
-    if (!isTauriRuntime()) return [];
-    const all = await WebviewWindow.getAll();
-    const out: { label: string; x: number; y: number; w: number; h: number }[] = [];
-    for (const w of all) {
-      if (exclude.includes(w.label) || !(w.label === "main" || w.label.startsWith("term-"))) continue;
-      try {
-        if (!(await w.isVisible()) || (await w.isMinimized())) continue;
-        const [pos, size] = await Promise.all([w.innerPosition(), w.innerSize()]);
-        out.push({ label: w.label, x: pos.x, y: pos.y, w: size.width, h: size.height });
-      } catch {
-        // window closing
-      }
-    }
-    return out.sort((a, b) => (a.label === "main" ? -1 : b.label === "main" ? 1 : 0));
+  /**
+   * The terminal window under a screen point (physical px), not one of `exclude`. Only
+   * the window actually on top there counts: one covered by another program does not.
+   */
+  async terminalWindowAt(at: { x: number; y: number }, exclude: string[] = []): Promise<string | null> {
+    if (!isTauriRuntime()) return null;
+    const label = await invoke<string | null>("terminal_window_at", {
+      x: Math.round(at.x),
+      y: Math.round(at.y),
+      exclude,
+    }).catch(() => null);
+    return label ?? null;
   },
 
   /** The main window's backdrop follows the theme, and is used again at the next start. */

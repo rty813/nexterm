@@ -1224,10 +1224,8 @@ export const App: React.FC = () => {
   const handleDragOutside = async (paneId: string) => {
     const at = await backend.cursorPosition();
     if (!at) return void moveTabToNewWindow(paneId);
-    const target = (await backend.terminalWindowBounds([currentWindowLabel()])).find(
-      (b) => at.x >= b.x && at.x < b.x + b.w && at.y >= b.y && at.y < b.y + b.h
-    );
-    if (target) await moveTabToWindow(paneId, target.label, { at });
+    const target = await backend.terminalWindowAt(at, [currentWindowLabel()]);
+    if (target) await moveTabToWindow(paneId, target, { at });
     else await moveTabToNewWindow(paneId, at);
   };
 
@@ -1300,14 +1298,15 @@ export const App: React.FC = () => {
     let busy = false;
     let starting = false;
     let target: string | null = null;
-    let bounds: { label: string; x: number; y: number; w: number; h: number }[] = [];
     const tick = async () => {
       if (busy) return;
       busy = true;
       try {
         const [down, at] = await Promise.all([backend.mousePrimaryDown(), backend.cursorPosition()]);
         if (!at) return;
-        const hit = bounds.find((b) => at.x >= b.x && at.x < b.x + b.w && at.y >= b.y && at.y < b.y + b.h)?.label ?? null;
+        // Only the window on top under the cursor (this one aside): a terminal window
+        // hidden behind other programs there must not take this one in.
+        const hit = await backend.terminalWindowAt(at, [self]);
         if (hit !== target && target) void backend.emitToWindow(target, "dock-hint", null);
         if (down) {
           target = hit;
@@ -1333,7 +1332,6 @@ export const App: React.FC = () => {
             // or a programmatic move).
             const [down, at] = await Promise.all([backend.mousePrimaryDown(), backend.cursorPosition()]);
             if (!down || !at || !titleDragStartedRecently()) return;
-            bounds = await backend.terminalWindowBounds([self]);
             if (!timer) timer = window.setInterval(() => void tick(), 50);
           } finally {
             starting = false;
