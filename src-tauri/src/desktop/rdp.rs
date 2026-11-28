@@ -523,7 +523,7 @@ async fn active(
                     u32::from(p.hotspot_y),
                     u32::from(p.width),
                     u32::from(p.height),
-                    &visible_pointer(usize::from(p.width), usize::from(p.height), &p.bitmap_data),
+                    &p.bitmap_data,
                 ),
                 ActiveStageOutput::DeactivateAll => {
                     // Deactivation-reactivation (e.g. after a resize): new desktop size.
@@ -571,39 +571,6 @@ async fn active(
             }
         }
     }
-}
-
-/// IronRDP decodes a pointer's "inverted" pixels (AND and XOR mask both set: the text I-beam,
-/// crosshairs) as transparent white, because a cursor image cannot invert what is under it.
-/// A pointer made only of those would be invisible: draw them black with a white outline.
-/// Pointers with any visible pixel are left alone (their transparent white is just transparent).
-fn visible_pointer(width: usize, height: usize, rgba: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    const INVERTED: [u8; 4] = [0xFF, 0xFF, 0xFF, 0x00];
-    let len = width * height * 4;
-    if len == 0 || rgba.len() < len {
-        return rgba.into();
-    }
-    let pixels = || rgba[..len].chunks_exact(4);
-    if pixels().any(|p| p[3] != 0) || !pixels().any(|p| p == INVERTED) {
-        return rgba.into();
-    }
-    let inverted = |x: usize, y: usize| rgba[(y * width + x) * 4..][..4] == INVERTED;
-    let mut out = vec![0u8; len];
-    for y in 0..height {
-        for x in 0..width {
-            let color = if inverted(x, y) {
-                [0x00, 0x00, 0x00, 0xFF]
-            } else if (y.saturating_sub(1)..(y + 2).min(height))
-                .any(|ny| (x.saturating_sub(1)..(x + 2).min(width)).any(|nx| inverted(nx, ny)))
-            {
-                [0xFF, 0xFF, 0xFF, 0xFF]
-            } else {
-                continue;
-            };
-            out[(y * width + x) * 4..][..4].copy_from_slice(&color);
-        }
-    }
-    out.into()
 }
 
 /// One message from the clipboard thread. A clipboard operation that fails (the channel not
@@ -832,24 +799,6 @@ mod tests {
     fn audio_connector(mode: &str) -> ironrdp_connector::ClientConnector {
         let desktop = DesktopConfig { audio: mode.to_owned(), ..DesktopConfig::default() };
         build_connector(&SessionConfig::default(), &desktop, DesktopSize { width: 1024, height: 768 }, 100, false, None)
-    }
-
-    #[test]
-    fn inverted_only_pointer_becomes_visible() {
-        const T: [u8; 4] = [0, 0, 0, 0];
-        const I: [u8; 4] = [0xFF, 0xFF, 0xFF, 0x00];
-        const B: [u8; 4] = [0, 0, 0, 0xFF];
-        const W: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
-        // A 4x3 pointer with one inverted pixel: black, outlined in white, the rest untouched.
-        let beam = [T, T, T, T, T, I, T, T, T, T, T, T].concat();
-        assert_eq!(visible_pointer(4, 3, &beam).as_ref(), [W, W, W, T, W, B, W, T, W, W, W, T].concat());
-        // Any visible pixel: an ordinary pointer, where transparent white is only transparent.
-        let arrow = [B, I, T, T].concat();
-        assert_eq!(visible_pointer(2, 2, &arrow).as_ref(), arrow);
-        // Nothing to show stays hidden; a short buffer is passed through for `FrameOut` to reject.
-        let blank = [T, T, T, T].concat();
-        assert_eq!(visible_pointer(2, 2, &blank).as_ref(), blank);
-        assert_eq!(visible_pointer(2, 2, &I).as_ref(), I);
     }
 
     #[test]
