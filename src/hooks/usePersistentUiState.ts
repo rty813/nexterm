@@ -50,10 +50,11 @@ export function mergeUiState(cur: UiState, saved: unknown): UiState {
 
 /**
  * Layout chrome the user arranged (sidebar open / width, quick bar, side panels ...), kept in
- * ui_state.json. Only the main window persists it; other windows start from defaults.
+ * ui_state.json. Only the main window persists it; other windows start from defaults, with the
+ * session sidebar closed (a tab dragged out is mostly about the terminal).
  */
 export function usePersistentUiState(persist: boolean) {
-  const [ui, setUi] = useState<UiState>(UI_DEFAULTS);
+  const [ui, setUi] = useState<UiState>(() => (persist ? UI_DEFAULTS : { ...UI_DEFAULTS, sidebarOpen: false }));
   const loaded = useRef(!persist);
 
   useEffect(() => {

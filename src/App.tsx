@@ -1395,8 +1395,25 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!isMainWindow) return;
     const un = backend.onWindowEvent<string>("run-action", (id) => runActionRef.current(id));
-    return () => void un.then((f) => f());
+    const unSettings = backend.onWindowEvent<SettingsTab>("open-settings", (tab) => {
+      setSettingsTab(tab);
+      setSettingsModalOpen(true);
+    });
+    return () => {
+      void un.then((f) => f());
+      void unSettings.then((f) => f());
+    };
   }, [isMainWindow]);
+  /** The settings dialog belongs to the main window (sync, remote access and plugins live there). */
+  const openSettings = (tab: SettingsTab) => {
+    if (!isMainWindow) {
+      void backend.showMainWindow();
+      void backend.emitToWindow("main", "open-settings", tab);
+      return;
+    }
+    setSettingsTab(tab);
+    setSettingsModalOpen(true);
+  };
 
   // ---------------------------------------------------------------- split ops
 
@@ -1569,7 +1586,6 @@ export const App: React.FC = () => {
         setPaletteOpen((v) => !v);
         return true;
       case "view.toggleSidebar":
-        if (!isMainWindow) return false;
         setSidebarOpen((v) => !v);
         return true;
       case "view.toggleQuickBar":
@@ -1603,12 +1619,7 @@ export const App: React.FC = () => {
         setMonitorOpen((v) => !v);
         return true;
       case "view.settings":
-        if (!isMainWindow) {
-          inMainWindow(id);
-          return true;
-        }
-        setSettingsTab("general");
-        setSettingsModalOpen(true);
+        openSettings("general");
         return true;
       case "terminal.copy":
         api?.copy();
@@ -2810,7 +2821,7 @@ export const App: React.FC = () => {
         pinned={Boolean(settings.alwaysOnTop)}
         onTogglePin={() => saveSettings({ ...settingsRef.current, alwaysOnTop: !settingsRef.current.alwaysOnTop })}
       >
-        {!focusMode && isMainWindow ? (
+        {!focusMode ? (
           <>
           <Toolbar
             sidebarOpen={sidebarOpen}
@@ -2839,10 +2850,7 @@ export const App: React.FC = () => {
             onDisconnectActive={() => {
               if (activeLeaf) paneExtras.onDisconnect(activeLeaf.paneId);
             }}
-            onOpenSettings={() => {
-              setSettingsTab("general");
-              setSettingsModalOpen(true);
-            }}
+            onOpenSettings={() => openSettings("general")}
             onCheckUpdate={() => runAction("window.checkUpdate")}
             channelCount={Object.keys(syncChannels).length}
             hidden={settings.toolbarHidden ?? DEFAULT_TOOLBAR_HIDDEN}
@@ -2875,36 +2883,29 @@ export const App: React.FC = () => {
             onToggleRemote={() => {
               const r = remoteOf(settingsRef.current);
               if (!r.relayUrl.trim()) {
-                setSettingsTab("remote");
-                setSettingsModalOpen(true);
+                openSettings("remote");
                 return;
               }
               saveSettings({ ...settingsRef.current, remote: { ...r, enabled: !r.enabled } });
             }}
-            onOpenRemoteSettings={() => {
-              setSettingsTab("remote");
-              setSettingsModalOpen(true);
-            }}
-            onCustomize={() => {
-              setSettingsTab("toolbar");
-              setSettingsModalOpen(true);
-            }}
+            onOpenRemoteSettings={() => openSettings("remote")}
+            onCustomize={() => openSettings("toolbar")}
           />
-          <PluginToolbar />
+          {isMainWindow && <PluginToolbar />}
           </>
-        ) : focusMode ? (
+        ) : (
           <div className="titlebar-focus">
             <span className="titlebar-title">{windowTitle}</span>
             <button type="button" className="btn-ghost btn-sm" onClick={toggleFocusMode} title={keymap["view.focusMode"] ? `${t("toolbar.exitFocus")} (${keymap["view.focusMode"]})` : t("toolbar.exitFocus")}>
               <Minimize2 size={12} /> {t("toolbar.exitFocus")}
             </button>
           </div>
-        ) : undefined}
+        )}
       </TitleBar>
 
       <div className="main-body">
         {!focusMode && isMainWindow && <PluginActivity />}
-        {!focusMode && sidebarOpen && isMainWindow && (
+        {!focusMode && sidebarOpen && (
           <>
             <div style={{ width: `${sidebarWidth}px`, flexShrink: 0, display: "flex" }}>
               <SessionSidebar
