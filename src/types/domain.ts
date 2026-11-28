@@ -838,6 +838,11 @@ export interface ImportResult {
   keysMissing?: number;
   /** Sessions that matched one imported before and updated it instead of adding a copy. */
   updated?: number;
+  /** Logins saved to the credential manager (SecureCRT), new / updated in place by name. */
+  credentialsAdded?: number;
+  credentialsUpdated?: number;
+  /** Credentials left out (password not decrypted, nothing usable saved). */
+  credentialsSkipped?: number;
 }
 
 export type ConnectionStatus =

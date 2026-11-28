@@ -1808,6 +1808,7 @@ fn read_windterm_quick_commands() -> Result<Option<Vec<models::QuickCommand>>, S
 
 #[tauri::command]
 async fn execute_import(
+    app: AppHandle,
     ctx: State<'_, AppContext>,
     source_type: String,
     path: String,
@@ -1820,6 +1821,23 @@ async fn execute_import(
     }).await.map_err(|e| e.to_string())?.map_err(|e| format!("{:#}", e))?;
 
     let storage = ctx.storage.lock().map_err(|e| e.to_string())?;
+
+    // Credentials first: imported sessions refer to them by the id they are saved under.
+    let imported_credentials = !res.credentials.is_empty();
+    let mut credential_sessions_changed = false;
+    if imported_credentials {
+        let merged = crate::credentials::import_credentials(&storage, std::mem::take(&mut res.credentials))?;
+        for s in res.sessions.iter_mut() {
+            if let Some(id) = s.credential_id.as_mut() {
+                if let Some(saved) = merged.ids.get(id.as_str()) {
+                    *id = saved.clone();
+                }
+            }
+        }
+        res.credentials_added = merged.added;
+        res.credentials_updated = merged.updated;
+        credential_sessions_changed = merged.sessions_changed;
+    }
 
     if !res.sessions.is_empty() {
         let mut existing = storage.load_sessions().map_err(|e| e.to_string())?;
@@ -1856,7 +1874,17 @@ async fn execute_import(
             .save_themes(&existing_themes)
             .map_err(|e| e.to_string())?;
     }
+    drop(storage);
+    use tauri::Emitter;
 
+    if imported_credentials {
+        let _ = app.emit("credentials-changed", ());
+    }
+    // Saved sessions that followed an updated credential (the imported ones reach the
+    // frontend through the result).
+    if credential_sessions_changed {
+        let _ = app.emit("sessions-changed", ());
+    }
     Ok(res)
 }
 

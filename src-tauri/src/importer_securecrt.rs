@@ -8,6 +8,12 @@
 //! - the XML written by "Tools > Export Settings": nested `<key name="...">` elements below
 //!   `<key name="Sessions">`, values as `<string name="...">` / `<dword name="...">` (decimal).
 //!
+//! Saved logins of the credential manager ("Tools > Credentials", `Config\Credentials\*.ini`,
+//! the file name is the title; `<key name="Credentials">` in the XML) become Nexterm
+//! credentials, and sessions naming one in "Credential Title" are linked to it. A Sessions
+//! folder brings the Credentials folder next to it; the Credentials folder or one of its
+//! files can also be imported on its own.
+//!
 //! Saved passwords are decrypted (`crypto`): "Password V2" is AES-256-CBC keyed by the
 //! SHA-256 of the config passphrase (empty by default), the legacy "Password" is the
 //! double-Blowfish scheme. A set config passphrase or any other failure leaves the password
@@ -19,6 +25,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
+use crate::credentials::Credential;
 use crate::importer::{decode_text, read_limited, IMPORT_FILE_MAX};
 use crate::models::{AuthType, ProtocolType, SerialConfig, SessionConfig};
 
@@ -37,6 +44,18 @@ pub struct SecureCrtImport {
     /// Sessions with a saved password, read or not.
     pub passwords_stored: usize,
     pub keys_missing: usize,
+    /// Logins of SecureCRT's credential manager, with fresh ids that imported sessions refer
+    /// to (`credentials::import_credentials` maps them to the saved ones).
+    pub credentials: Vec<Credential>,
+    /// Credentials left out: the password could not be decrypted, or nothing usable is saved.
+    pub credentials_skipped: usize,
+    /// Credentials with a saved password, read or not (for the passphrase check).
+    credential_passwords_stored: usize,
+    credential_passwords_skipped: usize,
+    /// User name of every credential read (usable or not), by lowercased title.
+    credential_users: HashMap<String, String>,
+    /// (index in `sessions`, "Credential Title"), linked once everything is read.
+    links: Vec<(usize, String)>,
 }
 
 /// `...\VanDyke\Config\Sessions` of an installed SecureCRT, when it has sessions.
@@ -52,7 +71,7 @@ pub fn sessions_dirs() -> Vec<PathBuf> {
 /// Session files below a Sessions folder (discovery), without parsing them.
 pub fn count_sessions(dir: &Path) -> usize {
     let mut files = Vec::new();
-    let _ = collect_ini(dir, dir, 0, &mut files);
+    let _ = collect_ini(dir, dir, 0, true, &mut files);
     files.len()
 }
 
@@ -67,20 +86,28 @@ pub fn import_path(path: &Path) -> Result<SecureCrtImport> {
 /// A passphrase that opens none of the stored passwords is an error (`securecrtPassphraseWrong`)
 /// rather than an import without them, so a typo does not silently drop every password.
 pub fn import_path_with(path: &Path, passphrase: &[u8]) -> Result<SecureCrtImport> {
-    let out = import_inner(path, passphrase)?;
-    anyhow::ensure!(
-        passphrase.is_empty() || out.passwords_stored == 0 || out.passwords_skipped < out.passwords_stored,
-        "securecrtPassphraseWrong"
-    );
+    let mut out = import_inner(path, passphrase)?;
+    let stored = out.passwords_stored + out.credential_passwords_stored;
+    let skipped = out.passwords_skipped + out.credential_passwords_skipped;
+    anyhow::ensure!(passphrase.is_empty() || stored == 0 || skipped < stored, "securecrtPassphraseWrong");
+    link_credentials(&mut out);
     Ok(out)
 }
 
 fn import_inner(path: &Path, passphrase: &[u8]) -> Result<SecureCrtImport> {
     let mut out = SecureCrtImport::default();
     if path.is_dir() {
+        if is_named(path, "Credentials") {
+            add_credentials_dir(&mut out, path, path.parent(), passphrase)?;
+            return Ok(out);
+        }
         let config_dir = config_dir_of(path);
+        // The credentials the sessions refer to, next to the Sessions folder.
+        if let Some(dir) = config_dir.as_deref().map(|c| c.join("Credentials")).filter(|d| d.is_dir()) {
+            add_credentials_dir(&mut out, &dir, config_dir.as_deref(), passphrase)?;
+        }
         let mut files = Vec::new();
-        collect_ini(path, path, 0, &mut files)?;
+        collect_ini(path, path, 0, true, &mut files)?;
         files.sort();
         for (rel, file) in files {
             let raw = read_limited(&file, INI_MAX)?;
@@ -96,9 +123,35 @@ fn import_inner(path: &Path, passphrase: &[u8]) -> Result<SecureCrtImport> {
         return parse_xml_export(&text, passphrase);
     }
     let name = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let config_dir = path.parent().and_then(config_dir_of);
-    add(&mut out, &parse_session_ini(&text), &[], &name, config_dir.as_deref(), passphrase);
+    let fields = parse_session_ini(&text);
+    // A credential file: in a Credentials folder, or (copied elsewhere) without the
+    // "Protocol Name" every session file has.
+    let parent = path.parent();
+    let in_credentials = parent.is_some_and(|p| is_named(p, "Credentials"));
+    if in_credentials || !fields.contains_key("Protocol Name") {
+        let config_dir = parent.filter(|_| in_credentials).and_then(Path::parent);
+        add_credential(&mut out, &fields, &name, config_dir, passphrase);
+        return Ok(out);
+    }
+    let config_dir = parent.and_then(config_dir_of);
+    add(&mut out, &fields, &[], &name, config_dir.as_deref(), passphrase);
     Ok(out)
+}
+
+fn is_named(dir: &Path, name: &str) -> bool {
+    dir.file_name().is_some_and(|n| n.eq_ignore_ascii_case(name))
+}
+
+fn add_credentials_dir(out: &mut SecureCrtImport, dir: &Path, config_dir: Option<&Path>, passphrase: &[u8]) -> Result<()> {
+    let mut files = Vec::new();
+    collect_ini(dir, dir, 0, false, &mut files)?;
+    files.sort();
+    for (rel, file) in files {
+        let raw = read_limited(&file, INI_MAX)?;
+        let (_, name) = split_rel(&rel);
+        add_credential(out, &parse_session_ini(&decode_text(&raw)), &name, config_dir, passphrase);
+    }
+    Ok(())
 }
 
 /// The config folder (parent of `Sessions`) for `${VDS_CONFIG_PATH}` in key paths.
@@ -109,8 +162,9 @@ fn config_dir_of(dir: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// `(relative path with "/" separators, absolute path)` of every session `.ini` below `dir`.
-fn collect_ini(root: &Path, dir: &Path, depth: usize, out: &mut Vec<(String, PathBuf)>) -> Result<()> {
+/// `(relative path with "/" separators, absolute path)` of every `.ini` below `dir`, without
+/// folder data and (`sessions`) the root `Default.ini` of a Sessions folder.
+fn collect_ini(root: &Path, dir: &Path, depth: usize, sessions: bool, out: &mut Vec<(String, PathBuf)>) -> Result<()> {
     if depth > MAX_DEPTH {
         return Ok(());
     }
@@ -119,14 +173,14 @@ fn collect_ini(root: &Path, dir: &Path, depth: usize, out: &mut Vec<(String, Pat
         let p = entry.path();
         let Ok(ft) = entry.file_type() else { continue };
         if ft.is_dir() {
-            collect_ini(root, &p, depth + 1, out)?;
+            collect_ini(root, &p, depth + 1, sessions, out)?;
             continue;
         }
         if !p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ini")) {
             continue;
         }
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        if name.eq_ignore_ascii_case("__FolderData__.ini") || (depth == 0 && name.eq_ignore_ascii_case("Default.ini")) {
+        if name.eq_ignore_ascii_case("__FolderData__.ini") || (sessions && depth == 0 && name.eq_ignore_ascii_case("Default.ini")) {
             continue;
         }
         if out.len() >= MAX_ENTRIES {
@@ -179,9 +233,85 @@ fn add(out: &mut SecureCrtImport, fields: &HashMap<String, String>, groups: &[St
             out.passwords_skipped += p.had_password as usize;
             out.passwords_stored += (p.had_password || p.session.password.is_some()) as usize;
             out.keys_missing += p.key_missing as usize;
+            if let Some(title) = fields.get("Credential Title").map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                out.links.push((out.sessions.len(), title.to_string()));
+            }
             out.sessions.push(p.session);
         }
         None => out.skipped += 1,
+    }
+}
+
+/// One credential (`name`: its title). The key wins over the password like in sessions; a key
+/// file that is gone falls back to the password, and one with neither is left out.
+fn add_credential(out: &mut SecureCrtImport, fields: &HashMap<String, String>, name: &str, config_dir: Option<&Path>, passphrase: &[u8]) {
+    let get = |k: &str| fields.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    let username = get("Username").unwrap_or("").to_string();
+    out.credential_users.insert(name.to_lowercase(), username.clone());
+    let password = crypto::session_password_with(fields, passphrase);
+    out.credential_passwords_stored += (password.skipped || password.value.is_some()) as usize;
+    out.credential_passwords_skipped += password.skipped as usize;
+    let key = get("Identity Filename V2").or_else(|| get("Identity Filename")).and_then(|k| resolve_key(k, config_dir));
+    let (auth_type, private_key_path, password) = match (key, password.value) {
+        (Some(path), _) => (AuthType::PrivateKey, Some(path), None),
+        (None, Some(pw)) => (AuthType::Password, None, Some(pw)),
+        (None, None) => {
+            out.credentials_skipped += 1;
+            return;
+        }
+    };
+    let credential = Credential {
+        id: Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        username,
+        auth_type,
+        password,
+        private_key_path,
+        passphrase: None,
+        login: true,
+        onekey: false,
+        expect: Default::default(),
+        applies_to: None,
+    };
+    // Titles are unique in SecureCRT; a repeat (differing in case, in an XML) replaces the first.
+    match out.credentials.iter_mut().find(|c| c.name.to_lowercase() == name.to_lowercase()) {
+        Some(c) => *c = Credential { id: c.id.clone(), ..credential },
+        None => out.credentials.push(credential),
+    }
+}
+
+/// Point sessions at the credential their "Credential Title" names. The credential's user
+/// name and kind are copied (shown in lists) and its secrets replace the session's own. When
+/// the credential could not be imported, only its user name fills an empty one.
+fn link_credentials(out: &mut SecureCrtImport) {
+    for (index, title) in std::mem::take(&mut out.links) {
+        let key = title.to_lowercase();
+        let Some(s) = out.sessions.get_mut(index) else { continue };
+        if !matches!(s.protocol, ProtocolType::Ssh | ProtocolType::Telnet | ProtocolType::Rdp) {
+            continue;
+        }
+        let Some(c) = out.credentials.iter().find(|c| c.name.to_lowercase() == key) else {
+            if let Some(user) = out.credential_users.get(&key).filter(|u| !u.is_empty() && s.username.is_empty()) {
+                s.username = user.clone();
+            }
+            continue;
+        };
+        if s.protocol == ProtocolType::Ssh {
+            s.auth_type = c.auth_type.clone();
+            s.private_key_path = None;
+            s.passphrase = None;
+        } else if c.auth_type == AuthType::PrivateKey {
+            continue;
+        }
+        if !c.username.is_empty() {
+            s.username = c.username.clone();
+        }
+        s.credential_id = Some(c.id.clone());
+        s.password = None;
     }
 }
 
@@ -705,7 +835,7 @@ pub fn parse_xml_export(text: &str, passphrase: &[u8]) -> Result<SecureCrtImport
         match token? {
             XmlToken::Open { tag, name, empty } => match tag.as_str() {
                 "key" if !empty => {
-                    found_sessions |= stack.len() <= 1 && name.as_deref() == Some("Sessions");
+                    found_sessions |= stack.len() <= 1 && matches!(name.as_deref(), Some("Sessions" | "Credentials"));
                     stack.push((name.unwrap_or_default(), HashMap::new()));
                 }
                 "string" | "dword" if !empty => value = name.map(|n| (n, String::new())),
@@ -729,6 +859,13 @@ pub fn parse_xml_export(text: &str, passphrase: &[u8]) -> Result<SecureCrtImport
                 }
                 "key" => {
                     let Some((name, fields)) = stack.pop() else { continue };
+                    // A credential is a key with values right below the top-level `Credentials`.
+                    if stack.first().is_some_and(|(n, _)| n == "Credentials") {
+                        if stack.len() == 1 && !fields.is_empty() {
+                            add_credential(&mut out, &fields, &name, None, passphrase);
+                        }
+                        continue;
+                    }
                     // A session is a key with values somewhere below `Sessions`.
                     let Some(at) = stack.iter().position(|(n, _)| n == "Sessions") else { continue };
                     if fields.is_empty() || !(fields.contains_key("Protocol Name") || fields.contains_key("Hostname")) {
@@ -1062,5 +1199,88 @@ D:\"Use Global Public Key\"=00000001\r\nS:\"SSH2 Authentications V2\"=publickey,
         let p = session_from_fields(&f, &[], "db", None).unwrap();
         assert_eq!(p.session.auth_type, AuthType::PrivateKey);
         assert!(p.key_missing && p.session.password.as_deref() == Some("p@ss w0rd"));
+    }
+
+    #[test]
+    fn test_credentials_folder_and_links() {
+        let root = std::env::temp_dir().join(format!("nexterm-securecrt-cred-{}", Uuid::new_v4()));
+        let config = root.join("Config");
+        let (sessions, creds) = (config.join("Sessions"), config.join("Credentials"));
+        fs::create_dir_all(&sessions).unwrap();
+        fs::create_dir_all(&creds).unwrap();
+        fs::create_dir_all(config.join("Keys")).unwrap();
+        fs::write(config.join("Keys").join("id_ops"), "key").unwrap();
+        let pw = crypto::test_encrypt_v3("hunter2");
+        fs::write(creds.join("asdf.ini"), format!("S:\"Username\"=asdf\r\nS:\"Password V2\"={pw}\r\nS:\"Identity Filename V2\"=\r\n")).unwrap();
+        fs::write(creds.join("ops.ini"), "S:\"Username\"=ops\r\nS:\"Identity Filename V2\"=${VDS_CONFIG_PATH}\\Keys\\id_ops::rawkey\r\n").unwrap();
+        fs::write(creds.join("broken.ini"), "S:\"Username\"=nobody\r\nS:\"Password V2\"=03:00\r\n").unwrap();
+        let session = |cred: &str| format!("S:\"Protocol Name\"=SSH2\r\nS:\"Hostname\"=h.cn\r\nS:\"Username\"=\r\nS:\"Credential Title\"={cred}\r\n");
+        fs::write(sessions.join("a.ini"), session("ASDF")).unwrap();
+        fs::write(sessions.join("b.ini"), session("ops")).unwrap();
+        fs::write(sessions.join("c.ini"), session("broken")).unwrap();
+        fs::write(sessions.join("d.ini"), session("gone")).unwrap();
+
+        let r = import_path(&sessions).unwrap();
+        let only_creds = import_path(&creds).unwrap();
+        let one = import_path(&creds.join("asdf.ini")).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!((r.credentials.len(), r.credentials_skipped), (2, 1));
+        let asdf = r.credentials.iter().find(|c| c.name == "asdf").unwrap();
+        assert_eq!((asdf.username.as_str(), asdf.auth_type.clone(), asdf.password.as_deref()), ("asdf", AuthType::Password, Some("hunter2")));
+        let ops = r.credentials.iter().find(|c| c.name == "ops").unwrap();
+        assert_eq!(ops.auth_type, AuthType::PrivateKey);
+        assert!(ops.private_key_path.as_deref().unwrap().ends_with("id_ops"));
+
+        let by = |l: &str| r.sessions.iter().find(|s| s.label == l).unwrap();
+        // Title matched ignoring case; user name and kind copied, no secret on the session.
+        let a = by("a");
+        assert_eq!((a.credential_id.as_deref(), a.username.as_str(), a.auth_type.clone()), (Some(asdf.id.as_str()), "asdf", AuthType::Password));
+        assert!(a.password.is_none());
+        assert_eq!((by("b").credential_id.as_deref(), by("b").auth_type.clone()), (Some(ops.id.as_str()), AuthType::PrivateKey));
+        // Not importable: the user name still fills an empty one; unknown: left as it is.
+        assert_eq!((by("c").credential_id.as_deref(), by("c").username.as_str()), (None, "nobody"));
+        assert_eq!((by("d").credential_id.as_deref(), by("d").username.as_str()), (None, ""));
+
+        assert_eq!((only_creds.sessions.len(), only_creds.credentials.len()), (0, 2));
+        assert_eq!((one.sessions.len(), one.credentials.len()), (0, 1));
+    }
+
+    #[test]
+    fn test_credentials_wrong_passphrase() {
+        let root = std::env::temp_dir().join(format!("nexterm-securecrt-credpp-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("asdf.ini");
+        fs::write(&file, format!("S:\"Username\"=asdf\r\nS:\"Password V2\"={}\r\n", crypto::test_encrypt_v3("x"))).unwrap();
+        let err = import_path_with(&file, b"typo").unwrap_err().to_string();
+        let ok = import_path(&file).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(err, "securecrtPassphraseWrong");
+        assert_eq!(ok.credentials[0].password.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn test_xml_credentials() {
+        let pw = crypto::test_encrypt_v2("s3cret");
+        let xml = format!(r#"<VanDyke version="3.0">
+  <key name="Credentials">
+    <key name="lab"><string name="Username">root</string><string name="Password V2">{pw}</string></key>
+  </key>
+  <key name="Sessions">
+    <key name="Credentials">
+      <key name="web"><string name="Protocol Name">SSH2</string><string name="Hostname">web.cn</string><string name="Credential Title">lab</string></key>
+    </key>
+  </key>
+</VanDyke>"#);
+        let mut r = parse_xml_export(&xml, b"").unwrap();
+        link_credentials(&mut r);
+        assert_eq!(r.credentials.len(), 1);
+        assert_eq!(r.credentials[0].password.as_deref(), Some("s3cret"));
+        // A session folder called "Credentials" stays a session folder.
+        assert_eq!(r.sessions.len(), 1);
+        assert_eq!(r.sessions[0].group, "SecureCRT>Credentials");
+        assert_eq!((r.sessions[0].username.as_str(), r.sessions[0].credential_id.as_deref()), ("root", Some(r.credentials[0].id.as_str())));
+        // Credentials alone are an export too.
+        assert!(parse_xml_export(r#"<VanDyke><key name="Credentials"></key></VanDyke>"#, b"").is_ok());
     }
 }

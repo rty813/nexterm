@@ -519,7 +519,7 @@ pub struct DiscoveryCandidate {
     pub item_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     pub sessions: Vec<SessionConfig>,
@@ -539,6 +539,18 @@ pub struct ImportResult {
     /// Imported sessions that matched an existing one (imported before) and updated it.
     #[serde(default)]
     pub updated: usize,
+    /// Logins for the credential manager (SecureCRT). Holds secrets: never sent to the
+    /// frontend, `execute_import` saves them and reports the counts below.
+    #[serde(skip)]
+    pub credentials: Vec<crate::credentials::Credential>,
+    /// Credentials added / updated in place (same name, imported before).
+    #[serde(default)]
+    pub credentials_added: usize,
+    #[serde(default)]
+    pub credentials_updated: usize,
+    /// Credentials left out (password not decrypted, nothing usable saved).
+    #[serde(default)]
+    pub credentials_skipped: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

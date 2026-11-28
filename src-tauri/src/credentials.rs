@@ -48,6 +48,18 @@ fn yes() -> bool {
     true
 }
 
+/// Without the secrets.
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credential")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("username", &self.username)
+            .field("auth_type", &self.auth_type)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The sessions a OneKey is offered in: these sessions, and every session in these groups
 /// (`A>B` also covers `A>B>C`). Matched by the frontend. Empty: none.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,6 +464,70 @@ pub fn save_credential(app: AppHandle, ctx: State<'_, crate::AppContext>, creden
     Ok(id)
 }
 
+/// What [`import_credentials`] did.
+#[derive(Debug, Default)]
+pub struct ImportedCredentials {
+    /// Id an imported credential came with -> id it is saved under.
+    pub ids: std::collections::HashMap<String, String>,
+    pub added: usize,
+    pub updated: usize,
+    /// Saved sessions changed by following an updated credential.
+    pub sessions_changed: bool,
+}
+
+/// Merge imported logins into `list` by name (unique, ignoring case): one already there was
+/// imported before (or made by hand under that name) and takes the new user name and
+/// secrets in place, keeping its id and OneKey settings and becoming usable as a login.
+/// Returns what happened and the ids of the updated credentials.
+fn merge_imported(list: &mut Vec<Credential>, incoming: Vec<Credential>) -> (ImportedCredentials, Vec<String>) {
+    let mut out = ImportedCredentials::default();
+    let mut updated_ids = Vec::new();
+    for c in incoming {
+        let name = c.name.trim().to_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        match list.iter_mut().find(|e| e.name.trim().to_lowercase() == name) {
+            Some(e) => {
+                e.username = c.username;
+                e.auth_type = c.auth_type;
+                e.password = c.password;
+                e.private_key_path = c.private_key_path;
+                e.passphrase = c.passphrase;
+                e.login = true;
+                out.ids.insert(c.id, e.id.clone());
+                if !updated_ids.contains(&e.id) {
+                    updated_ids.push(e.id.clone());
+                    out.updated += 1;
+                }
+            }
+            None => {
+                out.ids.insert(c.id.clone(), c.id.clone());
+                list.push(c);
+                out.added += 1;
+            }
+        }
+    }
+    (out, updated_ids)
+}
+
+/// Save imported credentials (see [`merge_imported`]); saved sessions using an updated one
+/// follow its user name and kind. The caller maps the imported sessions' `credential_id`
+/// through `ids` and emits `credentials-changed`.
+pub fn import_credentials(storage: &Storage, incoming: Vec<Credential>) -> Result<ImportedCredentials, String> {
+    if incoming.is_empty() {
+        return Ok(ImportedCredentials::default());
+    }
+    let mut list = storage.load_credentials().map_err(|e| e.to_string())?;
+    let (mut out, updated) = merge_imported(&mut list, incoming);
+    storage.save_credentials(&list).map_err(|e| e.to_string())?;
+    for id in &updated {
+        let saved = list.iter().find(|c| &c.id == id);
+        out.sessions_changed |= follow(storage, id, saved, &[])?;
+    }
+    Ok(out)
+}
+
 /// Sessions using it go back to asking for the password.
 #[tauri::command]
 pub fn delete_credential(app: AppHandle, ctx: State<'_, crate::AppContext>, id: String) -> Result<(), String> {
@@ -672,5 +748,29 @@ mod tests {
         assert!(update_sessions(&mut list, "k", None));
         assert!(list.iter().all(|s| !needed(s)));
         assert!(!serde_json::to_string(&list).unwrap().contains("credentialId"));
+    }
+
+    #[test]
+    fn imported_credentials_merge_by_name() {
+        let mut list = store();
+        list[0].onekey = true;
+        let incoming: Vec<Credential> = serde_json::from_value(json!([
+            {"id": "new-ops", "name": " ops ", "username": "root", "authType": "password", "password": "pw2"},
+            {"id": "new-db", "name": "db", "username": "dba", "authType": "password", "password": "s"},
+            {"id": "again", "name": "OPS", "username": "root2", "authType": "password", "password": "pw3"}
+        ]))
+        .unwrap();
+        let (out, updated) = merge_imported(&mut list, incoming);
+        assert_eq!((out.added, out.updated), (1, 1));
+        assert_eq!(updated, vec!["p".to_string()]);
+        // Updated in place: same id, OneKey kept, new secret.
+        assert_eq!((list[0].id.as_str(), list[0].username.as_str(), list[0].password.as_deref()), ("p", "root2", Some("pw3")));
+        assert!(list[0].onekey && list[0].login);
+        assert_eq!(out.ids.get("new-ops").map(String::as_str), Some("p"));
+        assert_eq!(out.ids.get("again").map(String::as_str), Some("p"));
+        assert_eq!(out.ids.get("new-db").map(String::as_str), Some("new-db"));
+        assert_eq!(list.len(), 4);
+        // Debug output never shows a secret.
+        assert!(!format!("{:?}", list).contains("pw3"));
     }
 }

@@ -941,6 +941,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>)
                 passwords_skipped,
                 keys_missing: 0,
                 updated: 0,
+                ..Default::default()
             })
         }
         "windterm_quickbar" => {
@@ -957,6 +958,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>)
                 passwords_skipped: 0,
                 keys_missing: 0,
                 updated: 0,
+                ..Default::default()
             })
         }
         "openssh_config" => {
@@ -973,6 +975,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>)
                 passwords_skipped: 0,
                 keys_missing: 0,
                 updated: 0,
+                ..Default::default()
             })
         }
         "windterm_theme" => {
@@ -992,6 +995,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>)
                 passwords_skipped: 0,
                 keys_missing: 0,
                 updated: 0,
+                ..Default::default()
             })
         }
         "xshell_sessions" => {
@@ -1005,6 +1009,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>)
                 passwords_skipped: r.passwords_skipped,
                 keys_missing: r.keys_missing,
                 updated: 0,
+                ..Default::default()
             })
         }
         "mobaxterm" => {
@@ -1018,12 +1023,15 @@ pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>)
                 passwords_skipped: 0,
                 keys_missing: 0,
                 updated: 0,
+                ..Default::default()
             })
         }
         "securecrt" => {
             let r = crate::importer_securecrt::import_path_with(path, secret.unwrap_or("").as_bytes())?;
             Ok(ImportResult {
-                summary: format!("已从 SecureCRT 导入 {} 个会话", r.sessions.len()),
+                summary: format!("已从 SecureCRT 导入 {} 个会话、{} 个凭据", r.sessions.len(), r.credentials.len()),
+                credentials_skipped: r.credentials_skipped,
+                credentials: r.credentials,
                 sessions: r.sessions,
                 themes: Vec::new(),
                 quick_commands: Vec::new(),
@@ -1031,6 +1039,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>)
                 passwords_skipped: r.passwords_skipped,
                 keys_missing: r.keys_missing,
                 updated: 0,
+                ..Default::default()
             })
         }
         "finalshell" => {
@@ -1044,6 +1053,7 @@ pub fn import_from_path(source_type: &str, path_str: &str, secret: Option<&str>)
                 passwords_skipped: r.passwords_skipped,
                 keys_missing: r.keys_missing,
                 updated: 0,
+                ..Default::default()
             })
         }
         _ => anyhow::bail!("不支持的导入源类型: {}", source_type),

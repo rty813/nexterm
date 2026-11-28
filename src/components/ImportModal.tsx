@@ -13,7 +13,11 @@ const SESSION_SOURCES = ["windterm_sessions", "xshell_sessions", "mobaxterm", "s
 /** Result line: localized for the session importers that report counts, else the backend text. */
 function importFeedback(res: ImportResult, sourceType: string, t: TFunction): string {
   if (!SESSION_SOURCES.includes(sourceType)) return res.summary;
-  const parts = [t("importModal.importedSessions", { count: res.sessions.length })];
+  const credentials = (res.credentialsAdded ?? 0) + (res.credentialsUpdated ?? 0);
+  // A Credentials folder or file on its own brings no sessions.
+  const credentialsOnly = sourceType === "securecrt" && !res.sessions.length && !res.skipped
+    && (credentials > 0 || (res.credentialsSkipped ?? 0) > 0);
+  const parts = credentialsOnly ? [] : [t("importModal.importedSessions", { count: res.sessions.length })];
   if (res.updated) parts.push(t("importModal.updatedSessions", { count: res.updated }));
   if (sourceType === "windterm_sessions") {
     const count = res.sessions.filter((session) => session.password).length;
@@ -25,6 +29,9 @@ function importFeedback(res: ImportResult, sourceType: string, t: TFunction): st
   if (sourceType === "securecrt") {
     const imported = res.sessions.filter((session) => session.password).length;
     if (imported) parts.push(t("importModal.importedPasswords", { count: imported }));
+    if (credentials) parts.push(t("importModal.importedCredentials", { count: credentials }));
+    if (res.credentialsUpdated) parts.push(t("importModal.updatedCredentials", { count: res.credentialsUpdated }));
+    if (res.credentialsSkipped) parts.push(t("importModal.credentialsSkipped", { count: res.credentialsSkipped }));
   }
   if (res.passwordsSkipped) {
     const key = sourceType === "securecrt" ? "secureCrtPasswordsSkipped" : "passwordsSkipped";
@@ -88,6 +95,7 @@ const APPS: AppCard[] = [
     sourceTypes: ["securecrt"],
     picks: [
       { sourceType: "securecrt", dir: true, label: "secureCrtDir", title: "browseSecureCrtDir" },
+      { sourceType: "securecrt", dir: true, label: "secureCrtCredentials", title: "browseSecureCrtCredentials" },
       { sourceType: "securecrt", label: "secureCrtFile", title: "browseSecureCrtFile", exts: ["xml", "ini"] },
     ],
   },
