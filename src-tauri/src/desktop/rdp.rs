@@ -720,13 +720,44 @@ fn to_fast_path(db: &mut Database, events: Vec<InputEvent>) -> SmallVec<[FastPat
 ///
 /// With file transfer on, remote files go on the local clipboard as an OLE data object, which
 /// the backend only sets up on a single-threaded apartment: the thread enters one first.
+///
+/// The backend only offers a local clipboard change to the remote while its window is
+/// "inactive", tracked through `WM_ACTIVATE` / `WM_ACTIVATEAPP` (written for a client whose
+/// GUI thread hosts it). Those go to the threads activation moves between, never to this one,
+/// so the window would stay "active" from the start and local copies made after connecting
+/// (text, and files in particular) would never reach the remote. It is told once that it is
+/// inactive; changes it made itself (remote data put here) are still told apart by ownership.
 #[cfg(windows)]
 mod clip {
     use super::*;
     use ironrdp_cliprdr::backend::ClipboardMessageProxy;
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, PostThreadMessageW, TranslateMessage, MSG, WM_QUIT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, EnumThreadWindows, GetClassNameW, GetMessageW, PostThreadMessageW, SendMessageW, TranslateMessage, MSG,
+        WM_ACTIVATEAPP, WM_QUIT,
+    };
+
+    /// Window class of the backend's hidden clipboard window (`ironrdp-cliprdr-native`).
+    const MONITOR_CLASS: &str = "IronRDPClipboardMonitor";
+
+    unsafe extern "system" fn deactivate_monitor(window: HWND, _: LPARAM) -> BOOL {
+        let mut class = [0u16; 64];
+        // SAFETY: `class` is writable for its length; `window` comes from EnumThreadWindows.
+        let len = unsafe { GetClassNameW(window, class.as_mut_ptr(), class.len() as i32) };
+        if len > 0 && String::from_utf16_lossy(&class[..len as usize]) == MONITOR_CLASS {
+            // SAFETY: a window of this thread, so the message is handled synchronously here.
+            unsafe { SendMessageW(window, WM_ACTIVATEAPP, 0, 0) };
+        }
+        1
+    }
+
+    /// Marks the backend's window (created on this thread) inactive, see the module docs.
+    fn deactivate_monitor_window() {
+        // SAFETY: enumerates this thread's own windows with a callback that only reads them.
+        unsafe { EnumThreadWindows(GetCurrentThreadId(), Some(deactivate_monitor), 0) };
+    }
 
     #[derive(Debug, Clone)]
     struct Proxy(UnboundedSender<ClipboardMessage>);
@@ -771,6 +802,7 @@ mod clip {
                         return;
                     }
                 };
+                deactivate_monitor_window();
                 // SAFETY: plain Win32 calls on this thread's own message queue.
                 let thread_id = unsafe { GetCurrentThreadId() };
                 let _ = ready_tx.send(Ok((clipboard.backend_factory(), thread_id)));
