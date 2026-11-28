@@ -6,7 +6,7 @@
 
 **Nexterm** 是一款高性能 Windows 终端客户端，基于 Rust + Tauri v2 + React + [xterm.js](https://xtermjs.org) 构建，支持 **SSH、本地 Shell（PowerShell / CMD / WSL）、Telnet、Raw TCP、串口、Android（ADB）** 以及内嵌 **RDP / VNC** 远程桌面。
 
-延续 WindTerm 的高效交互（会话树、嵌套分屏、快捷命令、一键迁移），面向日常开发、运维与 AI 协同场景打造。仅支持 Windows 10 / 11，当前版本 `0.1.15`（[下载发布版](https://github.com/rty813/nexterm/releases)）。
+延续 WindTerm 的高效交互（会话树、嵌套分屏、快捷命令、一键迁移），面向日常开发、运维与 AI 协同场景打造。仅支持 Windows 10 / 11，当前版本 `0.1.16`（[下载发布版](https://github.com/rty813/nexterm/releases)）。
 
 ![Nexterm 主界面：会话树、分屏运行 htop 与 Claude Code、SFTP 文件浏览器、快捷命令栏](docs/media/screenshot.jpg)
 
